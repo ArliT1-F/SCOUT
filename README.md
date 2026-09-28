@@ -35,7 +35,13 @@ In LIVE scene add Game Capture for `cs2.exe`, then Browser Source:
 - URL: `http://127.0.0.1:8080/obs` (OBS and host on same PC)
 - Width 1920; height 1080
 - Disable “Shutdown source when not visible”
-- Transparent body; no chroma key; **do not use Window Capture for the overlay**
+- Leave **Custom CSS** empty; no chroma key; **do not use Window Capture for the overlay**
+
+`/obs` and `/game` keep `<html>` and `<body>` fully transparent — the dark app background belongs to the operator panel only. This matters because a background on the root element is propagated to the whole document canvas, so OBS would composite an opaque frame over the game capture instead of only the HUD panels. The output classes are applied at module scope, before the first paint, so there is no opaque flash while the source loads.
+
+Use `http://127.0.0.1:8080/obs?checker=1` in a normal browser to verify transparency: it draws a checkerboard behind the canvas, and only the HUD panels should be filled. Never use the `?checker=1` URL as the OBS source.
+
+If the overlay still covers the game: confirm the source URL is `/obs` (not `/` or `/admin`), that Custom CSS is empty, and that the active scene is **Live game** — matchup, lineups, series, winner and break are near-opaque full-screen graphics by design.
 
 Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin.
 
