@@ -1,0 +1,9 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mergeDelta,MatchStore} from '../server/state';
+test('merges partial nested score updates without losing map metadata',()=>{assert.deepEqual(mergeDelta({map:{name:'de_inferno',team_ct:{score:3,name:'A'}}},{map:{team_ct:{score:4}}}),{map:{name:'de_inferno',team_ct:{score:4,name:'A'}}})});
+test('authoritative inventories remove dropped weapons and disconnected players',()=>{assert.deepEqual(mergeDelta({player:{weapons:{old:{name:'ak'},knife:{name:'knife'}}},allplayers:{a:{},b:{}}},{player:{weapons:{knife:{name:'knife'}}},allplayers:{a:{}}}),{player:{weapons:{knife:{name:'knife'}}},allplayers:{a:{}}})});
+test('omitted dynamic blocks retained, empty blocks cleared',()=>{assert.deepEqual(mergeDelta({allplayers:{a:{}}},{}),{allplayers:{a:{}}});assert.deepEqual(mergeDelta({grenades:{a:{}}},{grenades:{}}),{grenades:{}})});
+test('metadata and dangerous keys are never merged',()=>{const result=mergeDelta({},JSON.parse('{"__proto__":{"polluted":true},"auth":{"token":"secret"},"previously":{"map":{}},"map":{"constructor":1,"round":4}}'));assert.deepEqual(result,{map:{round:4}});assert.equal(({} as any).polluted,undefined)});
+test('late packets ignored, reconnects reset stale game data',()=>{const store=new MatchStore();store.ingest({provider:{timestamp:10},round:{phase:'live'}},10000);assert.equal(store.ingest({provider:{timestamp:9}},10050),false);store.ingest({provider:{timestamp:11}},16001);assert.equal(store.state.round,undefined)});
+test('map changes clear previous map state',()=>{const store=new MatchStore();store.ingest({provider:{timestamp:1},map:{name:'de_mirage'} as any,allplayers:{a:{} as any}},10000);store.ingest({provider:{timestamp:2},map:{name:'de_inferno'} as any},10050);assert.equal(store.state.allplayers,undefined)});
