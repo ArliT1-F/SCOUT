@@ -1,0 +1,11 @@
+[package]
+name = "scout-shell-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Pure decision logic of the SCOUT overlay shell: which rectangle to cover, when to show or hide, and how the shell is configured. No dependencies, so it builds and tests anywhere."
+publish = false
+
+# Deliberately empty: this crate must stay buildable offline and on any OS, so `cargo test` here proves the
+# shell's behaviour without compiling Tauri, WebView2 or the Windows SDK.
+[dependencies]

@@ -1,0 +1,31 @@
+[package]
+name = "scout-shell"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Windows overlay shell for SCOUT: a transparent, click-through window that follows the CS2 window."
+publish = false
+
+# Not a workspace: the decision logic in ./core is a plain path dependency that also builds and tests on its own
+# (`cargo test --manifest-path core/Cargo.toml`), with no Tauri, no WebView2 and no network.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-global-shortcut = "2"
+scout-shell-core = { path = "core" }
+
+[features]
+# Turned on by the Tauri CLI for production builds, and needed by a plain `cargo run` when no dev server is configured
+# (there is none: the overlay page is served by the SCOUT host).
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+# A panic in the poller thread must be loud (the shell stops), not a silently frozen overlay.
+panic = "abort"
+strip = true

@@ -1,6 +1,6 @@
 # SCOUT — CS2 broadcast overlay
 
-External Node GSI host, React/TypeScript operator dashboard, a transparent scoreboard HUD for an OBS Browser Source, config-driven full-canvas broadcast scenes and an optional OBS WebSocket bridge. No memory reading, injection, game hooks, or chroma key.
+External Node GSI host, React/TypeScript operator dashboard, a transparent scoreboard HUD for an OBS Browser Source, config-driven full-canvas broadcast scenes, an optional OBS WebSocket bridge and an optional Windows overlay shell. No memory reading, injection, game hooks, or chroma key.
 
 ## Run
 
@@ -12,9 +12,10 @@ npm run dev                 # http://127.0.0.1:8080/admin
 npm test
 npm run build
 npm start                   # serves production build
+npm run shell:test          # Rust: the overlay shell's decision logic (needs only a Rust toolchain)
 ```
 
-Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer. Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
+Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
 
 ### CS2 connection
 
@@ -213,6 +214,18 @@ Behaviour worth knowing:
 - The address must be `ws://` or `wss://` and must not contain credentials. Settings live in ignored `config/obs.json`. API: `GET`/`PUT /api/obs` and `POST /api/obs/reconnect`, `/api/obs/switch`, `/api/obs/refresh-overlay` (same-origin only, like the rest of the operator API).
 - **Verification**: the bridge is tested over real WebSockets against a mock OBS written from the protocol document, including the document's worked authentication example, wrong and missing passwords, a kicked session, a refused connection, a dead socket and hostile frames. It has **not** been run against a real OBS Studio.
 
+### Windows overlay shell (Tauri v2, optional)
+
+`src-tauri/` is a small Windows app that shows `/game` in a transparent, click-through, always-on-top window laid exactly over the CS2 window — an alternative to the OBS Browser Source for when the overlay should appear on the observer's own screen.
+
+- It polls (250 ms) for the window titled exactly `Counter-Strike 2` with class `SDL_app`, and for its client area, foreground and minimised state. Nothing else: no memory reading, no injection, no hooks.
+- The overlay is visible only while CS2 is in the foreground (it hides about 400 ms after CS2 leaves, so a passing notification does not make it blink), follows a moved or resized window, and is built not to take keyboard focus (non-focusable window). Mouse input passes through to the game.
+- **F8** switches the overlay on and off; **Ctrl+Shift+F8** quits it (a hidden, click-through window has no other way out). Both are configurable.
+- CS2 must run in *Fullscreen Windowed* (borderless): a window cannot be drawn over exclusive fullscreen.
+- It loads the overlay once the SCOUT host answers, so a host that is not running yet draws nothing over the game.
+- Build and run: install Rust and `cargo install tauri-cli --version "^2"`, then `npm run shell:build` (or `npm run shell:dev`). Options, environment variables and limits are in [`src-tauri/README.md`](src-tauri/README.md).
+- **Verification**: the shell's decisions (`src-tauri/core`) have unit tests, and the Win32 layer is executed against a fake `user32` (`npm run shell:test:win32`). The Tauri glue was type-checked against the documented Tauri 2.12 API. The shell has **not** been compiled against Tauri or run on Windows hardware — that has to happen on the observer machine.
+
 ### Operator controls
 
 Scene selection (live, matchup, lineups, map series, tournament tree, winner, break), killfeed, lower-third, economy, technical pause, team display swap and the break countdown are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
@@ -228,11 +241,11 @@ Scene selection (live, matchup, lineups, map series, tournament tree, winner, br
 
 ## Scope / remaining work
 
-Player photos and alias overrides, rich broadcast scenes and the optional OBS WebSocket bridge are implemented. The one remaining specification stage is the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8: `/game` is a browser renderer, **not** a native always-on-top window.
+Every stage the specification listed now exists: player photos and alias overrides, rich broadcast scenes, the optional OBS WebSocket bridge and the Windows Tauri v2 shell. `/game` is still a plain browser renderer; the shell is what makes it a native window.
 
 This is **not yet tournament-production verified**.
 
-- **Verified here**: synthetic-state, configuration, scene-derivation, OBS-protocol (against a protocol-faithful mock) tests; `tsc` and the production build; and the rendered HUD, scenes and panel, checked as headless-Chromium screenshots against the real host driven through its HTTP API and the recorded-feed replay.
-- **Not verifiable here**: a real CS2 observer, a real OBS Studio and Windows hardware were unavailable. Actual 20 Hz GSI compatibility, transparent OBS compositing and the OBS bridge against a real obs-websocket must be verified on the observer machine.
+- **Verified here**: synthetic-state, configuration, scene-derivation, OBS-protocol (against a protocol-faithful mock) and shell-decision tests; `tsc` and the production build; and the rendered HUD, scenes and panel, checked as headless-Chromium screenshots against the real host driven through its HTTP API and the recorded-feed replay.
+- **Not verifiable here**: a real CS2 observer, a real OBS Studio and Windows hardware were unavailable. Actual 20 Hz GSI compatibility, transparent OBS compositing, the OBS bridge against a real obs-websocket, and the shell's behaviour on Windows (a transparent, click-through, non-activating WebView2 window; F8; following CS2) must be verified on the observer machine. The shell could not be compiled against Tauri in this environment.
 
 Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls and configuration (`/api/controls`, `/api/config`, `/api/upload`, `/api/obs*`) are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. The OBS password is never part of any of them — it only comes from `OBS_WS_PASSWORD`. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.

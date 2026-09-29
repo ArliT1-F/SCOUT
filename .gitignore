@@ -8,3 +8,8 @@ config/layout.json
 config/obs.json
 public/uploads/*
 !public/uploads/.gitkeep
+# Windows overlay shell (src-tauri): build output and Tauri's generated schemas
+src-tauri/target/
+src-tauri/core/target/
+src-tauri/core/Cargo.lock
+src-tauri/gen/
