@@ -6,8 +6,9 @@ import type {MatchState} from './state.js';
 // guessing.
 export type Side='CT'|'T';
 export type RoundReason='bomb'|'defuse'|'elimination'|'time'|'unknown';
+export type RoundWinner='CT'|'T'|'bomb'|'defuse';
 export interface KillEvent {id:number;at:number;round:number;map:string;killer?:string;killerName?:string;killerSide?:Side;victim:string;victimName:string;victimSide?:Side;weapon?:string;headshot:boolean}
-export interface RoundEvent {round:number;map:string;winner?:Side;reason:RoundReason;ctScore:number;tScore:number;startedAt:number;endedAt:number}
+export interface RoundEvent {round:number;map:string;winner?:Side;winnerDetail?:RoundWinner;reason:RoundReason;ctScore:number;tScore:number;startedAt:number;endedAt:number}
 export interface EventSnapshot {kills:KillEvent[];rounds:RoundEvent[]}
 interface Watched {health?:number;roundKills:number;roundKillhs:number;kills:number;name:string;side?:Side;active?:string}
 const KILL_RING=8, ROUND_RING=40;
@@ -56,8 +57,9 @@ export class EventTracker {
   // A bomb left over from an earlier round must not label this round end, so the outcome only counts
   // once per round and is consumed here.
   const reason:RoundReason=this.bombOutcome??(winner&&wiped(winner==='CT'?'T':'CT')?'elimination':winner?'time':'unknown');
+  const winnerDetail:RoundWinner|undefined=reason==='bomb'?'bomb':reason==='defuse'?'defuse':winner;
   this.bombOutcome=undefined;
-  const event:RoundEvent={round,map,winner,reason,ctScore:state.map?.team_ct?.score??0,tScore:state.map?.team_t?.score??0,startedAt:this.started[`${map}:${round}`]??now,endedAt:now};
+  const event:RoundEvent={round,map,winner,winnerDetail,reason,ctScore:state.map?.team_ct?.score??0,tScore:state.map?.team_t?.score??0,startedAt:this.started[`${map}:${round}`]??now,endedAt:now};
   this.rounds=this.rounds.concat(event).slice(-ROUND_RING);
   return event;
  }

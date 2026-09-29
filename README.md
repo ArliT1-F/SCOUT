@@ -88,6 +88,22 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 
 `config/teams.json`'s `players` array may stay empty: sides are then resolved from the GSI names, which is what the shipped configuration does.
 
+### Phase-based visibility
+
+`src/phases.ts` maps the GSI phase onto what the live scene is allowed to show; it is pure, so `tests/phases.test.ts` covers it without a browser. The scene is *not* hidden while waiting for data beyond what the phase justifies, and output routes still render nothing at all without live state.
+
+| Phase (`map.phase` / `round.phase`) | Scene |
+| --- | --- |
+| warmup | **WARMUP** card, clock stays, no rosters, no killfeed |
+| freezetime | rosters + matchup lower third, **FREEZE TIME** banner |
+| live | rosters, lower third, killfeed, clock and bomb timer |
+| round over | **ROUND OVER** banner plus `TEAM · BOMB/DEFUSE · score` from the derived round history, lower third hidden |
+| intermission | **INTERMISSION** card and series score |
+| gameover | `<team> WINS THE MAP` card |
+| paused / operator technical pause | **TACTICAL PAUSE** banner, which outranks the round banner |
+
+The operator's **Technical pause** switch and a `round.phase: "paused"` packet both raise the same banner, and the warmup/intermission/final card outranks both — a card is never hidden behind a pause banner.
+
 ### Derived events (killfeed and round history)
 
 The host derives kills and round results by differencing successive snapshots (`server/events.ts`) and broadcasts them in the same snapshot as the match state — `events.kills` (ring of the last 8) and `events.rounds` (up to 40, tagged with their map, so a finished map keeps its history).
