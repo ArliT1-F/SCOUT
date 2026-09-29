@@ -98,6 +98,12 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 - **Overtime** — beyond regulation or tied at the MR, `phase: "overtime"` with `otPeriod` and `roundsThisHalf` from the round number (`otMr`, default 3 rounds per OT half), rendered as `OVERTIME 1 · 2/3`.
 - **Winner** — `mapWinner` from the final scores on a `gameover` map, and `seriesWinner` once a side reaches `mapsToWin`; the operator's **Winner title** scene renders "`<team>` WINS THE SERIES" from it.
 
+### Weapon and utility icons
+
+`src/weapons.ts` classifies every slot in `allplayers[].weapons` from its GSI `type` (rifle, sniper, SMG, pistol, shotgun, MG, knife, grenade, taser, C4) and reads the active one from `state: "active"` (or `"reloading"`), so the roster strip and the killfeed agree on what a player is holding. Utility is counted per player (HE, flashes, smoke, molotov/incendiary, decoy, Zeus, defuse kit) and summed per side for the economy banner.
+
+`src/icons.tsx` draws the silhouettes as inline monochrome SVG — nothing is borrowed, nothing is downloaded, and an unknown weapon falls back to its own name and the generic glyph. Photos of players and richer artwork remain unimplemented and would need assets an operator supplies.
+
 ### Clocks
 
 GSI reports the countdown as it was when the packet was sent, so the HUD extrapolates between packets with `src/clock.ts` and resyncs to every packet — the packet value always wins, and the local clock only fills the gap:
@@ -154,6 +160,6 @@ Scene selection (live, matchup, lineups, series, winner title, break), killfeed,
 
 This is **not yet tournament-production verified**. Synthetic state tests and build checks run in this environment. A real CS2 observer, Windows and OBS are unavailable here, so actual 20 Hz GSI compatibility and transparent OBS compositing must be verified on the observer machine.
 
-Remaining specification stages: roster editor/overrides; photos and complete weapon/utility icons; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
+Remaining specification stages: roster editor/overrides; player photos; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
 
 Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.

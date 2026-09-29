@@ -8,6 +8,8 @@ import {configSides,type ResolvedSides} from '../server/sides';
 import {seriesState,type SeriesState} from '../server/series';
 import {phaseView} from './phases';
 import {formatClock,interpolatedClock} from './clock';
+import {weaponInfo,activeWeapon,utilityOf,teamUtility,type Utility} from './weapons';
+import {WeaponIcon,UtilityIcon} from './icons';
 import {calibrationFor,radarPoints,type RadarConfig} from './radar';
 import type {RoundEvent} from '../server/events';
 import {demo,demoEvents} from './demo';
@@ -27,7 +29,8 @@ const initial:Controls={scene:'live',radar:true,killfeed:true,lowerThird:true,ec
 function useFeed(){const [data,setData]=useState<any>(null),[connected,setConnected]=useState(false);useEffect(()=>{let ws:WebSocket;let retry:ReturnType<typeof setTimeout>;let stopped=false;function connect(){ws=new WebSocket(`${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws`);ws.onopen=()=>setConnected(true);ws.onmessage=e=>{try{setData(JSON.parse(e.data))}catch{}};ws.onclose=()=>{setConnected(false);if(!stopped)retry=setTimeout(connect,1500)}}connect();return()=>{stopped=true;clearTimeout(retry);ws?.close()}},[]);return {data,connected}}
 function Mark({other=false}:{other?:boolean}){return <span className={'team-mark '+(other?'other':'')}>{other?<><i/><i/><i/></>:<><i/><i/></>}</span>}
 function Weapon(){return <svg viewBox="0 0 80 25" fill="currentColor"><path d="M4 11h13l5-5h32v3h23v3H53l-5 4H36l-2 8h-6l-1-9H14L4 19z"/><path d="M40 15h9l5 8h-8z"/></svg>}
-function Strip({p,observed}:{p:PlayerState;observed:boolean}){const health=p.state?.health||0;return <div className={'player '+(!health?'dead ':'')+(observed?'observed':'')}><div className="player-line"><span className="slot">{p.observer_slot??'–'}</span><b>{p.name}</b><span className="hp">{health?health:'×'}</span></div><div className="player-meta"><span>${(p.state?.money||0).toLocaleString()}</span><Shield size={10}/><span>{p.match_stats?.kills||0} / {p.match_stats?.deaths||0}</span>{health>0&&<Weapon/>}</div><div className="health" style={{width:health+'%',background:health>50?'var(--team)':health>25?'#e6c567':'#eb6b6b'}}/></div>}
+function UtilityRow({utility,compact=false}:{utility:Utility;compact?:boolean}){const items:(['he'|'flash'|'smoke'|'fire'|'decoy',number])[]=[['he',utility.he],['flash',utility.flash],['smoke',utility.smoke],['fire',utility.fire],['decoy',utility.decoy]];return <span className={'utility'+(compact?' compact':'')}>{utility.defusekit&&<i title="Defuse kit"><UtilityIcon kind="defusekit"/></i>}{items.filter(([,count])=>count>0).map(([kind,count])=><i key={kind} title={kind.toUpperCase()}><UtilityIcon kind={kind}/>{count>1&&<b>{count}</b>}</i>)}</span>}
+function Strip({p,observed}:{p:PlayerState;observed:boolean}){const health=p.state?.health||0;const weapon=activeWeapon(p);return <div className={'player '+(!health?'dead ':'')+(observed?'observed':'')}><div className="player-line"><span className="slot">{p.observer_slot??'–'}</span><b>{p.name}</b><span className="hp">{health?health:'×'}</span></div><div className="player-meta"><span>${(p.state?.money||0).toLocaleString()}</span><Shield size={10}/><span>{p.match_stats?.kills||0} / {p.match_stats?.deaths||0}</span>{health>0&&<span className="player-weapon" title={weapon?.name}><WeaponIcon kind={weapon?.kind}/>{weapon?.label||'—'}</span>}<UtilityRow utility={utilityOf(p)}/></div><div className="health" style={{width:health+'%',background:health>50?'var(--team)':health>25?'#e6c567':'#eb6b6b'}}/></div>}
 // The single panel that answers "why is nothing showing?": CS2 never sent, every packet 401'd,
 // packets rejected on shape, or CS2 playing instead of spectating. Diagnostics never carry the token.
 function FeedPanel({gsi,now,connected}:{gsi?:GsiDiagnostics;now:number;connected:boolean}){
@@ -63,7 +66,7 @@ function Radar({state,sides,radars}:{state:MatchState;sides:ResolvedSides;radars
 const radarDesc=(calibration:any,map?:string)=>calibration?`Live positions · ${map?.replace('de_','').toUpperCase()}`:`No calibration for ${map||'the current map'}`;
 const seriesFormat=(series?:SeriesState,config?:any)=>(series?.format||seriesState({},config).format).toUpperCase();
 const WEAPON_LABELS:Record<string,string>={weapon_ak47:'AK-47',weapon_m4a1:'M4A4',weapon_m4a1_silencer:'M4A1-S',weapon_awp:'AWP',weapon_deagle:'DEAGLE',weapon_usp_silencer:'USP-S',weapon_glock:'GLOCK',weapon_knife:'KNIFE',weapon_hegrenade:'HE',weapon_flashbang:'FLASH',weapon_smokegrenade:'SMOKE',weapon_molotov:'MOLLY',weapon_incgrenade:'INCENDIARY',weapon_decoy:'DECOY',weapon_ssg08:'SSG 08',weapon_aug:'AUG',weapon_sg556:'SG 553',weapon_famas:'FAMAS',weapon_galilar:'GALIL',weapon_mp9:'MP9',weapon_mp7:'MP7',weapon_mp5sd:'MP5-SD',weapon_ump45:'UMP-45',weapon_p90:'P90',weapon_mac10:'MAC-10',weapon_bizon:'BIZON',weapon_nova:'NOVA',weapon_xm1014:'XM1014',weapon_mag7:'MAG-7',weapon_sawedoff:'SAWED-OFF',weapon_m249:'M249',weapon_negev:'NEGEV',weapon_tec9:'TEC-9',weapon_fiveseven:'FIVE-SEVEN',weapon_cz75a:'CZ75',weapon_p250:'P250',weapon_elite:'DUALIES',weapon_revolver:'R8',weapon_taser:'ZEUS'};
-const weaponLabel=(name?:string)=>WEAPON_LABELS[name||'']||(name?name.replace('weapon_','').replace(/_/g,' ').toUpperCase():'');
+const weaponLabel=(name?:string)=>WEAPON_LABELS[name||'']||weaponInfo(name)?.label||'';
 const demoKills=(now:number)=>({kills:demoEvents.kills.map((kill,index)=>({...kill,at:now-index*2400}))});
 // Killfeed: server-derived kills, newest first, faded out by age. Ages come from the host clock in
 // the snapshot, so the entries expire on the same schedule on every output surface.
@@ -74,7 +77,7 @@ function Killfeed({events,sides}:{events?:{kills?:KillEvent[]};sides:ResolvedSid
  if(!kills.length) return null;
  return <div className="killfeed">{kills.map(kill=><div className={'kill'+(now-kill.at>7000?' leaving':'')} key={kill.id}>
   <b style={{color:sideColor(kill.killerSide)}}>{kill.killerName||'UNKNOWN'}</b>
-  <span className="kill-weapon">{weaponLabel(kill.weapon)}</span>
+  <span className="kill-weapon"><WeaponIcon kind={weaponInfo(kill.weapon)?.kind}/>{weaponLabel(kill.weapon)}</span>
   <b style={{color:sideColor(kill.victimSide)}}>{kill.victimName}</b>
   {kill.headshot&&<i className="kill-hs" title="Headshot">★</i>}
  </div>)}</div>;
@@ -92,7 +95,7 @@ return <div className={'hud '+(demoMode?'demo-hud':'')}>
  {controls.killfeed&&view.killfeed&&<Killfeed events={events} sides={sides}/>}
  {view.rosters&&rosterOrder.map((side,index)=><div className={'roster roster-'+index} key={side}><div className="roster-label">{team(rosterOrder[index]).name}<span>{rosterOrder[index]}</span></div>{Array.from({length:5},(_,i)=>{const p=players.filter(p=>p.team===side).sort((a,b)=>(a.observer_slot??99)-(b.observer_slot??99))[i];return p?<Strip key={p.steamid} p={p} observed={p.steamid===state.player?.steamid}/>:<div className="player empty" key={i}>— Waiting for player</div>})}</div>)}
  {controls.lowerThird&&view.lowerThird&&players.find(p=>p.steamid===state.player?.steamid)&&<div className="lower-third"><span className="avatar"><Users size={23}/></span><div><small>OBSERVING · {observed?.team||'–'}</small><b>{players.find(p=>p.steamid===state.player?.steamid)?.name}</b></div><Weapon/><span>{activeWeapon?.ammo_clip??'–'} <small>/ {activeWeapon?.ammo_reserve??'–'}</small></span></div>}
- {controls.economy&&<div className="hud-banner">TEAM ECONOMY · ${players.filter(p=>p.team==='CT').reduce((a,p)=>a+(p.state?.money||0),0).toLocaleString()} / ${players.filter(p=>p.team==='T').reduce((a,p)=>a+(p.state?.money||0),0).toLocaleString()}</div>}
+ {controls.economy&&<div className="hud-banner">TEAM ECONOMY · ${players.filter(p=>p.team==='CT').reduce((a,p)=>a+(p.state?.money||0),0).toLocaleString()} / ${players.filter(p=>p.team==='T').reduce((a,p)=>a+(p.state?.money||0),0).toLocaleString()}<UtilityRow utility={teamUtility(state,'CT')} compact/><i>vs</i><UtilityRow utility={teamUtility(state,'T')} compact/></div>}
  </>}
  <div className="hud-footer"><span>SCOUT<span className="tiny-plus">+</span></span><span>{demoMode?'DEMO FEED · NOT LIVE GAME DATA':'EXTERNAL GSI FEED'}</span></div>
  </div>}
