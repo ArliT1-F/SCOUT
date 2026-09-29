@@ -4,3 +4,7 @@ or upload one per map from the admin panel: Overlay settings → Custom radars.
 The nine active-duty maps ship pre-filled (cs2-map-icons pack); the admin upload
 stores its files under public/uploads/radars/ instead. See README.md,
 "Custom radar images".
+
+These images are for the custom radar only. The Matchup and Map series scenes
+use the scene thumbnails in public/thumbs/ (an uploaded map picture in Match
+setup wins over both).

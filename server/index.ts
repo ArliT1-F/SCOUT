@@ -80,6 +80,9 @@ app.use('/uploads',express.static(UPLOAD_ROOT,{immutable:true,maxAge:'7d'}));
 // Drop-in radar images (public/radars/<map>.png) get the same treatment: dist/ only knows the
 // files that existed at build time, but operators replace these while a tournament is running.
 app.use('/radars',express.static('public/radars'));
+// Scene thumbnails (public/thumbs/<map>.png) are replaced the same way — dropped in mid-event —
+// so they get a route of their own instead of relying on the build-time copy in dist/.
+app.use('/thumbs',express.static('public/thumbs'));
 app.use(express.json({limit:'1mb'}));
 const wss=new WebSocketServer({server,path:'/ws'});
 function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()}}}

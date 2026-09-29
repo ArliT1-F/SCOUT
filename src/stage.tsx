@@ -55,6 +55,7 @@ function MatchupScene({config,teams,cards,score}:{config:any;teams:[SceneTeam,Sc
   </div>
   {cards.length>0&&<div className="st-maprow">{cards.map((card,i)=>{const pick=card.pick==='decider'?undefined:teamBySlot(config,card.pick);
    return <motion.div className={'st-mapchip '+card.status} style={tint(pick?.color||'#7e6c90')} key={card.index} {...rise(i+4,18)}>
+    <span className="st-chip-pic"><MapPicture card={card}/></span>
     {pick?<Crest team={pick} size={34}/>:<span className="st-decider">?</span>}
     <div><b>{card.label||'TBA'}</b><small>{card.status==='live'?'LIVE NOW':card.pick==='decider'?'DECIDER':`${pick?.tag||pick?.name} PICK`}</small></div>
     {card.score&&card.status!=='upcoming'&&<span className="res">{(teams[0].slot==='A'?card.score:[card.score[1],card.score[0]]).join('–')}</span>}
@@ -183,13 +184,13 @@ function BreakScene({config,teams,cards,breakEndsAt,now}:{config:any;teams:[Scen
 }
 
 export interface SceneProps {
- scene:SceneId;config:any;swapped:boolean;series?:SeriesState;sides?:ResolvedSides;radars?:any;
+ scene:SceneId;config:any;swapped:boolean;series?:SeriesState;sides?:ResolvedSides;
  players:LiveLike[];nameOf:(player:LiveLike,side?:string)=>string;
  // Host-clock time in ms (already corrected for the browser's clock skew) and the break timer's end.
  breakEndsAt:number|null;now:number;
 }
-export function SceneStage({scene,config,swapped,series,sides,radars,players,nameOf,breakEndsAt,now}:SceneProps){
- const teams=sceneTeams(config,swapped), cards=useMemo(()=>mapCards(config,radars),[config,radars]);
+export function SceneStage({scene,config,swapped,series,sides,players,nameOf,breakEndsAt,now}:SceneProps){
+ const teams=sceneTeams(config,swapped), cards=useMemo(()=>mapCards(config),[config]);
  const wins=seriesScore(config,series,sides), score:[number,number]=teams[0].slot==='A'?[wins.a,wins.b]:[wins.b,wins.a];
  let body:React.ReactNode=null;
  if(scene==='matchup') body=<MatchupScene key="matchup" config={config} teams={teams} cards={cards} score={score}/>;
