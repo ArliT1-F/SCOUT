@@ -42,7 +42,22 @@ The host prints the same story in its console: the expected URI and token source
 
 Packets are validated per subtree before merging (`server/schema.ts`, zod): every GSI block is optional, numbers that CS2 sends as strings (`"phase_ends_in":"71.4"`, `"health":"100"`) are coerced, empty enums like `round.win_team:""` delete the key instead of failing, and unknown fields/blocks pass through untouched so a CS2 update cannot break a live broadcast. A malformed field is dropped and counted — `gsi.subtreeIssues` on `/api/status`, logged at most once per 10 s — while the rest of the packet still merges. Validation never throws and never rejects a packet; `__proto__`, `constructor`, `prototype`, `auth`, `previously`, `added` and `removed` are stripped at every depth.
 
-`LOG_GSI=1 npm run dev` writes sanitized payloads to ignored `recordings/*.jsonl`; auth is not recorded. Logging is opt-in and a session file is not rotated: monitor disk usage or rotate externally. Slow WebSocket consumers are dropped and reconnect automatically.
+### Recording and replaying a real feed
+
+`LOG_GSI=1 npm run dev` writes every accepted payload to ignored `recordings/gsi-<timestamp>.jsonl` — one line per packet as `{"receivedAt":<ms>,"payload":{…}}`, with the token stripped. Logging is opt-in and a session file is not rotated: monitor disk usage or rotate externally. Slow WebSocket consumers are dropped and reconnect automatically.
+
+To capture on the observer machine: start the host with `LOG_GSI=1`, play a match so CS2 pushes (warmup plus one full round is plenty), and keep the file — `recordings/` is gitignored.
+
+```sh
+npm run replay -- recordings/gsi-<timestamp>.jsonl              # real time, recorded spacing
+npm run replay -- recordings/<file>.jsonl --speed 10            # ten times faster
+npm run replay -- recordings/<file>.jsonl --max-gap 2000        # skip long pauses between maps
+npm run replay -- recordings/<file>.jsonl --dry                 # print the plan, post nothing
+```
+
+Replay posts each recorded payload back to `POST /gsi` with the host token (`--token`, else `GSI_TOKEN`, else `CHANGE_ME`). It stops with an explicit message on a token mismatch, on an unreachable host, or after three consecutive non-200 responses, and finishes by printing the host's revision delta — `0 merged` means the host already holds newer provider timestamps, so restart it before replaying an older recording. **Never replay against a host that is on air**: it injects packets exactly as CS2 does.
+
+A sanitized fixture with the same structure ships in `tests/fixtures/observer-mirage-nuke.jsonl` (invented names and SteamIDs; 30 packets covering warmup, a pistol round, a plant and defuse, halftime side swap and a map change). It drives `tests/fixtures.test.ts`, and `python3 tests/fixtures/generate.py` rebuilds it.
 
 ### OBS
 

@@ -45,6 +45,7 @@ app.post('/gsi',(req,res)=>{
  // Recovered subtrees are normal (CS2 empties fields between rounds), so they are counted and logged
  // at most once per 10 s instead of once per packet.
  if(ingested){const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}
+ else if(feed.late().log) console.warn(`[gsi] ignoring a packet older than the current state (${feed.rejectedLate} ignored). Expected while replaying a recording against a warm host, or when a second observer pushes with an older clock.`);
  res.sendStatus(200); broadcast();
 });
 app.get('/api/status',(_req,res)=>res.json(snapshot()));

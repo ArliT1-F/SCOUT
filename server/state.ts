@@ -22,9 +22,9 @@ export function mergeDelta(base: Record<string,any>, delta: Record<string,any>):
 export const GSI_BLOCKS=['provider','map','round','player','allplayers','phase_countdowns','bomb','grenades'] as const;
 export type GsiBlock=typeof GSI_BLOCKS[number];
 export type TokenSource='env'|'default';
-export interface GsiDiagnostics {accepted:number;rejectedAuth:number;rejectedShape:number;subtreeIssues:number;lastPacketAt:number;lastPacketAge:number;lastRejectedAt:number;lastRejectedReason:string;blocks:Record<string,number>;allplayers:number;allplayersSeen:boolean;observerGap:boolean;provider:string|null;tokenSource:TokenSource;port:number;uri:string}
+export interface GsiDiagnostics {accepted:number;rejectedAuth:number;rejectedShape:number;rejectedLate:number;subtreeIssues:number;lastPacketAt:number;lastPacketAge:number;lastRejectedAt:number;lastRejectedReason:string;blocks:Record<string,number>;allplayers:number;allplayersSeen:boolean;observerGap:boolean;provider:string|null;tokenSource:TokenSource;port:number;uri:string}
 export class FeedMonitor {
- accepted=0; rejectedAuth=0; rejectedShape=0; subtreeIssues=0; lastPacketAt=0; lastRejectedAt=0; lastRejectedReason=''; lastRejectedLogAt=0; lastIssueLogAt=0; blocks:Record<string,number>={}; allplayers=0; allplayersSeen=false; provider:string|null=null;
+ accepted=0; rejectedAuth=0; rejectedShape=0; rejectedLate=0; subtreeIssues=0; lastPacketAt=0; lastRejectedAt=0; lastRejectedReason=''; lastRejectedLogAt=0; lastIssueLogAt=0; lastLateLogAt=0; blocks:Record<string,number>={}; allplayers=0; allplayersSeen=false; provider:string|null=null;
  constructor(readonly tokenSource:TokenSource='default',readonly port=8080){}
  get uri(){return `http://127.0.0.1:${this.port}/gsi`}
  // The token itself is never passed in: only "env" or "default" is remembered.
@@ -46,6 +46,13 @@ export class FeedMonitor {
   const log=this.lastRejectedLogAt===0||now-this.lastRejectedLogAt>=gapMs; if(log) this.lastRejectedLogAt=now;
   return {log};
  }
+ // "Late" is not a GSI fault: the payload was well-formed but the store already holds a newer
+ // provider.timestamp. It is how a replayed recording, a second observer or a clock skew shows up.
+ late(now=Date.now(),gapMs=10000) {
+  this.rejectedLate++;
+  const log=this.lastLateLogAt===0||now-this.lastLateLogAt>=gapMs; if(log) this.lastLateLogAt=now;
+  return {log};
+ }
  // Schema issues are normal on a live feed (CS2 omits or empties fields between rounds), so they are
  // counted and logged at the same 10 s cadence as rejections rather than one line per packet.
  issues(list:Issue[],now=Date.now(),gapMs=10000) {
@@ -53,7 +60,7 @@ export class FeedMonitor {
   const log=list.length>0&&(this.lastIssueLogAt===0||now-this.lastIssueLogAt>=gapMs); if(log) this.lastIssueLogAt=now;
   return {log,count:list.length,last:list[list.length-1]};
  }
- snapshot(now=Date.now()):GsiDiagnostics {return {accepted:this.accepted,rejectedAuth:this.rejectedAuth,rejectedShape:this.rejectedShape,subtreeIssues:this.subtreeIssues,lastPacketAt:this.lastPacketAt,lastPacketAge:this.lastPacketAt?now-this.lastPacketAt:0,lastRejectedAt:this.lastRejectedAt,lastRejectedReason:this.lastRejectedReason,blocks:this.blocks,allplayers:this.allplayers,allplayersSeen:this.allplayersSeen,observerGap:this.accepted>=100&&!this.allplayersSeen,provider:this.provider,tokenSource:this.tokenSource,port:this.port,uri:this.uri}}
+ snapshot(now=Date.now()):GsiDiagnostics {return {accepted:this.accepted,rejectedAuth:this.rejectedAuth,rejectedShape:this.rejectedShape,rejectedLate:this.rejectedLate,subtreeIssues:this.subtreeIssues,lastPacketAt:this.lastPacketAt,lastPacketAge:this.lastPacketAt?now-this.lastPacketAt:0,lastRejectedAt:this.lastRejectedAt,lastRejectedReason:this.lastRejectedReason,blocks:this.blocks,allplayers:this.allplayers,allplayersSeen:this.allplayersSeen,observerGap:this.accepted>=100&&!this.allplayersSeen,provider:this.provider,tokenSource:this.tokenSource,port:this.port,uri:this.uri}}
 }
 // Exactly one next action for the operator, keyed to the failure modes seen in the field.
 export function feedNextAction(gsi?:GsiDiagnostics|null):string {
@@ -61,6 +68,7 @@ export function feedNextAction(gsi?:GsiDiagnostics|null):string {
  if(gsi.accepted===0&&gsi.rejectedAuth>0) return `CS2 reaches the host but every packet is rejected on its token (${gsi.rejectedAuth} so far). Put the cfg auth token into GSI_TOKEN and restart the host — the current token comes from ${gsi.tokenSource==='env'?'the environment':'the built-in default'}.`;
  if(gsi.accepted===0&&gsi.rejectedShape>0) return `Packets arrive but fail the shape check (${gsi.rejectedShape} so far): ${gsi.lastRejectedReason||'missing provider'}. Confirm the cfg was not saved as .cfg.txt and that CS2 was fully restarted.`;
  if(gsi.accepted===0) return `Nothing has reached ${gsi.uri}. Check the cfg sits in game/csgo/cfg/ (not .cfg.txt), that CS2 was fully restarted, and that the cfg uri port matches the host port ${gsi.port}.`;
+ if(gsi.rejectedLate>0&&gsi.rejectedLate>=gsi.accepted-gsi.rejectedLate) return `${gsi.rejectedLate} packets were ignored because the host already holds a newer provider timestamp. Restart the host before replaying an older recording, and check that only one observer is pushing.`;
  if(gsi.lastPacketAge>5000) return `Last packet was ${Math.round(gsi.lastPacketAge/1000)}s ago. The match may have ended, or CS2 lost the endpoint — check the host is still running.`;
  if(!gsi.allplayersSeen&&gsi.accepted>=100) return `Receiving packets (${gsi.accepted}) but no allplayers block: CS2 is playing, not spectating. Join as observer/GOTV so rosters and the killfeed have data.`;
  return `Feed healthy: ${gsi.accepted} packets accepted, blocks ${Object.keys(gsi.blocks).join(', ')||'(none)'}. Switch the preview to GSI feed to watch live data.`;

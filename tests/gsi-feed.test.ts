@@ -59,6 +59,17 @@ test('diagnostics expose the token source but never the token value',()=>{
  assert.equal(new FeedMonitor(process.env.GSI_TOKEN?'env':'default').tokenSource,'default');
 });
 
+test('late packets are counted separately and explained in the next action',()=>{
+ const feed=new FeedMonitor('default',8080);
+ feed.accept({provider:{timestamp:20},map:{name:'de_inferno'},allplayers:{a:{}}},1000);
+ assert.equal(feed.late(1100).log,true);
+ assert.equal(feed.late(1200).log,false);
+ assert.equal(feed.late(11100).log,true);
+ assert.equal(feed.snapshot(12000).rejectedLate,3);
+ assert.match(feedNextAction(feed.snapshot(2000)),/already holds a newer provider timestamp/);
+ assert.equal(feed.accepted,1,'a stale packet is not an accepted packet');
+});
+
 test('next action distinguishes never-sent from stale from healthy',()=>{
  const fresh=new FeedMonitor('default',8080);
  assert.match(feedNextAction(fresh.snapshot()),/Nothing has reached/);
