@@ -1,14 +1,23 @@
 import {z} from 'zod';
+import {toSteamId64} from './players.js';
 // Operator-owned broadcast configuration (config/teams.json): teams, rosters, the map series and the
 // tournament tree. Everything here is data the admin edits in the panel — GSI never touches it — so
 // the schema is strict, defaulted and normalized before it is stored or broadcast.
+// Uploaded portraits live under public/uploads/players/ and are referenced by path, like logos and map
+// pictures. Restricting the path keeps a hand-edited config from pointing an <img> anywhere else.
+export const PLAYER_PHOTO=/^uploads\/players\/[\w.\- ]+$/;
 export const playerSchema=z.object({
- steamid:z.string().trim().max(40).optional().default(''),
+ steamid:z.string().trim().max(120).optional().default(''),
  // The panel's "Add player" makes a blank row; those are dropped by normalizeConfig rather than
  // failing the whole save with a 400.
  name:z.string().trim().max(64).optional().default(''),
+ // The player's real name (the panel labels this field "Real name"; the key predates the label).
  nickname:z.string().trim().max(64).optional().default(''),
  role:z.string().trim().max(64).optional().default(''),
+ // On-air name override: what the killfeed, rosters, lower third and radar print instead of the name
+ // CS2 reports. Empty means "show the in-game name".
+ alias:z.string().trim().max(64).optional().default(''),
+ photo:z.string().trim().max(260).optional().default('').refine(value=>value===''||PLAYER_PHOTO.test(value),'photo must be a file under uploads/players/'),
 }).strip();
 export const teamSchema=z.object({
  id:z.string().trim().min(1).max(32),
@@ -46,6 +55,11 @@ export const bracketSchema=z.object({
  title:z.string().trim().max(120).optional().default(''),
  rounds:z.array(bracketRoundSchema).min(1).max(8),
 }).strip();
+// Words for the break screen. Empty falls back to the wording the scene ships with ("We'll be right back").
+export const breakSchema=z.object({
+ title:z.string().trim().max(80).optional().default(''),
+ message:z.string().trim().max(240).optional().default(''),
+}).strip();
 // zod returns object defaults unparsed, so every default below carries the complete output shape.
 const SLOT_DEFAULT={label:'',team:''};
 export const configSchema=z.object({
@@ -53,6 +67,7 @@ export const configSchema=z.object({
  format:z.enum(['bo1','bo3','bo5']).optional().default('bo3'),
  mr:z.number().int().min(1).max(30).optional().default(12),
  otMr:z.number().int().min(1).max(15).optional().default(3),
+ break:breakSchema.optional().default({title:'',message:''}),
  teams:z.array(teamSchema).min(2).max(2),
  maps:z.array(mapSchema).min(1).max(9),
  bracket:bracketSchema.optional().default({title:'',rounds:[
@@ -102,7 +117,12 @@ export function resolveSlotLabel(slot:BracketSlot|undefined,teams:TeamConfig[]):
 }
 export function normalizeConfig(raw:unknown):ScoutConfig {
  const parsed=configSchema.parse(raw);
- for(const team of parsed.teams) team.players=team.players.filter(player=>player.name||player.steamid);
+ for(const team of parsed.teams){
+  team.players=team.players.filter(player=>player.name||player.steamid);
+  // GSI reports SteamID64, so STEAM_0:1:23 / [U:1:46] / profile URLs are stored in that form. Anything
+  // that is not a recognisable id is kept as typed rather than silently dropped.
+  for(const player of team.players) player.steamid=toSteamId64(player.steamid)||player.steamid;
+ }
  // Duplicate team/match ids would make the bracket editor target the wrong node.
  const seen=new Set<string>();
  for(const team of parsed.teams){while(seen.has(team.id)) team.id=`${team.id}-2`;seen.add(team.id)}
@@ -112,7 +132,7 @@ export function normalizeConfig(raw:unknown):ScoutConfig {
  for(const round of parsed.bracket.rounds) for(const match of round.matches) if(match.winner) match.status='done';
  return {...parsed,bracket:propagateBracket(parsed.bracket)};
 }
-export const emptyPlayer=():PlayerConfig=>({steamid:'',name:'',nickname:'',role:''});
+export const emptyPlayer=():PlayerConfig=>({steamid:'',name:'',nickname:'',role:'',alias:'',photo:''});
 export const emptyTeam=(index:number):TeamConfig=>({id:`t${index+1}`,name:'New team',tag:'',color:'',logo:'',players:[]});
 export const emptyMap=():MapConfig=>({name:'de_mirage',pick:'decider',score:undefined,status:'upcoming',image:''});
 export const emptyMatch=(id:string):BracketMatch=>({id,a:{label:'',team:''},b:{label:'',team:''},aScore:0,bScore:0,winner:null,status:'upcoming'});

@@ -74,3 +74,14 @@ test('MatchStore reports issues and still merges the valid subtrees of the same 
  // A late packet is still rejected and reports no issues, so a repeated payload cannot double-count.
  assert.equal(store.ingest({provider:{timestamp:99},map:{name:'de_mirage',round:'x' as any}} as any,10050),false);
 });
+
+test('allplayers entries carry the SteamID they are keyed by, because CS2 does not repeat it inside them',()=>{
+ // The shape CS2 really sends: the id is the key and the entry has no steamid of its own.
+ const {payload}=validateGsi({player:{steamid:'76561198000000001',name:'observer'},allplayers:{'76561198000000001':{name:'nova',team:'CT',observer_slot:1},'76561198000000002':{name:'kairo',team:'T'}}});
+ assert.deepEqual(Object.values<any>(payload.allplayers).map(entry=>entry.steamid),['76561198000000001','76561198000000002']);
+ assert.equal(Object.values<any>(payload.allplayers).find(entry=>entry.steamid===payload.player.steamid)?.name,'nova','the observed player is found among allplayers');
+ // An entry that already states an id is left alone, and a merge keeps the id on every entry.
+ const claimed=validateGsi({allplayers:{a:{steamid:'own-id',name:'x'}}}).payload;
+ assert.equal(claimed.allplayers.a.steamid,'own-id');
+ assert.equal(mergeDelta({},payload).allplayers['76561198000000002'].steamid,'76561198000000002');
+});
