@@ -4,7 +4,9 @@ import {z} from 'zod';
 // the schema is strict, defaulted and normalized before it is stored or broadcast.
 export const playerSchema=z.object({
  steamid:z.string().trim().max(40).optional().default(''),
- name:z.string().trim().min(1).max(64),
+ // The panel's "Add player" makes a blank row; those are dropped by normalizeConfig rather than
+ // failing the whole save with a 400.
+ name:z.string().trim().max(64).optional().default(''),
  nickname:z.string().trim().max(64).optional().default(''),
  role:z.string().trim().max(64).optional().default(''),
 }).strip();
@@ -100,6 +102,7 @@ export function resolveSlotLabel(slot:BracketSlot|undefined,teams:TeamConfig[]):
 }
 export function normalizeConfig(raw:unknown):ScoutConfig {
  const parsed=configSchema.parse(raw);
+ for(const team of parsed.teams) team.players=team.players.filter(player=>player.name||player.steamid);
  // Duplicate team/match ids would make the bracket editor target the wrong node.
  const seen=new Set<string>();
  for(const team of parsed.teams){while(seen.has(team.id)) team.id=`${team.id}-2`;seen.add(team.id)}

@@ -108,3 +108,11 @@ test('propagateBracket is idempotent',()=>{
  const once=propagateBracket(config.bracket);
  assert.deepEqual(propagateBracket(once),once);
 });
+
+test('blank roster rows from the panel are dropped instead of failing the save',()=>{
+ const raw=base();
+ raw.teams[0].players.push({steamid:'',name:'',nickname:'',role:''} as any);
+ const config=normalizeConfig(raw);
+ assert.equal(config.teams[0].players.length,1);
+ assert.equal(config.teams[0].players[0].name,'nova');
+});

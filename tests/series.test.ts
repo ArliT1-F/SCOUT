@@ -81,3 +81,9 @@ test('a nonsense config cannot produce a nonsense series',()=>{
  const ahead=seriesState(state(1,0,0,{ctMaps:3,phase:'gameover'}),{format:'bo3'});
  assert.deepEqual(ahead.pips.CT,[true,true],'a map count past mapsToWin must not grow the pips');
 });
+
+test('level scores before the regulation target are not overtime',()=>{
+ const series=seriesState(state(14,7,7),{format:'bo3'});
+ assert.equal(series.phase,'regulation','7-7 in round 14 is a normal second half');
+ assert.equal(series.otPeriod,undefined);
+});
