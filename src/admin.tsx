@@ -1,7 +1,9 @@
 import React,{useRef,useState} from 'react';
 import {Image as ImageIcon,Plus,Save,Trash2,Upload,X} from 'lucide-react';
-import type {ScoutConfig,TeamConfig,MapConfig,BracketMatch} from '../server/config';
+import {emptyPlayer,type ScoutConfig,type TeamConfig,type MapConfig,type BracketMatch} from '../server/config';
 import type {RadarsConfig,RadarMapConfig} from '../server/radars';
+import {assetUrl} from './assets';
+import {breakClock,BREAK_TITLE} from './scenes';
 // The operator-side editors behind Teams & players, Match setup and Tournament tree. Everything here
 // edits a local draft of config/teams.json; the host persists it through PUT /api/config and pushes
 // it to every output view. Logos and map pictures go through POST /api/upload and are referenced by
@@ -9,11 +11,7 @@ import type {RadarsConfig,RadarMapConfig} from '../server/radars';
 type DraftChange=(next:ScoutConfig)=>void;
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
 const MAP_NAMES=['de_ancient','de_anubis','de_dust2','de_inferno','de_mirage','de_nuke','de_overpass','de_train','de_vertigo'];
-// Every stored path is same-origin: uploads/ and radars/ both live under the host root, so a
-// leading slash keeps previews working regardless of which admin route renders them.
-const assetUrl=(path?:string)=>!path?'':/^(https?:\/\/|\/|data:)/.test(path)?path:'/'+path;
-
-export function ImageUpload({kind,value,onChange,title}:{kind:'logo'|'map'|'radar';value?:string;onChange:(path:string)=>void;title?:string}){
+export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'logo'|'map'|'radar'|'player';value?:string;onChange:(path:string)=>void;title?:string;compact?:boolean}){
  const inputRef=useRef<HTMLInputElement>(null);
  const [busy,setBusy]=useState(false);
  const [error,setError]=useState('');
@@ -30,24 +28,33 @@ export function ImageUpload({kind,value,onChange,title}:{kind:'logo'|'map'|'rada
   }catch(reason:any){setError(reason.message||'Upload failed')}
   finally{setBusy(false);if(inputRef.current) inputRef.current.value=''}
  }
- return <div className={'image-upload '+(busy?'busy':'')}>
-  {value?<img className="image-preview" src={assetUrl(value)} alt={title||'uploaded image'} onError={event=>{(event.target as HTMLImageElement).style.opacity='0.25'}}/>:<div className="image-empty"><ImageIcon size={17}/><small>NO IMAGE</small></div>}
-  <div className="image-actions">
+ // The compact variant is a portrait slot for roster rows: clicking the picture uploads or replaces it and
+ // a small button clears it, so ten rows stay readable next to the fields.
+ const preview=<img className="image-preview" src={assetUrl(value)} alt={title||'uploaded image'} onError={event=>{(event.target as HTMLImageElement).style.opacity='0.25'}}/>;
+ return <div className={'image-upload '+(compact?'compact ':'')+(busy?'busy':'')}>
+  {compact?<button type="button" className="image-slot" disabled={busy} title={busy?'Uploading…':value?'Replace photo':'Upload photo'} onClick={()=>inputRef.current?.click()}>
+    {value?preview:<span className="image-empty"><ImageIcon size={15}/><small>{busy?'…':'PHOTO'}</small></span>}
+   </button>:value?preview:<div className="image-empty"><ImageIcon size={17}/><small>NO IMAGE</small></div>}
+  {compact?(value&&<button type="button" className="image-clear" disabled={busy} title="Remove photo" onClick={()=>{onChange('');setError('')}}><X size={10}/></button>):<div className="image-actions">
    <button type="button" className="mini-button" disabled={busy} onClick={()=>inputRef.current?.click()}><Upload size={12}/>{busy?'Uploading…':value?'Replace':'Upload'}</button>
    {value&&<button type="button" className="mini-button danger" disabled={busy} onClick={()=>{onChange('');setError('')}}><X size={12}/>Remove</button>}
-  </div>
+  </div>}
   <input ref={inputRef} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" onChange={event=>pick(event.target.files?.[0])}/>
   {error&&<small className="field-error">{error}</small>}
  </div>;
 }
 
 export function TeamEditor({config,onChange}:{config:ScoutConfig;onChange:DraftChange}){
- const updateTeam=(index:number,patch:Partial<TeamConfig>)=>{const teams=clone(config.teams);teams[index]={...teams[index],...patch};onChange({...config,teams})};
- const updatePlayer=(teamIndex:number,playerIndex:number,patch:Record<string,string>)=>{const teams=clone(config.teams);teams[teamIndex].players[playerIndex]={...teams[teamIndex].players[playerIndex],...patch};onChange({...config,teams})};
- const addPlayer=(teamIndex:number)=>{const teams=clone(config.teams);if(teams[teamIndex].players.length>=10)return;teams[teamIndex].players.push({steamid:'',name:'',nickname:'',role:''});onChange({...config,teams})};
- const removePlayer=(teamIndex:number,playerIndex:number)=>{const teams=clone(config.teams);teams[teamIndex].players.splice(playerIndex,1);onChange({...config,teams})};
+ // An upload finishes after the click that started it. Its callback must patch the *current* draft, not the
+ // one from the render that opened the file picker, or anything typed in the meantime would be overwritten.
+ const latest=useRef(config);latest.current=config;
+ const patchTeams=(change:(teams:TeamConfig[])=>void)=>{const teams=clone(latest.current.teams);change(teams);onChange({...latest.current,teams})};
+ const updateTeam=(index:number,patch:Partial<TeamConfig>)=>patchTeams(teams=>{teams[index]={...teams[index],...patch}});
+ const updatePlayer=(teamIndex:number,playerIndex:number,patch:Record<string,string>)=>patchTeams(teams=>{if(teams[teamIndex]?.players[playerIndex]) teams[teamIndex].players[playerIndex]={...teams[teamIndex].players[playerIndex],...patch}});
+ const addPlayer=(teamIndex:number)=>patchTeams(teams=>{if(teams[teamIndex].players.length<10) teams[teamIndex].players.push(emptyPlayer())});
+ const removePlayer=(teamIndex:number,playerIndex:number)=>patchTeams(teams=>{teams[teamIndex].players.splice(playerIndex,1)});
  return <section className="panel detail-panel">
-  <div className="editor-head"><h2>Teams & rosters</h2><p>Names, tags, colours, logos and the starting lineups shown on the HUD. Roster SteamIDs let the host bind a team to CT/T even when the game reports another name.</p></div>
+  <div className="editor-head"><h2>Teams & rosters</h2><p>Names, tags, colours, logos and the starting lineups shown on the HUD. Roster SteamIDs let the host bind a team to CT/T even when the game reports another name. A player is recognised by SteamID (SteamID64, <code>STEAM_0:…</code> and <code>[U:1:…]</code> all work), or by nickname when no SteamID is given. Their <b>alias</b> then replaces the in-game name on the killfeed, rosters, lower third and radar, and their <b>photo</b> appears on the lower third and the lineups scene. Leave the alias empty to show the name CS2 reports.</p></div>
   <div className="team-cards">{config.teams.map((team,ti)=>
    <div className="team-card" key={team.id}>
     <div className="team-card-head">
@@ -58,17 +65,20 @@ export function TeamEditor({config,onChange}:{config:ScoutConfig;onChange:DraftC
       <label className="field"><span>COLOUR</span><span className="color-field"><input type="color" value={team.color||'#d970c2'} onChange={event=>updateTeam(ti,{color:event.target.value})}/><input value={team.color} placeholder="#d970c2" maxLength={32} onChange={event=>updateTeam(ti,{color:event.target.value})}/></span></label>
      </div>
     </div>
-    <div className="roster">
+    <div className="team-roster">
      <div className="section-label">ROSTER · {team.players.length} PLAYERS</div>
-     {team.players.map((player,pi)=>
-      <div className="roster-row" key={pi}>
-       <span className="roster-index">{pi+1}</span>
-       <input placeholder="Nickname" value={player.name} maxLength={64} onChange={event=>updatePlayer(ti,pi,{name:event.target.value})}/>
-       <input placeholder="Real name" value={player.nickname} maxLength={64} onChange={event=>updatePlayer(ti,pi,{nickname:event.target.value})}/>
-       <input placeholder="SteamID (optional)" value={player.steamid} maxLength={40} onChange={event=>updatePlayer(ti,pi,{steamid:event.target.value})}/>
-       <input placeholder="Role" value={player.role} maxLength={64} onChange={event=>updatePlayer(ti,pi,{role:event.target.value})}/>
-       <button type="button" className="icon-button danger" title="Remove player" onClick={()=>removePlayer(ti,pi)}><Trash2 size={13}/></button>
-      </div>)}
+      {team.players.map((player,pi)=>
+       <div className="roster-row" key={pi}>
+        <ImageUpload compact kind="player" value={player.photo} title={player.alias||player.name||'player photo'} onChange={path=>updatePlayer(ti,pi,{photo:path})}/>
+        <div className="roster-fields">
+         <label className="field"><span>NICKNAME</span><input placeholder="nova" value={player.name} maxLength={64} onChange={event=>updatePlayer(ti,pi,{name:event.target.value})}/></label>
+         <label className="field"><span>ALIAS · ON AIR</span><input placeholder="same as in game" title="Shown on the overlay instead of the in-game name" value={player.alias} maxLength={64} onChange={event=>updatePlayer(ti,pi,{alias:event.target.value})}/></label>
+         <label className="field"><span>ROLE</span><input placeholder="IGL, AWP…" value={player.role} maxLength={64} onChange={event=>updatePlayer(ti,pi,{role:event.target.value})}/></label>
+         <label className="field"><span>REAL NAME</span><input placeholder="optional" value={player.nickname} maxLength={64} onChange={event=>updatePlayer(ti,pi,{nickname:event.target.value})}/></label>
+         <label className="field roster-steam"><span>STEAMID</span><input placeholder="SteamID64, STEAM_0:… or [U:1:…]" value={player.steamid} maxLength={120} onChange={event=>updatePlayer(ti,pi,{steamid:event.target.value})}/></label>
+        </div>
+        <button type="button" className="icon-button danger" title="Remove player" onClick={()=>removePlayer(ti,pi)}><Trash2 size={13}/></button>
+       </div>)}
      <button type="button" className="control-button dashed" onClick={()=>addPlayer(ti)}><span><Plus size={13}/> Add player</span></button>
     </div>
    </div>)}
@@ -106,6 +116,36 @@ export function MatchEditor({config,onChange}:{config:ScoutConfig;onChange:Draft
   </div>
   <datalist id="scout-map-names">{MAP_NAMES.map(name=><option value={name} key={name}/>)}</datalist>
   <button type="button" className="control-button dashed wide" onClick={addMap}><span><Plus size={13}/> Add map to the series</span></button>
+ </section>;
+}
+
+// The break screen. Its wording is part of the saved configuration; the countdown is an on-air switch that
+// applies immediately. It is stored on the host as an absolute time, so every output (and a browser whose
+// clock is off) counts down to the same moment.
+export function BreakEditor({config,onChange,breakEndsAt,hostNow,onTimer,onShow,onAir}:{config:ScoutConfig;onChange:DraftChange;breakEndsAt:number|null;hostNow:number;onTimer:(endsAt:number|null)=>void;onShow:()=>void;onAir:boolean}){
+ const [minutes,setMinutes]=useState('5');
+ const words=config.break||{title:'',message:''};
+ const clock=breakClock(breakEndsAt,hostNow);
+ const setWords=(patch:Partial<typeof words>)=>onChange({...config,break:{...words,...patch}});
+ const start=(count:number)=>{if(Number.isFinite(count)&&count>0&&count<=600) onTimer(Math.round(hostNow+count*60_000))};
+ return <section className="panel detail-panel">
+  <div className="editor-head"><h2>Break screen</h2><p>The words on the Break scene and its countdown. The wording is saved with the configuration; the countdown starts on air the moment you press a button, and every output counts down to the same instant.</p></div>
+  <div className="form-grid">
+   <label className="field"><span>TITLE</span><input value={words.title} maxLength={80} placeholder={BREAK_TITLE} onChange={event=>setWords({title:event.target.value})}/></label>
+   <label className="field field-wide"><span>MESSAGE</span><input value={words.message} maxLength={240} placeholder="Map 2 begins shortly" onChange={event=>setWords({message:event.target.value})}/></label>
+  </div>
+  <div className="break-timer">
+   <div className="section-label">COUNTDOWN</div>
+   <div className="break-timer-row">
+    <span className={'break-readout '+(clock.running?'running':clock.done?'done':'')}>{clock.running?`${clock.label} remaining`:clock.done?'Timer finished':'No timer running'}</span>
+    <div className="break-presets">
+     {[3,5,10,15].map(count=><button type="button" className="mini-button" key={count} onClick={()=>start(count)}>{count} min</button>)}
+     <span className="break-custom"><input type="number" min={1} max={600} value={minutes} aria-label="Custom minutes" onChange={event=>setMinutes(event.target.value)}/><button type="button" className="mini-button" onClick={()=>start(Number(minutes))}>Start</button></span>
+     <button type="button" className="mini-button danger" disabled={breakEndsAt===null} onClick={()=>onTimer(null)}><X size={12}/>Clear</button>
+    </div>
+   </div>
+  </div>
+  <div className="break-actions"><button type="button" className="control-button dashed wide" onClick={onShow}><span>{onAir?'The break screen is on air':'Put the break screen on air'}</span></button></div>
  </section>;
 }
 

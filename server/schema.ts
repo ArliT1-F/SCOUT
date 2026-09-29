@@ -79,5 +79,9 @@ export function validateGsi(payload:any):{payload:Record<string,any>;issues:Issu
   const repaired=repair(value,schema,key,issues);
   if(repaired!==undefined) out[key]=repaired;
  }
+ // CS2 keys `allplayers` by SteamID and does not repeat the id inside each entry, yet the HUD finds the
+ // observed player, keys its rows and matches the operator's roster by `steamid`. Fill it in from the key
+ // (an entry that already carries an id keeps it).
+ if(isObject(out.allplayers)) for(const [steamid,entry] of Object.entries(out.allplayers)) if(isObject(entry)&&(typeof entry.steamid!=='string'||!entry.steamid)) entry.steamid=steamid;
  return {payload:out,issues};
 }

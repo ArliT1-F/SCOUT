@@ -1,6 +1,6 @@
 # SCOUT — CS2 broadcast overlay
 
-Initial phases 1–3 implementation: external Node GSI host, React/TypeScript operator dashboard, shared transparent scoreboard HUD and OBS Browser Source page. No memory reading, injection, game hooks, or chroma key.
+External Node GSI host, React/TypeScript operator dashboard, a transparent scoreboard HUD for an OBS Browser Source, config-driven full-canvas broadcast scenes, an optional OBS WebSocket bridge and an optional Windows overlay shell. No memory reading, injection, game hooks, or chroma key.
 
 ## Run
 
@@ -12,9 +12,10 @@ npm run dev                 # http://127.0.0.1:8080/admin
 npm test
 npm run build
 npm start                   # serves production build
+npm run shell:test          # Rust: the overlay shell's decision logic (needs only a Rust toolchain)
 ```
 
-Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer. Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
+Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
 
 ### CS2 connection
 
@@ -72,7 +73,7 @@ In LIVE scene add Game Capture for `cs2.exe`, then Browser Source:
 
 Use `http://127.0.0.1:8080/obs?checker=1` in a normal browser to verify transparency: it draws a checkerboard behind the canvas, and only the HUD panels should be filled. Never use the `?checker=1` URL as the OBS source.
 
-If the overlay still covers the game: confirm the source URL is `/obs` (not `/` or `/admin`), that Custom CSS is empty, and that the active scene is **Live game** — matchup, lineups, series, winner and break are near-opaque full-screen graphics by design.
+If the overlay still covers the game: confirm the source URL is `/obs` (not `/` or `/admin`), that Custom CSS is empty, and that the active scene is **Live game** — matchup, lineups, series, tree, winner and break are full-canvas graphics with their own background, and cover the game capture by design.
 
 Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin.
 
@@ -160,15 +161,74 @@ The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: t
 The admin panel fully owns `config/teams.json`: **Teams & players**, **Match setup** and **Tournament tree** edit a draft, and **Save configuration** PUTs it to `/api/config`, which normalizes it (zod, `server/config.ts`), writes the file atomically and broadcasts it to every output view — no restart, no hand-editing. The same schema is applied on load, so a hand-edited file is normalized identically.
 
 - **Teams** — name, tag, colour and an uploaded logo (PNG, JPEG, GIF, WEBP or SVG) per side. The logo renders on the scoreboard, the matchup graphics and the panel; without one the two-bar placeholder mark is used. [Team sides](#team-sides) still resolve from GSI, but the resolved side picks up whatever the panel currently says.
-- **Rosters** — up to ten players per team with nickname, real name, optional SteamID and role. SteamIDs feed the roster-based side binding; without them sides resolve from the GSI names as before.
+- **Rosters** — up to ten players per team with nickname, alias, real name, optional SteamID, role and a portrait (see [Player photos and aliases](#player-photos-and-aliases)). SteamIDs feed the roster-based side binding; without them sides resolve from the GSI names as before.
 - **Map series** — event name, stage, best-of format, MR and OT length, plus the map list (name, pick, status, score) with an uploaded picture per map shown on the Map series scene and the series panel. These are operator series cards; live round scores still come from GSI.
 - **Tournament tree** — an editable single-elimination bracket (rounds → matches → seeds with team bindings, map scores, status). Setting a match winner writes the winner forward positionally (match *i* of round *r* feeds match ⌊i/2⌋ of round *r+1*) both in the panel and in the host's normalization, so the tree can never disagree with its own results. The same tree renders as the **Tournament tree** broadcast scene.
 
-Uploads go through `POST /api/upload` as base64 data URLs (≤ 5 MB, image MIME whitelist) and are stored under `public/uploads/logos/`, `public/uploads/maps/` and `public/uploads/radars/` — gitignored, served at `/uploads/...` in dev and production, and pruned automatically when a saved configuration no longer references them. Config keeps only the asset path.
+Uploads go through `POST /api/upload` as base64 data URLs (≤ 5 MB, image MIME whitelist) and are stored under `public/uploads/logos/`, `maps/`, `players/` and `radars/` — gitignored, served at `/uploads/...` in dev and production, and pruned automatically when a saved configuration no longer references them. A file uploaded in the last 15 minutes is never pruned, so a portrait that is waiting for its **Save** click survives someone else's save. Config keeps only the asset path.
+
+### Player photos and aliases
+
+Every roster row has a portrait and an **alias**:
+
+- **Alias** replaces the name CS2 reports on the killfeed, both roster columns, the lower third and the radar dots. Empty means "show what CS2 says": the overlay never invents or "corrects" a name on its own.
+- **Photo** (PNG, JPEG, GIF, WEBP or SVG, ≤ 5 MB) appears on the lower third and on the Lineups and Winner scenes. With the real name and role it turns the lower third into a player card. Photos are cropped to fill their slot from the top, so faces stay in frame.
+- **Who is who.** A live player is matched to a roster entry by **SteamID** first (exact). Only when that finds nobody is the in-game name compared, case-insensitively, with the roster's nickname or alias. Two rostered players with the same name are never guessed between: the side they are on breaks the tie, otherwise nobody matches.
+- SteamIDs can be typed as SteamID64, `STEAM_0:1:1234`, `[U:1:2468]` or a `steamcommunity.com/profiles/…` URL and are stored as SteamID64, which is what GSI reports. Vanity URLs cannot be resolved offline and are kept as typed.
+- The preview applies aliases as you type, before you save.
+
+CS2 keys `allplayers` by SteamID and does not repeat the id inside each entry; the host now fills it in when a packet is validated, so the observed player (lower third, highlighted roster row) and SteamID matching work on real GSI data.
+
+### Broadcast scenes
+
+Matchup, lineups, map series, tournament tree, winner and break are full-canvas 1920 × 1080 graphics with animated entrances, drawn from `config/teams.json` — so they are correct before CS2 is even running. A scene on air owns the canvas: the live scoreboard, footer and SIGNAL LOST banner step aside. While **Arrange** is on, the live layout is always shown so the drag handles sit on real elements.
+
+| Scene | Shows | Comes from |
+| --- | --- | --- |
+| Matchup | both teams (logo, or a team-colour monogram without one), VS, the series score, the format, each map with its pick and result | teams, maps |
+| Lineups | five player cards per team — portrait, alias, real name, role — and coaches/subs on a bench line | rosters; live GSI players stand in only for a team with no roster |
+| Map series | series score and a card per map: picture, pick, LIVE / PLAYED / UP NEXT, score with the winner highlighted | maps |
+| Tournament tree | the bracket with connector lines, team logos, winners highlighted, a LIVE tab on the running match | bracket |
+| Winner | the champion, final score, per-map results, the starting five | see below |
+| Break | your wording, a countdown, and the next map | `config.break`, `controls.breakEndsAt` |
+
+- **Series score**: the operator's recorded map results win; before any are entered the live GSI series score is used, credited through the resolved sides (a stand-in side has no team to credit).
+- **Winner**: the live GSI series winner, then recorded results, then the tree's final, then a finished map. With nothing decided it says so rather than guessing.
+- **Map pictures**: the uploaded picture, else the map's radar overview (custom radar upload or the shipped pack), else a striped placeholder.
+- **Break**: *Broadcast scenes → Break screen* holds the title and message (saved with the configuration) and the countdown (3, 5, 10, 15 minutes or your own). The timer is stored as an absolute host-clock time, so every output counts down to the same instant; each browser corrects for its own clock from `serverTime` in the snapshot.
+- Teams and colours come from the configuration, so **Swap team sides** also mirrors the scenes.
+
+### OBS WebSocket (optional)
+
+SCOUT can talk to OBS Studio's built-in WebSocket server (obs-websocket 5.x, OBS 28 or newer) to show OBS's status in the panel and switch OBS's scene along with yours. It is **off by default**, outbound-only, and can never affect GSI intake or the overlay: with it off, unreachable or misconfigured the host behaves exactly as before.
+
+1. In OBS: *Tools → WebSocket Server Settings*, enable the server (default port 4455). If you set a password, start the host with `OBS_WS_PASSWORD=<password>`. The password is read from the environment **only** — it is never typed into the panel, saved to disk, returned by the API or included in a snapshot (the same treatment as `GSI_TOKEN`).
+2. *Broadcast scenes → OBS Studio*: switch on **Connect to OBS** (or start the host with `OBS_WS_URL=ws://host:4455`, which enables it by default), check the address, map each SCOUT scene to an OBS scene — leave a row blank to leave OBS alone — and **Save OBS settings**. **Test** switches OBS immediately.
+3. **Scene sync** — *Status only*; *SCOUT to OBS* (putting a scene on air switches the mapped OBS scene); or *Both ways* (switching to a mapped scene inside OBS — a hotkey, a Stream Deck — puts the matching SCOUT scene on air). SCOUT recognises the echo of its own switch and never answers it, so two-way sync cannot loop.
+
+Behaviour worth knowing:
+
+- Connecting never changes OBS's scene; only a scene *change* does. An unmapped scene, a scene OBS does not have, or the scene OBS is already on are left alone, and the panel says why a switch did not happen.
+- **Refresh overlay in OBS** presses the browser source's reload button. The source is found by its `/obs` or `/game` address, or by the name entered under *Overlay browser source*.
+- An OBS that is not running yet is retried with backoff. A wrong password, an OBS that is too old, or a session kicked from OBS's session list are **not** retried (that would only fill OBS's log); the panel says so — fix it and press **Reconnect**.
+- The address must be `ws://` or `wss://` and must not contain credentials. Settings live in ignored `config/obs.json`. API: `GET`/`PUT /api/obs` and `POST /api/obs/reconnect`, `/api/obs/switch`, `/api/obs/refresh-overlay` (same-origin only, like the rest of the operator API).
+- **Verification**: the bridge is tested over real WebSockets against a mock OBS written from the protocol document, including the document's worked authentication example, wrong and missing passwords, a kicked session, a refused connection, a dead socket and hostile frames. It has **not** been run against a real OBS Studio.
+
+### Windows overlay shell (Tauri v2, optional)
+
+`src-tauri/` is a small Windows app that shows `/game` in a transparent, click-through, always-on-top window laid exactly over the CS2 window — an alternative to the OBS Browser Source for when the overlay should appear on the observer's own screen.
+
+- It polls (250 ms) for the window titled exactly `Counter-Strike 2` with class `SDL_app`, and for its client area, foreground and minimised state. Nothing else: no memory reading, no injection, no hooks.
+- The overlay is visible only while CS2 is in the foreground (it hides about 400 ms after CS2 leaves, so a passing notification does not make it blink), follows a moved or resized window, and is built not to take keyboard focus (non-focusable window). Mouse input passes through to the game.
+- **F8** switches the overlay on and off; **Ctrl+Shift+F8** quits it (a hidden, click-through window has no other way out). Both are configurable.
+- CS2 must run in *Fullscreen Windowed* (borderless): a window cannot be drawn over exclusive fullscreen.
+- It loads the overlay once the SCOUT host answers, so a host that is not running yet draws nothing over the game.
+- Build and run: install Rust and `cargo install tauri-cli --version "^2"`, then `npm run shell:build` (or `npm run shell:dev`). Options, environment variables and limits are in [`src-tauri/README.md`](src-tauri/README.md).
+- **Verification**: the shell's decisions (`src-tauri/core`) have unit tests, and the Win32 layer is executed against a fake `user32` (`npm run shell:test:win32`). The Tauri glue was type-checked against the documented Tauri 2.12 API. The shell has **not** been compiled against Tauri or run on Windows hardware — that has to happen on the observer machine.
 
 ### Operator controls
 
-Scene selection (live, matchup, lineups, map series, tournament tree, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
+Scene selection (live, matchup, lineups, map series, tournament tree, winner, break), killfeed, lower-third, economy, technical pause, team display swap and the break countdown are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
 
 ### Repositioning the overlay
 
@@ -181,8 +241,11 @@ Scene selection (live, matchup, lineups, map series, tournament tree, winner tit
 
 ## Scope / remaining work
 
-This is **not yet tournament-production verified**. Synthetic state tests and build checks run in this environment. A real CS2 observer, Windows and OBS are unavailable here, so actual 20 Hz GSI compatibility and transparent OBS compositing must be verified on the observer machine.
+Every stage the specification listed now exists: player photos and alias overrides, rich broadcast scenes, the optional OBS WebSocket bridge and the Windows Tauri v2 shell. `/game` is still a plain browser renderer; the shell is what makes it a native window.
 
-Remaining specification stages: player photos and alias overrides in the panel; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
+This is **not yet tournament-production verified**.
 
-Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls and configuration (`/api/controls`, `/api/config`, `/api/upload`) are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.
+- **Verified here**: synthetic-state, configuration, scene-derivation, OBS-protocol (against a protocol-faithful mock) and shell-decision tests; `tsc` and the production build; and the rendered HUD, scenes and panel, checked as headless-Chromium screenshots against the real host driven through its HTTP API and the recorded-feed replay.
+- **Not verifiable here**: a real CS2 observer, a real OBS Studio and Windows hardware were unavailable. Actual 20 Hz GSI compatibility, transparent OBS compositing, the OBS bridge against a real obs-websocket, and the shell's behaviour on Windows (a transparent, click-through, non-activating WebView2 window; F8; following CS2) must be verified on the observer machine. The shell could not be compiled against Tauri in this environment.
+
+Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls and configuration (`/api/controls`, `/api/config`, `/api/upload`, `/api/obs*`) are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. The OBS password is never part of any of them — it only comes from `OBS_WS_PASSWORD`. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.
