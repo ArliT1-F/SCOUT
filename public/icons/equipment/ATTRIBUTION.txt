@@ -1,0 +1,9 @@
+Counter-Strike 2 equipment SVG assets
+
+Source: https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment
+Source snapshot: d21042432beb189c855fc0857680416401795ac5
+
+The upstream repository identifies all Counter-Strike icon assets as the property of Valve Corporation. They are provided here for community/informational use; the upstream notice says they are not licensed for commercial use without Valve's explicit permission. Use must comply with Valve's terms:
+https://store.steampowered.com/subscriber_agreement/
+
+Counter-Strike is a registered trademark of Valve Corporation. This project is not affiliated with or endorsed by Valve Corporation.
