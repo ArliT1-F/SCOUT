@@ -76,6 +76,18 @@ If the overlay still covers the game: confirm the source URL is `/obs` (not `/` 
 
 Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin.
 
+### Team sides
+
+Which config team is on which side is resolved by `server/sides.ts` and exposed as `sides` on `/api/status` and every WebSocket snapshot, so the HUD, the killfeed and the operator panel always agree. In order of preference:
+
+1. **GSI names** — `map.team_ct.name` / `map.team_t.name` matched against a config team's `name` or `tag`. These flip at halftime and at each overtime swap, and the binding follows them.
+2. **Roster SteamIDs** — when the names do not match, a config team whose players are all found on one side in `allplayers` claims that side.
+3. **Remembered binding** — a >5 s heartbeat gap or a partial packet cannot flip the teams: the previous binding is kept while the map name is unchanged, and re-derived when the map changes.
+4. **The name CS2 reported** — an unknown team name is shown as-is (with a fallback colour) rather than silently replaced by the first config team. `confidence: "guess"` in the snapshot marks this case.
+5. **Config order** — only when there is no evidence at all (before the first packet, or an empty payload); `configSides` is what the dashboard shows before GSI arrives.
+
+`config/teams.json`'s `players` array may stay empty: sides are then resolved from the GSI names, which is what the shipped configuration does.
+
 ### Derived events (killfeed and round history)
 
 The host derives kills and round results by differencing successive snapshots (`server/events.ts`) and broadcasts them in the same snapshot as the match state — `events.kills` (ring of the last 8) and `events.rounds` (up to 40, tagged with their map, so a finished map keeps its history).
@@ -88,7 +100,7 @@ The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: t
 
 ### Operator controls
 
-Scene selection (live, matchup, lineups, series, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. The radar switch is intentionally disabled until radar calibration ships. Teams/maps are read from `config/teams.json` at startup. Roster SteamIDs establish team-side association when populated; the sample configuration has no roster and falls back to GSI team names/CT and T. Player aliases and rich roster editing are not yet implemented. Demo preview is local to the operator and never modifies server state.
+Scene selection (live, matchup, lineups, series, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. The radar switch is intentionally disabled until radar calibration ships. Teams/maps are read from `config/teams.json` at startup; [team sides](#team-sides) are resolved from GSI names even when the rosters are empty. Player aliases and rich roster editing are not yet implemented. Demo preview is local to the operator and never modifies server state.
 
 ## Scope / remaining work
 
