@@ -88,6 +88,16 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 
 `config/teams.json`'s `players` array may stay empty: sides are then resolved from the GSI names, which is what the shipped configuration does.
 
+### Series state
+
+`server/series.ts` derives `series` (carried in every snapshot next to `sides`) from GSI plus operator config:
+
+- **Format** — `format` (`bo1`/`bo3`/`bo5`, also accepted as `bestOf`) with a `bo3` default; unknown values fall back instead of leaking into the pips.
+- **Score pips** — from `map.team_ct.matches_won_this_series` / `map.team_t...`, clamped to `ceil(bestOf / 2)` pips per side, so the HUD shows real map wins rather than the three decorative dots it used to.
+- **Rounds** — `map.round` is already 1-based, so the HUD shows `ROUND n / 24` for MR12 (configurable with `mr`) instead of the old off-by-one `/ 24`.
+- **Overtime** — beyond regulation or tied at the MR, `phase: "overtime"` with `otPeriod` and `roundsThisHalf` from the round number (`otMr`, default 3 rounds per OT half), rendered as `OVERTIME 1 · 2/3`.
+- **Winner** — `mapWinner` from the final scores on a `gameover` map, and `seriesWinner` once a side reaches `mapsToWin`; the operator's **Winner title** scene renders "`<team>` WINS THE SERIES" from it.
+
 ### Phase-based visibility
 
 `src/phases.ts` maps the GSI phase onto what the live scene is allowed to show; it is pure, so `tests/phases.test.ts` covers it without a browser. The scene is *not* hidden while waiting for data beyond what the phase justifies, and output routes still render nothing at all without live state.

@@ -8,6 +8,7 @@ import {z} from 'zod';
 import {MatchStore,FeedMonitor,type TokenSource} from './state.js';
 import {EventTracker} from './events.js';
 import {SideTracker,configSides} from './sides.js';
+import {seriesState} from './series.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // Only the *source* of the token is ever recorded — the token value itself is never stored or logged.
@@ -19,7 +20,7 @@ let controls=controlsSchema.parse({scene:'live',radar:true,killfeed:true,lowerTh
 try {controls=controlsSchema.parse(JSON.parse(await readFile('config/operator.json','utf8')))} catch{}
 app.use(express.json({limit:'1mb'}));
 const wss=new WebSocketServer({server,path:'/ws'});
-function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config)}}
+function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config)}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 wss.on('connection',ws=>ws.send(JSON.stringify(snapshot())));
 setInterval(broadcast,1000).unref();
