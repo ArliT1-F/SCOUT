@@ -6,7 +6,8 @@ import {createWriteStream} from 'node:fs';
 import path from 'node:path';
 import {z} from 'zod';
 import {MatchStore,FeedMonitor,type TokenSource} from './state.js';
-const app=express(), server=createServer(app), store=new MatchStore();
+import {EventTracker} from './events.js';
+const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker();
 const port=Number(process.env.PORT)||8080;
 // Only the *source* of the token is ever recorded — the token value itself is never stored or logged.
 const tokenSource:TokenSource=process.env.GSI_TOKEN?'env':'default';
@@ -17,7 +18,7 @@ let controls=controlsSchema.parse({scene:'live',radar:true,killfeed:true,lowerTh
 try {controls=controlsSchema.parse(JSON.parse(await readFile('config/operator.json','utf8')))} catch{}
 app.use(express.json({limit:'1mb'}));
 const wss=new WebSocketServer({server,path:'/ws'});
-function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot()}}
+function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot(),events:events.snapshot()}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 wss.on('connection',ws=>ws.send(JSON.stringify(snapshot())));
 setInterval(broadcast,1000).unref();
@@ -44,7 +45,10 @@ app.post('/gsi',(req,res)=>{
  const ingested=store.ingest(payload);
  // Recovered subtrees are normal (CS2 empties fields between rounds), so they are counted and logged
  // at most once per 10 s instead of once per packet.
- if(ingested){const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}
+ if(ingested){const derived=events.observe(store.state,Date.now(),ingested.reset);
+  for(const kill of derived.kills) console.log(`[events] round ${kill.round+1}: ${kill.killerName||'unknown'} killed ${kill.victimName}${kill.headshot?' (headshot)':''}`);
+  if(derived.ended) console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`);
+  const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}
  else if(feed.late().log) console.warn(`[gsi] ignoring a packet older than the current state (${feed.rejectedLate} ignored). Expected while replaying a recording against a warm host, or when a second observer pushes with an older clock.`);
  res.sendStatus(200); broadcast();
 });

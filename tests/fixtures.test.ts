@@ -58,7 +58,7 @@ test('the fixture records the transitions the killfeed and phase work need',()=>
  assert.ok(deaths.length>=5,'expected health→0 transitions to derive kills from');
  assert.ok(plants.length>=3,'expected a carried → planted sequence');
  assert.ok(deaths.length>=15,'expected repeated health→0 transitions');
- assert.deepEqual(rounds,['CT','T','CT','CT','T','CT'],'round winners in order, including the map-end and gameover packets');
+ assert.deepEqual(rounds,['CT','T','CT','CT','T','T','CT'],'round winners in order: four rounds, the two halftime score lines, then the gameover packet');
 });
 
 test('replay timing scales with --speed and honours --max-gap',()=>{

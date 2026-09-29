@@ -77,11 +77,11 @@ export class MatchStore {
  state:MatchState={}; lastSeen=0; revision=0;
  // Returns the per-subtree validation issues, or false when the packet was dropped as late.
  // A malformed field never aborts the packet: it is dropped, counted and reported.
- ingest(payload:MatchState, now=Date.now()):{issues:Issue[]}|false {
+ ingest(payload:MatchState, now=Date.now()):{issues:Issue[];reset:boolean}|false {
   const old=this.state, {payload:clean,issues}=validateGsi(payload);
   const next=clean as MatchState;
   if(next.provider?.timestamp && old.provider?.timestamp && next.provider.timestamp<old.provider.timestamp) return false;
-  const reset = now-this.lastSeen>5000 || (next.map?.name && old.map?.name!==next.map.name) || (next.provider?.steamid && old.provider?.steamid!==next.provider.steamid);
-  this.state=mergeDelta(reset?{}:old,next); this.lastSeen=now; this.revision++; return {issues};
+  const reset = now-this.lastSeen>5000 || !!(next.map?.name && old.map?.name!==next.map.name) || !!(next.provider?.steamid && old.provider?.steamid!==next.provider.steamid);
+  this.state=mergeDelta(reset?{}:old,next); this.lastSeen=now; this.revision++; return {issues,reset};
  }
 }

@@ -76,14 +76,24 @@ If the overlay still covers the game: confirm the source URL is `/obs` (not `/` 
 
 Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin.
 
+### Derived events (killfeed and round history)
+
+The host derives kills and round results by differencing successive snapshots (`server/events.ts`) and broadcasts them in the same snapshot as the match state — `events.kills` (ring of the last 8) and `events.rounds` (up to 40, tagged with their map, so a finished map keeps its history).
+
+- **Kills**: a player's health dropping to 0 is the only death trigger, so a repeated packet never double-counts. The killer is credited from a `round_kills` (or `match_stats.kills`) increment in the same packet, with the killer's active weapon and the headshot flag from `round_killhs`. When the increment is not in the packet the killer stays `unknown` — the overlay never invents one.
+- **Rounds**: `round.phase: over` (or a gameover/intermission map phase) closes the round once, with the winner from `round.win_team` (falling back to `map.round_wins`) and a reason taken from the bomb transition (`bomb`, `defuse`), a wiped roster (`elimination`) or the clock (`time`).
+- The >5 s heartbeat gap, a map change or a provider change clears the kill feed and the per-player watch state; finished rounds are kept because they are history rather than live state.
+
+The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: team colours from `config/teams.json`, the weapon's name, headshot marker, newest first, and each entry fades out after ~7 s and disappears at 9 s. The operator preview shows sample kills while it is on Demo feed.
+
 ### Operator controls
 
-Scene selection (live, matchup, lineups, series, winner title, break), lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. Radar and killfeed switches are intentionally disabled until implemented. Teams/maps are read from `config/teams.json` at startup. Roster SteamIDs establish team-side association when populated; the sample configuration has no roster and falls back to GSI team names/CT and T. Player aliases and rich roster editing are not yet implemented. Demo preview is local to the operator and never modifies server state.
+Scene selection (live, matchup, lineups, series, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. The radar switch is intentionally disabled until radar calibration ships. Teams/maps are read from `config/teams.json` at startup. Roster SteamIDs establish team-side association when populated; the sample configuration has no roster and falls back to GSI team names/CT and T. Player aliases and rich roster editing are not yet implemented. Demo preview is local to the operator and never modifies server state.
 
 ## Scope / remaining work
 
 This is **not yet tournament-production verified**. Synthetic state tests and build checks run in this environment. A real CS2 observer, Windows and OBS are unavailable here, so actual 20 Hz GSI compatibility and transparent OBS compositing must be verified on the observer machine.
 
-Remaining specification stages: complete schema validation of GSI subtrees; real capture fixtures; derived killfeed and round-history events; map calibration and radar assets; interpolated bomb/defuse clocks; stable side tracking without complete rosters; OT/MR3/MR5 labels; full phase-based visibility; roster editor/overrides; accurate series pips and winner selection; photos and complete weapon/utility icons; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
+Remaining specification stages: map calibration and radar assets; interpolated bomb/defuse clocks; stable side tracking without complete rosters; OT/MR3/MR5 labels; full phase-based visibility; roster editor/overrides; accurate series pips and winner selection; photos and complete weapon/utility icons; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
 
 Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.

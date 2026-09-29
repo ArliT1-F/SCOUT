@@ -80,14 +80,12 @@ for ends in ["13.0", "11.0", "9.4"]:
 packet({**base(1, 0, 0, "live"), "allplayers": ap, "phase_countdowns": {"phase": "live", "phase_ends_in": "115.0"}})
 ap = roster(ROSTER)
 mutate(ap, "susi", health=74, armor=88)
-mutate(ap, "loki", round_kills=1, round_killhs=1)
 packet(delta(allplayers=ap))                                        # Loki opens the round
 ap = roster(ROSTER)
 mutate(ap, "susi", health=0, armor=88)
 mutate(ap, "ukko", health=38, armor=0, helmet=False, flashed=60)
-mutate(ap, "loki", round_kills=1, round_killhs=0, money=1100)
-mutate(ap, "kettu", round_kills=1)
-packet(delta(allplayers=ap))                                        # Loki and Kettu trade frags
+mutate(ap, "loki", round_kills=1, round_killhs=1, money=1100)
+packet(delta(allplayers=ap))                                        # Loki finishes the kill
 round_wins = {"1": "ct"}
 ap = roster(ROSTER, health={"susi": 0, "ukko": 0, "veko": 0})
 packet({**base(1, 1, 0, "over", round_wins=round_wins), "round": {"phase": "over", "win_team": "CT"}, "allplayers": ap,
@@ -103,7 +101,7 @@ for ends in ["36.4", "33.2", "29.9"]:
 round_wins["2"] = "t"
 packet({**base(2, 1, 1, "over", round_wins=round_wins), "round": {"phase": "over", "win_team": "T", "bomb": "exploded"},
         "bomb": {"state": "exploded", "countdown": "0.0", "position": "-800.00, 300.00, 10.00"},
-        "allplayers": roster(ROSTER, health={n: 0 for n in ROSTER["CT"]}), "phase_countdowns": {"phase": "over", "phase_ends_in": "6.1"}})
+        "allplayers": roster(ROSTER, health={"arvo": 0, "miska": 0}), "phase_countdowns": {"phase": "over", "phase_ends_in": "6.1"}})
 
 # --- round 3: Solaris plant, Nordwind defuses -----------------------------
 packet({**base(3, 1, 1, "freezetime", round_wins=round_wins), "allplayers": roster(ROSTER), "phase_countdowns": {"phase": "freezetime", "phase_ends_in": "15.0"}})
@@ -131,8 +129,8 @@ packet({**base(4, 3, 1, "over", round_wins=round_wins), "round": {"phase": "over
 
 # --- halftime side swap, then the second map ------------------------------
 wins = {str(r): ("ct" if r < 5 else "t") for r in range(1, 9)}
-packet({**base(8, 4, 8, "freezetime", ct_name=T_TEAM, t_name=CT_TEAM, round_wins=wins), "allplayers": roster(SWAPPED, money={n: 2400 for n in NAMES}), "phase_countdowns": {"phase": "freezetime", "phase_ends_in": "14.7"}})
-packet({**delta(map={"name": "de_mirage", "phase": "intermission", "round": 15,
+packet({**base(4, 4, 8, "over", ct_name=T_TEAM, t_name=CT_TEAM, round_wins=wins), "round": {"phase": "over", "win_team": "T"}, "allplayers": roster(SWAPPED, money={n: 2400 for n in NAMES}), "phase_countdowns": {"phase": "over", "phase_ends_in": "14.7"}})
+packet({**delta(map={"phase": "intermission",
                      "team_ct": {"name": T_TEAM, "score": 4, "matches_won_this_series": 0},
                      "team_t": {"name": CT_TEAM, "score": 8, "matches_won_this_series": 0}}),
         "round": {"phase": "over", "win_team": "T"}, "phase_countdowns": {"phase": "over", "phase_ends_in": "9.2"}})
