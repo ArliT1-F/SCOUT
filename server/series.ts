@@ -24,7 +24,9 @@ export function seriesState(state:MatchState,config:any={}):SeriesState {
  const score={CT:Number(state.map?.team_ct?.score??0),T:Number(state.map?.team_t?.score??0)};
  const maps={CT:Number((state.map?.team_ct as any)?.matches_won_this_series??0),T:Number((state.map?.team_t as any)?.matches_won_this_series??0)};
  const round=Math.max(1,Number(state.map?.round??1)), played=score.CT+score.T;
- const tied=score.CT===score.T&&round>mr;
+ // Level scores only mean overtime once both teams have reached the regulation half target (12-12 in
+ // MR12); 7-7 in round 14 is ordinary regulation, not the first OT period.
+ const tied=score.CT===score.T&&score.CT>=mr;
  const beyond=round>regulationRounds;
  const otPeriod=beyond?Math.floor((round-1-regulationRounds)/(2*otPerHalf))+1:tied?1:undefined;
  const roundsThisHalf=beyond?((round-1-regulationRounds)%otPerHalf)+1:((round-1)%mr)+1;

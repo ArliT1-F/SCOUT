@@ -120,7 +120,7 @@ header{height:69px;display:flex;align-items:center;justify-content:space-between
 .archway{position:absolute;bottom:18%;left:38%;width:24%;height:36%;border-radius:40% 40% 0 0;background:#2f2039}
 .pavement{position:absolute;bottom:0;left:0;right:0;height:18%;background:#140d1a}
 .preview-hud{position:absolute;inset:0}
-.preview-hud .hud{transform:scale(.353);transform-origin:top left;width:1920px;height:1080px}
+.preview-hud .hud{transform:scale(var(--preview-scale,.353));transform-origin:top left;width:1920px;height:1080px}
 .preview-watermark{position:absolute;top:12px;left:14px;font-size:8px;letter-spacing:2px;color:#ffffff55}
 .preview-bottom{display:flex;justify-content:space-between;padding:11px 18px;border-top:1px solid var(--line-soft);font-size:8px;letter-spacing:1px;color:var(--text-faint)}
 .preview-bottom i{margin:0 8px;font-style:normal;color:var(--line)}
