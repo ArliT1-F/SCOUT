@@ -1,6 +1,7 @@
 import React,{useRef,useState} from 'react';
-import {Image as ImageIcon,Plus,Trash2,Upload,X} from 'lucide-react';
+import {Image as ImageIcon,Plus,Save,Trash2,Upload,X} from 'lucide-react';
 import type {ScoutConfig,TeamConfig,MapConfig,BracketMatch} from '../server/config';
+import type {RadarsConfig,RadarMapConfig} from '../server/radars';
 // The operator-side editors behind Teams & players, Match setup and Tournament tree. Everything here
 // edits a local draft of config/teams.json; the host persists it through PUT /api/config and pushes
 // it to every output view. Logos and map pictures go through POST /api/upload and are referenced by
@@ -8,9 +9,11 @@ import type {ScoutConfig,TeamConfig,MapConfig,BracketMatch} from '../server/conf
 type DraftChange=(next:ScoutConfig)=>void;
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
 const MAP_NAMES=['de_ancient','de_anubis','de_dust2','de_inferno','de_mirage','de_nuke','de_overpass','de_train','de_vertigo'];
-const assetUrl=(path?:string)=>path?(path.startsWith('uploads/')?'/'+path:path):'';
+// Every stored path is same-origin: uploads/ and radars/ both live under the host root, so a
+// leading slash keeps previews working regardless of which admin route renders them.
+const assetUrl=(path?:string)=>!path?'':/^(https?:\/\/|\/|data:)/.test(path)?path:'/'+path;
 
-export function ImageUpload({kind,value,onChange,title}:{kind:'logo'|'map';value?:string;onChange:(path:string)=>void;title?:string}){
+export function ImageUpload({kind,value,onChange,title}:{kind:'logo'|'map'|'radar';value?:string;onChange:(path:string)=>void;title?:string}){
  const inputRef=useRef<HTMLInputElement>(null);
  const [busy,setBusy]=useState(false);
  const [error,setError]=useState('');
@@ -172,5 +175,62 @@ export function BracketEditor({config,onChange}:{config:ScoutConfig;onChange:Dra
     <button type="button" className="control-button dashed" disabled={bracket.rounds.length>=8} onClick={addRound}><span><Plus size={12}/> Add round</span></button>
    </div>
   </div>
+ </section>;
+}
+
+// Custom radars: the image plus the CS2 overview calibration (pos_x/pos_y/scale) for each map.
+// The draft edits config/radars.json through PUT /api/radars on Save, which persists the file and
+// broadcasts it — the preview (and every output view) shows uploads before they are saved, so
+// calibration can be tuned against live dots. An entry with scale <= 0 disables the radar for
+// that map rather than drawing it in the wrong place, and the save button stays off until valid.
+export function RadarsEditor({radars,seriesMaps,onChange,onSave,dirty}:{radars:RadarsConfig;seriesMaps:string[];onChange:(next:RadarsConfig)=>void;onSave:()=>void;dirty:boolean}){
+ const entries=Object.entries(radars.maps||{});
+ const overviewSize=radars.overviewSize??1024;
+ const invalid=!Number.isFinite(overviewSize)||overviewSize<=0
+  ||entries.some(([,map])=>!Number.isFinite(map.posX)||!Number.isFinite(map.posY)||!(map.scale>0));
+ const update=(name:string,patch:Partial<RadarMapConfig>)=>onChange({...radars,maps:{...radars.maps,[name]:{...radars.maps[name],...patch}}});
+ // Renaming rebuilds the record in place so row order — and the row's React key, which is the
+ // index — survives; typing must not remount the input under the cursor. A name that collides
+ // with another map is refused, so two rows can never fight over one calibration.
+ const rename=(from:string,to:string)=>{
+  if(!to||to===from||radars.maps[to]) return;
+  const maps=Object.fromEntries(Object.entries(radars.maps).map(([key,value])=>[key===from?to:key,value]));
+  onChange({...radars,maps:maps as RadarsConfig['maps']});
+ };
+ const remove=(name:string)=>{const maps={...radars.maps};delete maps[name];onChange({...radars,maps})};
+ const add=()=>{
+  let name=MAP_NAMES.find(candidate=>!radars.maps[candidate])||'',suffix=2;
+  while(!name||radars.maps[name]) name=`de_custom_${suffix++}`;
+  onChange({...radars,maps:{...radars.maps,[name]:{posX:0,posY:0,scale:5,image:''}}});
+ };
+ return <section className="panel detail-panel radars-panel">
+  <div className="editor-head radars-head">
+   <div>
+    <h2>Custom radars</h2>
+    <p>Per-map radar image and CS2 overview calibration — <code>pos_x</code>, <code>pos_y</code> and <code>scale</code> from <code>resource/overviews/&lt;map&gt;.txt</code>. Upload any square image, or drop a <code>&lt;map&gt;.png</code> into <code>public/radars/</code> (the nine active-duty maps ship pre-filled). A map without a valid entry draws no radar at all, never a wrong one.</p>
+   </div>
+   <button type="button" className="button primary" disabled={!dirty||invalid} onClick={onSave} title={invalid?'Fix the highlighted calibration fields first':undefined}><Save size={14}/>Save radars</button>
+  </div>
+  <div className="radars-meta">
+   <label className="field"><span>OVERVIEW PIXEL SIZE</span><input type="number" min={1} value={overviewSize} onChange={event=>onChange({...radars,overviewSize:Number(event.target.value)||1024})}/></label>
+   <p className="radars-note">Images render inside the square radar panel; 1024 × 1024 matches the official overviews. Uploaded images live under <code>uploads/radars/</code> and are pruned when replaced.</p>
+  </div>
+  <div className="section-label map-series-label">MAP RADARS · {entries.length}</div>
+  <div className="radar-rows">
+   {entries.map(([name,map],index)=><div className={'radar-row'+(map.scale>0?'':' invalid')} key={index}>
+    <ImageUpload kind="radar" value={map.image||`radars/${name}.png`} title={name} onChange={path=>update(name,{image:path})}/>
+    <div className="radar-fields">
+     <label className="field"><span>MAP</span><input list="scout-radar-names" value={name} maxLength={64} onChange={event=>rename(name,event.target.value)}/></label>
+     <label className="field"><span>POS X</span><input type="number" value={map.posX} onChange={event=>update(name,{posX:Number(event.target.value)})}/></label>
+     <label className="field"><span>POS Y</span><input type="number" value={map.posY} onChange={event=>update(name,{posY:Number(event.target.value)})}/></label>
+     <label className="field"><span>SCALE</span><input type="number" step="0.01" value={map.scale} onChange={event=>update(name,{scale:Number(event.target.value)})}/>{!(map.scale>0)&&<small className="field-error">Scale must be greater than 0</small>}</label>
+     <label className="field"><span>SIZE (OPTIONAL)</span><input type="number" min={1} value={map.size??''} placeholder={String(overviewSize)} onChange={event=>update(name,{size:event.target.value===''?undefined:Number(event.target.value)})}/></label>
+    </div>
+    <button type="button" className="icon-button danger" title="Remove radar" onClick={()=>remove(name)}><Trash2 size={14}/></button>
+   </div>)}
+   {!entries.length&&<p className="radars-empty">No radar entries — add a map to calibrate it.</p>}
+  </div>
+  <datalist id="scout-radar-names">{[...new Set([...MAP_NAMES,...seriesMaps])].map(name=><option value={name} key={name}/>)}</datalist>
+  <button type="button" className="control-button dashed wide" onClick={add}><span><Plus size={13}/> Add map radar</span></button>
  </section>;
 }

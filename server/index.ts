@@ -10,6 +10,8 @@ import {EventTracker} from './events.js';
 import {SideTracker,configSides} from './sides.js';
 import {seriesState} from './series.js';
 import {configSchema,normalizeConfig,type ScoutConfig} from './config.js';
+import {layoutSchema,type LayoutConfig} from './layout.js';
+import {radarsSchema} from './radars.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // Only the *source* of the token is ever recorded — the token value itself is never stored or logged.
@@ -26,18 +28,29 @@ let radars:any={}; try {radars=JSON.parse(await readFile('config/radars.json','u
 const controlsSchema=z.object({scene:z.enum(['live','matchup','lineups','veto','bracket','break','winner']),radar:z.boolean(),killfeed:z.boolean(),lowerThird:z.boolean(),economy:z.boolean(),techPause:z.boolean(),swapped:z.boolean()});
 let controls=controlsSchema.parse({scene:'live',radar:true,killfeed:true,lowerThird:true,economy:false,techPause:false,swapped:false});
 try {controls=controlsSchema.parse(JSON.parse(await readFile('config/operator.json','utf8')))} catch{}
-// Team logos and map pictures are operator uploads. They live under public/uploads/ (gitignored)
-// and are stored as plain image files referenced by path from config/teams.json.
+// Overlay element positions (event header, scoreboard, radar, killfeed, rosters, lower-third,
+// economy bar, footer) are edited by dragging in the admin preview and saved to
+// config/layout.json (gitignored — defaults live in the CSS). Missing file = CSS defaults.
+let layout:LayoutConfig={elements:{}};
+// A missing file is the normal first-run state (the file is gitignored and the CSS defaults apply),
+// so only a file that exists but cannot be parsed is worth a warning.
+try {layout=layoutSchema.parse(JSON.parse(await readFile('config/layout.json','utf8')))} catch (error:any) {try{await readFile('config/layout.json');console.warn('[layout] config/layout.json is invalid — the CSS defaults stay in use:',error.message)}catch{}}
+// Team logos, map pictures and radar images are operator uploads. They live under public/uploads/
+// (gitignored) and are stored as plain image files referenced by path from config/teams.json or
+// config/radars.json.
 const UPLOAD_ROOT='public/uploads';
+const IMAGE_EXTS:Record<string,string>={'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/gif':'gif','image/webp':'webp','image/svg+xml':'svg'};
 const UPLOAD_KINDS:Record<string,{dir:string;exts:Record<string,string>}>={
- logo:{dir:'logos',exts:{'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/gif':'gif','image/webp':'webp','image/svg+xml':'svg'}},
- map:{dir:'maps',exts:{'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/gif':'gif','image/webp':'webp','image/svg+xml':'svg'}},
+ logo:{dir:'logos',exts:IMAGE_EXTS},
+ map:{dir:'maps',exts:IMAGE_EXTS},
+ radar:{dir:'radars',exts:IMAGE_EXTS},
 };
 await mkdir(path.join(UPLOAD_ROOT,'logos'),{recursive:true});
 await mkdir(path.join(UPLOAD_ROOT,'maps'),{recursive:true});
+await mkdir(path.join(UPLOAD_ROOT,'radars'),{recursive:true});
 // The upload body is a base64 data URL, so this route gets its own larger JSON parser before the
 // 1 mb global limit applies to the GSI hot path.
-const uploadSchema=z.object({kind:z.enum(['logo','map']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
+const uploadSchema=z.object({kind:z.enum(['logo','map','radar']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
 app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
  const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
  const parsed=uploadSchema.safeParse(req.body);
@@ -58,9 +71,12 @@ app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
 // Uploaded assets must be reachable in production too, where the Vite public/ copy in dist/ is a
 // build-time snapshot and would miss anything the admin uploads later.
 app.use('/uploads',express.static(UPLOAD_ROOT,{immutable:true,maxAge:'7d'}));
+// Drop-in radar images (public/radars/<map>.png) get the same treatment: dist/ only knows the
+// files that existed at build time, but operators replace these while a tournament is running.
+app.use('/radars',express.static('public/radars'));
 app.use(express.json({limit:'1mb'}));
 const wss=new WebSocketServer({server,path:'/ws'});
-function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars}}
+function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 wss.on('connection',ws=>ws.send(JSON.stringify(snapshot())));
 setInterval(broadcast,1000).unref();
@@ -107,18 +123,20 @@ app.put('/api/config',async(req,res)=>{
   await writeFile('config/teams.json.tmp',JSON.stringify(next,null,2));
   await rename('config/teams.json.tmp','config/teams.json');
   config=next;
-  await pruneUploads(next);
+  await pruneUploads(next,radars);
   broadcast();res.json(config);
  }catch{res.status(500).json({error:'Could not save configuration'})}
 });
-// Uploaded logos and map pictures are replaced freely; anything no longer referenced by the saved
-// configuration is deleted so public/uploads/ cannot grow without bound across a long tournament.
-async function pruneUploads(current:ScoutConfig){
+// Uploaded logos, map pictures and radar images are replaced freely; anything no longer referenced
+// by the saved configuration is deleted so public/uploads/ cannot grow without bound across a long
+// tournament. Drop-in files under public/radars/ are operator-managed and never pruned.
+async function pruneUploads(current:ScoutConfig,radarsConfig:any){
  const referenced=new Set<string>();
  const keep=(value?:string)=>{if(value&&value.startsWith('uploads/')) referenced.add(value)};
  for(const team of current.teams) keep(team.logo);
  for(const map of current.maps) keep(map.image);
- for(const kind of ['logos','maps']){
+ for(const entry of Object.values(radarsConfig?.maps||{})) keep((entry as any)?.image);
+ for(const kind of ['logos','maps','radars']){
   const dir=path.join(UPLOAD_ROOT,kind);
   let files:string[]=[];try{files=await readdir(dir)}catch{continue}
   for(const file of files){
@@ -133,6 +151,34 @@ app.put('/api/controls',async(req,res)=>{
  const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
  const parsed=controlsSchema.safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Invalid controls'});return}
  try {await writeFile('config/operator.json.tmp',JSON.stringify(parsed.data,null,2));await rename('config/operator.json.tmp','config/operator.json');controls=parsed.data;broadcast();res.json(controls)}catch{res.status(500).json({error:'Could not save controls'})}
+});
+// Radar calibration + custom images are operator data: the admin panel's Custom radars editor PUTs
+// here, the file is replaced atomically, and every output view re-renders with the new radar.
+app.put('/api/radars',async(req,res)=>{
+ const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ const parsed=radarsSchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Invalid radar configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'radars'} ${issue.message}`).slice(0,6).join('; ')});return}
+ const next=parsed.data;
+ try {
+  await writeFile('config/radars.json.tmp',JSON.stringify(next,null,2));
+  await rename('config/radars.json.tmp','config/radars.json');
+  radars=next;
+  await pruneUploads(config,next);
+  broadcast();res.json(radars);
+ }catch{res.status(500).json({error:'Could not save radar configuration'})}
+});
+// Overlay element positions from the admin's Arrange mode. Saved as top-left coordinates on the
+// 1920×1080 canvas; an empty elements map is the shipped CSS default layout.
+app.put('/api/layout',async(req,res)=>{
+ const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ const parsed=layoutSchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Invalid layout: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'layout'} ${issue.message}`).slice(0,6).join('; ')});return}
+ try {
+  await writeFile('config/layout.json.tmp',JSON.stringify(parsed.data,null,2));
+  await rename('config/layout.json.tmp','config/layout.json');
+  layout=parsed.data;
+  broadcast();res.json(layout);
+ }catch{res.status(500).json({error:'Could not save layout'})}
 });
 if(process.env.NODE_ENV==='production'){app.use(express.static('dist'));app.get('*',(_req,res)=>res.sendFile(path.resolve('dist/index.html')))}else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true,allowedHosts:true},appType:'spa'});app.use(vite.middlewares)}
 app.use((err:any,_req:any,res:any,_next:any)=>{res.status(err.status||500).json({error:err.status===400?'Invalid JSON':'Request failed'})});
