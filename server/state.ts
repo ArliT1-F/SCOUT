@@ -1,11 +1,13 @@
+import {validateGsi,sanitize,BLOCKED_KEYS,type Issue} from './schema.js';
+export type {Issue} from './schema.js';
 export interface WeaponState { name:string; type:string; state:string; ammo_clip?:number; ammo_reserve?:number }
 export interface PlayerState { steamid:string; name:string; observer_slot?:number; team:'CT'|'T'; activity?:string; state:{health:number;armor:number;helmet?:boolean;money:number;round_kills:number;round_killhs?:number;flashed?:number;burning?:number;defusekit?:boolean}; weapons:Record<string,WeaponState>; match_stats:{kills:number;deaths:number;assists:number}; position?:string;forward?:string }
 export interface MatchState { provider?:{steamid?:string;timestamp?:number};map?:{name:string;phase:string;round:number;team_ct:{name:string;score:number};team_t:{name:string;score:number}};round?:{phase:string;win_team?:'CT'|'T';bomb?:string};player?:PlayerState;allplayers?:Record<string,PlayerState>;phase_countdowns?:{phase:string;phase_ends_in:string|number};bomb?:{state:string;countdown?:string;position?:string};grenades?:Record<string,unknown> }
-const blocked = new Set(['__proto__','constructor','prototype','auth','previously','added','removed']);
+
 export function mergeDelta(base: Record<string,any>, delta: Record<string,any>): Record<string,any> {
  const out = {...base};
  for (const [key,value] of Object.entries(delta)) {
-  if(blocked.has(key)) continue;
+  if(BLOCKED_KEYS.has(key)) continue;
   if(value === null) { delete out[key]; continue; }
   // Dynamic inventories are authoritative when supplied; omission retains them.
   if(['weapons','allplayers','grenades'].includes(key)) out[key]=sanitize(value);
@@ -14,7 +16,6 @@ export function mergeDelta(base: Record<string,any>, delta: Record<string,any>):
  }
  return out;
 }
-function sanitize(value:any):any { if(Array.isArray(value)) return value.map(sanitize); if(value && typeof value==='object') return Object.fromEntries(Object.entries(value).filter(([k])=>!blocked.has(k)).map(([k,v])=>[k,sanitize(v)])); return value; }
 // Intake diagnostics: the shipped code could not tell "CS2 never sent anything" apart from
 // "every packet 401'd" or "CS2 is sending player-only data because it is playing, not observing".
 // FeedMonitor counts the three outcomes and reports which blocks the last accepted packet carried.
@@ -23,7 +24,7 @@ export type GsiBlock=typeof GSI_BLOCKS[number];
 export type TokenSource='env'|'default';
 export interface GsiDiagnostics {accepted:number;rejectedAuth:number;rejectedShape:number;subtreeIssues:number;lastPacketAt:number;lastPacketAge:number;lastRejectedAt:number;lastRejectedReason:string;blocks:Record<string,number>;allplayers:number;allplayersSeen:boolean;observerGap:boolean;provider:string|null;tokenSource:TokenSource;port:number;uri:string}
 export class FeedMonitor {
- accepted=0; rejectedAuth=0; rejectedShape=0; subtreeIssues=0; lastPacketAt=0; lastRejectedAt=0; lastRejectedReason=''; lastRejectedLogAt=0; blocks:Record<string,number>={}; allplayers=0; allplayersSeen=false; provider:string|null=null;
+ accepted=0; rejectedAuth=0; rejectedShape=0; subtreeIssues=0; lastPacketAt=0; lastRejectedAt=0; lastRejectedReason=''; lastRejectedLogAt=0; lastIssueLogAt=0; blocks:Record<string,number>={}; allplayers=0; allplayersSeen=false; provider:string|null=null;
  constructor(readonly tokenSource:TokenSource='default',readonly port=8080){}
  get uri(){return `http://127.0.0.1:${this.port}/gsi`}
  // The token itself is never passed in: only "env" or "default" is remembered.
@@ -45,6 +46,13 @@ export class FeedMonitor {
   const log=this.lastRejectedLogAt===0||now-this.lastRejectedLogAt>=gapMs; if(log) this.lastRejectedLogAt=now;
   return {log};
  }
+ // Schema issues are normal on a live feed (CS2 omits or empties fields between rounds), so they are
+ // counted and logged at the same 10 s cadence as rejections rather than one line per packet.
+ issues(list:Issue[],now=Date.now(),gapMs=10000) {
+  this.subtreeIssues+=list.length;
+  const log=list.length>0&&(this.lastIssueLogAt===0||now-this.lastIssueLogAt>=gapMs); if(log) this.lastIssueLogAt=now;
+  return {log,count:list.length,last:list[list.length-1]};
+ }
  snapshot(now=Date.now()):GsiDiagnostics {return {accepted:this.accepted,rejectedAuth:this.rejectedAuth,rejectedShape:this.rejectedShape,subtreeIssues:this.subtreeIssues,lastPacketAt:this.lastPacketAt,lastPacketAge:this.lastPacketAt?now-this.lastPacketAt:0,lastRejectedAt:this.lastRejectedAt,lastRejectedReason:this.lastRejectedReason,blocks:this.blocks,allplayers:this.allplayers,allplayersSeen:this.allplayersSeen,observerGap:this.accepted>=100&&!this.allplayersSeen,provider:this.provider,tokenSource:this.tokenSource,port:this.port,uri:this.uri}}
 }
 // Exactly one next action for the operator, keyed to the failure modes seen in the field.
@@ -59,10 +67,13 @@ export function feedNextAction(gsi?:GsiDiagnostics|null):string {
 }
 export class MatchStore {
  state:MatchState={}; lastSeen=0; revision=0;
- ingest(payload:MatchState, now=Date.now()) {
-  const old=this.state;
-  if(payload.provider?.timestamp && old.provider?.timestamp && payload.provider.timestamp<old.provider.timestamp) return false;
-  const reset = now-this.lastSeen>5000 || (payload.map?.name && old.map?.name!==payload.map.name) || (payload.provider?.steamid && old.provider?.steamid!==payload.provider.steamid);
-  this.state=mergeDelta(reset?{}:old,payload); this.lastSeen=now; this.revision++; return true;
+ // Returns the per-subtree validation issues, or false when the packet was dropped as late.
+ // A malformed field never aborts the packet: it is dropped, counted and reported.
+ ingest(payload:MatchState, now=Date.now()):{issues:Issue[]}|false {
+  const old=this.state, {payload:clean,issues}=validateGsi(payload);
+  const next=clean as MatchState;
+  if(next.provider?.timestamp && old.provider?.timestamp && next.provider.timestamp<old.provider.timestamp) return false;
+  const reset = now-this.lastSeen>5000 || (next.map?.name && old.map?.name!==next.map.name) || (next.provider?.steamid && old.provider?.steamid!==next.provider.steamid);
+  this.state=mergeDelta(reset?{}:old,next); this.lastSeen=now; this.revision++; return {issues};
  }
 }

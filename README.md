@@ -40,6 +40,8 @@ The host prints the same story in its console: the expected URI and token source
 
 `POST /gsi` is authenticated, size-limited, merges nested components, drops metadata/auth and dangerous prototype keys, rejects older provider timestamps, and resets on map/provider change or heartbeat gap. Dynamic inventories (`allplayers`, `weapons`, `grenades`) replace on presence to remove departed players/dropped items; omission preserves the prior block. This policy assumes normal GSI authoritative inventory blocks, not custom per-player delta relays. Verify this policy with real observer captures before tournament use.
 
+Packets are validated per subtree before merging (`server/schema.ts`, zod): every GSI block is optional, numbers that CS2 sends as strings (`"phase_ends_in":"71.4"`, `"health":"100"`) are coerced, empty enums like `round.win_team:""` delete the key instead of failing, and unknown fields/blocks pass through untouched so a CS2 update cannot break a live broadcast. A malformed field is dropped and counted — `gsi.subtreeIssues` on `/api/status`, logged at most once per 10 s — while the rest of the packet still merges. Validation never throws and never rejects a packet; `__proto__`, `constructor`, `prototype`, `auth`, `previously`, `added` and `removed` are stripped at every depth.
+
 `LOG_GSI=1 npm run dev` writes sanitized payloads to ignored `recordings/*.jsonl`; auth is not recorded. Logging is opt-in and a session file is not rotated: monitor disk usage or rotate externally. Slow WebSocket consumers are dropped and reconnect automatically.
 
 ### OBS

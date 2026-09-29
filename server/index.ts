@@ -41,7 +41,11 @@ app.post('/gsi',(req,res)=>{
  if(report.firstAllplayers) console.log(`[gsi] allplayers block received (${feed.allplayers} player${feed.allplayers===1?'':'s'}) — observer mode confirmed`);
  if(report.observerGap) console.warn(`[gsi] ${feed.accepted} packets accepted but no allplayers block yet — CS2 is playing, not spectating. Scoreboard and clock will work; rosters and killfeed stay empty until you join as observer or GOTV.`);
  if(raw && raw.writableLength<1e6) raw.write(JSON.stringify({receivedAt:Date.now(),payload})+'\n');
- store.ingest(payload); res.sendStatus(200); broadcast();
+ const ingested=store.ingest(payload);
+ // Recovered subtrees are normal (CS2 empties fields between rounds), so they are counted and logged
+ // at most once per 10 s instead of once per packet.
+ if(ingested){const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}
+ res.sendStatus(200); broadcast();
 });
 app.get('/api/status',(_req,res)=>res.json(snapshot()));
 app.put('/api/controls',async(req,res)=>{
