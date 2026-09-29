@@ -98,6 +98,15 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 - **Overtime** — beyond regulation or tied at the MR, `phase: "overtime"` with `otPeriod` and `roundsThisHalf` from the round number (`otMr`, default 3 rounds per OT half), rendered as `OVERTIME 1 · 2/3`.
 - **Winner** — `mapWinner` from the final scores on a `gameover` map, and `seriesWinner` once a side reaches `mapsToWin`; the operator's **Winner title** scene renders "`<team>` WINS THE SERIES" from it.
 
+### Clocks
+
+GSI reports the countdown as it was when the packet was sent, so the HUD extrapolates between packets with `src/clock.ts` and resyncs to every packet — the packet value always wins, and the local clock only fills the gap:
+
+- **Bomb timer** while `bomb.state` is `planted` or `defusing` (shown with tenths and a `DEFUSING` marker taken from the game's own state, never inferred), otherwise the **round timer** from `phase_countdowns.phase_ends_in`.
+- A paused round, gameover or intermission **freezes** the clock, and once the feed is older than 5 s (the same limit the live indicator uses) the clock freezes at the last reported value and the HUD falls back to `SIGNAL LOST` — it never invents a countdown for a dead feed.
+- Whole seconds round up, so the clock never reads `0:00` while time is left; a payload with no usable countdown reports no clock rather than `0:00`.
+- The interpolation assumes the operator and host clocks are within a second (the same assumption the live indicator already makes on a trusted LAN).
+
 ### Radar
 
 `config/radars.json` holds the per-map calibration and the radar toggle turns on for any map listed there:
@@ -145,6 +154,6 @@ Scene selection (live, matchup, lineups, series, winner title, break), killfeed,
 
 This is **not yet tournament-production verified**. Synthetic state tests and build checks run in this environment. A real CS2 observer, Windows and OBS are unavailable here, so actual 20 Hz GSI compatibility and transparent OBS compositing must be verified on the observer machine.
 
-Remaining specification stages: interpolated bomb/defuse clocks; roster editor/overrides; photos and complete weapon/utility icons; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
+Remaining specification stages: roster editor/overrides; photos and complete weapon/utility icons; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
 
 Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.
