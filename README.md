@@ -125,7 +125,8 @@ GSI reports the countdown as it was when the packet was sent, so the HUD extrapo
 
 - `posX` / `posY` / `scale` are the values from the game's own `resource/overviews/<map>.txt` (the top-left corner of the overview in world units, and world units per overview pixel). The shipped file lists the current active-duty pool, dust2, overpass, train and vertigo; add a map by copying its overview values. A map without an entry has **no** radar and the toggle stays disabled with a hint — positions are never drawn against a guess.
 - `src/radar.ts` projects the live `allplayers[].position` through that calibration (`u = (x - posX) / scale / size`, `v = (posY - y) / scale / size`) and returns dots with side, alive state, heading and colour. Points outside the overview are dropped rather than clamped to a wrong place (nuke's lower level, players in the air), `forward` is accepted both as a yaw and as a vector, and a player without a usable position simply has no dot.
-- The radar renders live dots, the observed player with a heading arrow and the bomb marker once it is planted. The **map image is optional and is not bundled**: drop `public/radars/<map>.png` (any square 1:1 overview, e.g. the ones extracted from the game depot) and it is used; without it the panel draws a grid so positions and calibration can still be checked.
+- The radar renders live dots, the observed player with a heading arrow and the bomb marker once it is planted. The **map image is optional**: `image` in `config/radars.json` points at a file and defaults to `public/radars/<map>.png` — drop any square 1:1 overview there (the nine active-duty maps ship pre-filled from the [cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) radar pack) or upload one from the panel. Without an image the panel draws a grid so positions and calibration can still be checked.
+- **Custom radars in the panel** — *Overlay settings → Custom radars* edits the whole file: upload or replace the image per map (stored under `public/uploads/radars/`, pruned when replaced), tune `posX`/`posY`/`scale`/`size`, and add maps outside the default pool. **Save radars** sends `PUT /api/radars`, which validates (zod, `server/radars.ts`), writes `config/radars.json` atomically and broadcasts it to every output view. The preview picks up uploaded images and calibration edits before saving, so dots can be tuned against the image live. Images from the same pack's `images/thumbs` (map thumbnails) and `images/<map>.png` (map badges) are ordinary pictures: upload them as map pictures in **Match setup** wherever a map image is shown.
 - Unverified without a real observer machine: the calibration values themselves. Verify by watching a player walk a known route with `cl_radar` in game — the dot must follow the same path on the same callouts.
 
 ### Phase-based visibility
@@ -163,11 +164,20 @@ The admin panel fully owns `config/teams.json`: **Teams & players**, **Match set
 - **Map series** — event name, stage, best-of format, MR and OT length, plus the map list (name, pick, status, score) with an uploaded picture per map shown on the Map series scene and the series panel. These are operator series cards; live round scores still come from GSI.
 - **Tournament tree** — an editable single-elimination bracket (rounds → matches → seeds with team bindings, map scores, status). Setting a match winner writes the winner forward positionally (match *i* of round *r* feeds match ⌊i/2⌋ of round *r+1*) both in the panel and in the host's normalization, so the tree can never disagree with its own results. The same tree renders as the **Tournament tree** broadcast scene.
 
-Uploads go through `POST /api/upload` as base64 data URLs (≤ 5 MB, image MIME whitelist) and are stored under `public/uploads/logos/` and `public/uploads/maps/` — gitignored, served at `/uploads/...` in dev and production, and pruned automatically when a saved configuration no longer references them. Config keeps only the asset path.
+Uploads go through `POST /api/upload` as base64 data URLs (≤ 5 MB, image MIME whitelist) and are stored under `public/uploads/logos/`, `public/uploads/maps/` and `public/uploads/radars/` — gitignored, served at `/uploads/...` in dev and production, and pruned automatically when a saved configuration no longer references them. Config keeps only the asset path.
 
 ### Operator controls
 
 Scene selection (live, matchup, lineups, map series, tournament tree, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
+
+### Repositioning the overlay
+
+*Overlay settings → Arrange* (the move icon on the preview) turns the preview into a drag surface: the event header, scoreboard, radar, killfeed, both rosters, player lower-third, economy bar and footer each get a dashed handle. Drag them where you want them, then **Save layout**:
+
+- Positions are top-left coordinates on the 1920 × 1080 canvas, stored in ignored `config/layout.json` and pushed by `PUT /api/layout` to every connected view — the preview and both output routes follow, no restart. An entry with no stored position keeps its CSS default.
+- **Reset positions** restores the shipped defaults (an empty `elements` map), **Discard** drops unsaved moves. Nothing moves on air until **Save layout**.
+- Dragging measures against the scaled `.hud` box, so the scaled preview and the full-size output agree to the pixel, and every element is clamped to keep a visible strip on-canvas so a panel can never be dragged out of reach behind the overflow clip.
+- Transient centred graphics (SIGNAL LOST, phase banners and cards, round results, the full-screen broadcast scenes) are not movable by design — they anchor to the centre of the frame.
 
 ## Scope / remaining work
 

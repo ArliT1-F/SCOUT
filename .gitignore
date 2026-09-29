@@ -4,5 +4,6 @@ recordings/*
 !recordings/.gitkeep
 .env
 config/operator.json
+config/layout.json
 public/uploads/*
 !public/uploads/.gitkeep
