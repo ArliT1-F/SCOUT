@@ -98,6 +98,19 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 - **Overtime** — beyond regulation or tied at the MR, `phase: "overtime"` with `otPeriod` and `roundsThisHalf` from the round number (`otMr`, default 3 rounds per OT half), rendered as `OVERTIME 1 · 2/3`.
 - **Winner** — `mapWinner` from the final scores on a `gameover` map, and `seriesWinner` once a side reaches `mapsToWin`; the operator's **Winner title** scene renders "`<team>` WINS THE SERIES" from it.
 
+### Radar
+
+`config/radars.json` holds the per-map calibration and the radar toggle turns on for any map listed there:
+
+```json
+{"overviewSize": 1024, "maps": {"de_mirage": {"posX": -3230, "posY": 1713, "scale": 5}}}
+```
+
+- `posX` / `posY` / `scale` are the values from the game's own `resource/overviews/<map>.txt` (the top-left corner of the overview in world units, and world units per overview pixel). The shipped file lists the current active-duty pool, dust2, overpass, train and vertigo; add a map by copying its overview values. A map without an entry has **no** radar and the toggle stays disabled with a hint — positions are never drawn against a guess.
+- `src/radar.ts` projects the live `allplayers[].position` through that calibration (`u = (x - posX) / scale / size`, `v = (posY - y) / scale / size`) and returns dots with side, alive state, heading and colour. Points outside the overview are dropped rather than clamped to a wrong place (nuke's lower level, players in the air), `forward` is accepted both as a yaw and as a vector, and a player without a usable position simply has no dot.
+- The radar renders live dots, the observed player with a heading arrow and the bomb marker once it is planted. The **map image is optional and is not bundled**: drop `public/radars/<map>.png` (any square 1:1 overview, e.g. the ones extracted from the game depot) and it is used; without it the panel draws a grid so positions and calibration can still be checked.
+- Unverified without a real observer machine: the calibration values themselves. Verify by watching a player walk a known route with `cl_radar` in game — the dot must follow the same path on the same callouts.
+
 ### Phase-based visibility
 
 `src/phases.ts` maps the GSI phase onto what the live scene is allowed to show; it is pure, so `tests/phases.test.ts` covers it without a browser. The scene is *not* hidden while waiting for data beyond what the phase justifies, and output routes still render nothing at all without live state.
@@ -126,12 +139,12 @@ The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: t
 
 ### Operator controls
 
-Scene selection (live, matchup, lineups, series, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. The radar switch is intentionally disabled until radar calibration ships. Teams/maps are read from `config/teams.json` at startup; [team sides](#team-sides) are resolved from GSI names even when the rosters are empty. Player aliases and rich roster editing are not yet implemented. Demo preview is local to the operator and never modifies server state.
+Scene selection (live, matchup, lineups, series, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams/maps are read from `config/teams.json` at startup; [team sides](#team-sides) are resolved from GSI names even when the rosters are empty. Player aliases and rich roster editing are not yet implemented. Demo preview is local to the operator and never modifies server state.
 
 ## Scope / remaining work
 
 This is **not yet tournament-production verified**. Synthetic state tests and build checks run in this environment. A real CS2 observer, Windows and OBS are unavailable here, so actual 20 Hz GSI compatibility and transparent OBS compositing must be verified on the observer machine.
 
-Remaining specification stages: map calibration and radar assets; interpolated bomb/defuse clocks; roster editor/overrides; photos and complete weapon/utility icons; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
+Remaining specification stages: interpolated bomb/defuse clocks; roster editor/overrides; photos and complete weapon/utility icons; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
 
 Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.

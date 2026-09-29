@@ -15,12 +15,15 @@ const port=Number(process.env.PORT)||8080;
 const tokenSource:TokenSource=process.env.GSI_TOKEN?'env':'default';
 const feed=new FeedMonitor(tokenSource,port);
 const config=JSON.parse(await readFile('config/teams.json','utf8'));
+// Radar calibration is operator data: pos_x/pos_y/scale from resource/overviews/<map>.txt, plus an
+// optional image under public/radars/. A map without an entry has no radar, never a made-up one.
+let radars:any={}; try {radars=JSON.parse(await readFile('config/radars.json','utf8'))} catch (error:any) {console.warn('[radars] config/radars.json unreadable — the radar stays off:',error.message)}
 const controlsSchema=z.object({scene:z.enum(['live','matchup','lineups','veto','break','winner']),radar:z.boolean(),killfeed:z.boolean(),lowerThird:z.boolean(),economy:z.boolean(),techPause:z.boolean(),swapped:z.boolean()});
 let controls=controlsSchema.parse({scene:'live',radar:true,killfeed:true,lowerThird:true,economy:false,techPause:false,swapped:false});
 try {controls=controlsSchema.parse(JSON.parse(await readFile('config/operator.json','utf8')))} catch{}
 app.use(express.json({limit:'1mb'}));
 const wss=new WebSocketServer({server,path:'/ws'});
-function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config)}}
+function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 wss.on('connection',ws=>ws.send(JSON.stringify(snapshot())));
 setInterval(broadcast,1000).unref();
