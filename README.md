@@ -22,7 +22,21 @@ Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design ca
 2. Replace `CHANGE_ME` with your own local token, and start the host with matching `GSI_TOKEN`. Default token exists only for initial local setup.
 3. Restart CS2. Use Fullscreen Windowed (borderless) and observer/GOTV mode for all-player blocks.
 4. Configure native HUD visibility for your observer environment. Console permissions vary; validate your cvars before going on air.
-5. Confirm the dashboard says Receiving live data, then switch the preview from Demo feed to GSI feed.
+5. Confirm the dashboard says Receiving live data, check the **CS2 feed** panel for accepted packets and an `allplayers` chip, then switch the preview from Demo feed to GSI feed. If it stays on "Waiting for CS2", work through [Why is nothing showing?](#why-is-nothing-showing-cs2-feed-panel).
+
+### Why is nothing showing? (CS2 feed panel)
+
+The dashboard shows a **CS2 feed** panel on the Overview and Setup guide tabs. It is the one place that separates the four ways a GSI feed goes quiet, because the previous code could not tell them apart:
+
+| What the panel shows | What it means | What to do |
+| --- | --- | --- |
+| `ACCEPTED 0`, `TOKEN-REJECTED 0` | Nothing has reached the host. CS2 never sent a packet, or sent it elsewhere. | Check the cfg is in `Counter-Strike Global Offensive/game/csgo/cfg/` and is **not** saved as `…cfg.txt` (Notepad does this). CS2 loads GSI configs at launch, so fully restart CS2. Confirm the cfg `uri` port matches the panel's `PORT`, and that CS2 runs on the same machine as the host. |
+| `TOKEN-REJECTED` climbing | Packets arrive and every one is refused with `401`. The cfg `auth token` and the host's `GSI_TOKEN` differ. | Make them match and restart the host. The panel shows whether the host is using the built-in default or the `GSI_TOKEN` environment token — it never shows the token itself. |
+| `SHAPE-REJECTED` climbing | A packet arrived without a `provider` block, so it was not a GSI payload. | Usually the same `.cfg.txt` or "CS2 not restarted" mistake; the panel names the last reason. |
+| `ACCEPTED` climbing, `allplayers` chip missing | CS2 is **playing, not spectating**. It only sends `allplayers` in observer/GOTV mode, so the scoreboard and clock work while rosters and the killfeed stay empty. | Join the match as observer or GOTV. |
+| `ACCEPTED` climbing, blocks listed, `LAST PACKET` seconds ago | The feed is healthy but the dashboard preview is on Demo feed. | Switch the preview to **GSI feed**. |
+
+The host prints the same story in its console: the expected URI and token source at startup, the block list of the first accepted packet, the first `allplayers` block, a warning after 100 accepted packets with no `allplayers`, and rejection reasons rate-limited to one log per 10 seconds (CS2 posts at ~20 Hz, so unthrottled logging floods a terminal). `GET /api/status` exposes the same counters as `gsi`.
 
 `POST /gsi` is authenticated, size-limited, merges nested components, drops metadata/auth and dangerous prototype keys, rejects older provider timestamps, and resets on map/provider change or heartbeat gap. Dynamic inventories (`allplayers`, `weapons`, `grenades`) replace on presence to remove departed players/dropped items; omission preserves the prior block. This policy assumes normal GSI authoritative inventory blocks, not custom per-player delta relays. Verify this policy with real observer captures before tournament use.
 
