@@ -102,7 +102,7 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 
 `src/weapons.ts` classifies every slot in `allplayers[].weapons` from its GSI `type` (rifle, sniper, SMG, pistol, shotgun, MG, knife, grenade, taser, C4) and reads the active one from `state: "active"` (or `"reloading"`), so the roster strip and the killfeed agree on what a player is holding. Utility is counted per player (HE, flashes, smoke, molotov/incendiary, decoy, Zeus, defuse kit) and summed per side for the economy banner.
 
-`src/icons.tsx` draws the silhouettes as inline monochrome SVG — nothing is borrowed, nothing is downloaded, and an unknown weapon falls back to its own name and the generic glyph. Photos of players and richer artwork remain unimplemented and would need assets an operator supplies.
+`src/icons.tsx` draws a dedicated monochrome SVG silhouette for every weapon the HUD names — AK-47, the M4s, AWP/SSG snipers, the SMGs, shotguns, LMGs, all pistols, the knife, each grenade, Zeus and C4 — sized per canvas so the killfeed and roster strip show the actual gun rather than one shared shape. Nothing is borrowed, nothing is downloaded; a weapon without a dedicated glyph falls back to its class silhouette, then the generic one. Player photos and richer artwork remain unimplemented and would need assets an operator supplies.
 
 ### Clocks
 
@@ -152,14 +152,25 @@ The host derives kills and round results by differencing successive snapshots (`
 
 The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: team colours from `config/teams.json`, the weapon's name, headshot marker, newest first, and each entry fades out after ~7 s and disappears at 9 s. The operator preview shows sample kills while it is on Demo feed.
 
+### Teams, rosters, map series and tournament tree
+
+The admin panel fully owns `config/teams.json`: **Teams & players**, **Match setup** and **Tournament tree** edit a draft, and **Save configuration** PUTs it to `/api/config`, which normalizes it (zod, `server/config.ts`), writes the file atomically and broadcasts it to every output view — no restart, no hand-editing. The same schema is applied on load, so a hand-edited file is normalized identically.
+
+- **Teams** — name, tag, colour and an uploaded logo (PNG, JPEG, GIF, WEBP or SVG) per side. The logo renders on the scoreboard, the matchup graphics and the panel; without one the two-bar placeholder mark is used. [Team sides](#team-sides) still resolve from GSI, but the resolved side picks up whatever the panel currently says.
+- **Rosters** — up to ten players per team with nickname, real name, optional SteamID and role. SteamIDs feed the roster-based side binding; without them sides resolve from the GSI names as before.
+- **Map series** — event name, stage, best-of format, MR and OT length, plus the map list (name, pick, status, score) with an uploaded picture per map shown on the Map series scene and the series panel. These are operator series cards; live round scores still come from GSI.
+- **Tournament tree** — an editable single-elimination bracket (rounds → matches → seeds with team bindings, map scores, status). Setting a match winner writes the winner forward positionally (match *i* of round *r* feeds match ⌊i/2⌋ of round *r+1*) both in the panel and in the host's normalization, so the tree can never disagree with its own results. The same tree renders as the **Tournament tree** broadcast scene.
+
+Uploads go through `POST /api/upload` as base64 data URLs (≤ 5 MB, image MIME whitelist) and are stored under `public/uploads/logos/` and `public/uploads/maps/` — gitignored, served at `/uploads/...` in dev and production, and pruned automatically when a saved configuration no longer references them. Config keeps only the asset path.
+
 ### Operator controls
 
-Scene selection (live, matchup, lineups, series, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams/maps are read from `config/teams.json` at startup; [team sides](#team-sides) are resolved from GSI names even when the rosters are empty. Player aliases and rich roster editing are not yet implemented. Demo preview is local to the operator and never modifies server state.
+Scene selection (live, matchup, lineups, map series, tournament tree, winner title, break), killfeed, lower-third, economy, technical pause and team display swap are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
 
 ## Scope / remaining work
 
 This is **not yet tournament-production verified**. Synthetic state tests and build checks run in this environment. A real CS2 observer, Windows and OBS are unavailable here, so actual 20 Hz GSI compatibility and transparent OBS compositing must be verified on the observer machine.
 
-Remaining specification stages: roster editor/overrides; player photos; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
+Remaining specification stages: player photos and alias overrides in the panel; rich broadcast scenes; optional OBS websocket; and the Windows Tauri v2 shell with HWND polling, foreground visibility, click-through and F8. `/game` is currently a browser renderer, **not** a native always-on-top window.
 
-Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.
+Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls and configuration (`/api/controls`, `/api/config`, `/api/upload`) are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.

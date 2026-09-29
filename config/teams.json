@@ -1,1 +1,177 @@
-{"event":{"name":"CAMPUS CUP 2025","stage":"GRAND FINAL"},"format":"bo3","maps":[{"name":"de_mirage","pick":"A","score":[13,9],"status":"done"},{"name":"de_inferno","pick":"B","score":[8,6],"status":"live"},{"name":"de_nuke","pick":"decider","status":"upcoming"}],"teams":[{"id":"a","name":"Vertex","tag":"VTX","color":"#b6a0ff","logo":"","players":[]},{"id":"b","name":"Parallax","tag":"PRX","color":"#d9ee99","logo":"","players":[]}]}
+{
+  "event": {
+    "name": "Campus Cup 2025",
+    "stage": "Grand final"
+  },
+  "format": "bo3",
+  "mr": 12,
+  "otMr": 3,
+  "teams": [
+    {
+      "id": "a",
+      "name": "Vertex",
+      "tag": "VTX",
+      "color": "#d970c2",
+      "logo": "",
+      "players": [
+        {
+          "steamid": "",
+          "name": "nova",
+          "nickname": "Elias Nord",
+          "role": "IGL"
+        },
+        {
+          "steamid": "",
+          "name": "kairo",
+          "nickname": "Kai Rönning",
+          "role": "AWP"
+        },
+        {
+          "steamid": "",
+          "name": "s1lent",
+          "nickname": "Milan Vacek",
+          "role": "Entry"
+        },
+        {
+          "steamid": "",
+          "name": "frost",
+          "nickname": "Tomas Lind",
+          "role": "Support"
+        },
+        {
+          "steamid": "",
+          "name": "mika",
+          "nickname": "Mika Salo",
+          "role": "Lurker"
+        }
+      ]
+    },
+    {
+      "id": "b",
+      "name": "Parallax",
+      "tag": "PRX",
+      "color": "#e8c97e",
+      "logo": "",
+      "players": [
+        {
+          "steamid": "",
+          "name": "EXO",
+          "nickname": "Ravi Mehta",
+          "role": "IGL"
+        },
+        {
+          "steamid": "",
+          "name": "ryze",
+          "nickname": "Jonas Berg",
+          "role": "Entry"
+        },
+        {
+          "steamid": "",
+          "name": "orbit",
+          "nickname": "Petr Kolar",
+          "role": "AWP"
+        },
+        {
+          "steamid": "",
+          "name": "blitz",
+          "nickname": "Nico Frei",
+          "role": "Support"
+        },
+        {
+          "steamid": "",
+          "name": "zen",
+          "nickname": "Adam Horak",
+          "role": "Lurker"
+        }
+      ]
+    }
+  ],
+  "maps": [
+    {
+      "name": "de_mirage",
+      "pick": "A",
+      "score": [
+        13,
+        9
+      ],
+      "status": "done",
+      "image": ""
+    },
+    {
+      "name": "de_inferno",
+      "pick": "B",
+      "score": [
+        8,
+        6
+      ],
+      "status": "live",
+      "image": ""
+    },
+    {
+      "name": "de_nuke",
+      "pick": "decider",
+      "status": "upcoming",
+      "image": ""
+    }
+  ],
+  "bracket": {
+    "title": "Campus Cup Playoffs",
+    "rounds": [
+      {
+        "name": "Semifinals",
+        "matches": [
+          {
+            "id": "sf1",
+            "a": {
+              "label": "Vertex",
+              "team": "a"
+            },
+            "b": {
+              "label": "Parallax",
+              "team": "b"
+            },
+            "aScore": 2,
+            "bScore": 1,
+            "winner": "a",
+            "status": "done"
+          },
+          {
+            "id": "sf2",
+            "a": {
+              "label": "Winner QF1",
+              "team": ""
+            },
+            "b": {
+              "label": "Winner QF2",
+              "team": ""
+            },
+            "aScore": 0,
+            "bScore": 0,
+            "winner": null,
+            "status": "upcoming"
+          }
+        ]
+      },
+      {
+        "name": "Grand final",
+        "matches": [
+          {
+            "id": "gf",
+            "a": {
+              "label": "Vertex",
+              "team": "a"
+            },
+            "b": {
+              "label": "",
+              "team": ""
+            },
+            "aScore": 0,
+            "bScore": 0,
+            "winner": null,
+            "status": "upcoming"
+          }
+        ]
+      }
+    ]
+  }
+}
