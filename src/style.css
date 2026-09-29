@@ -305,7 +305,8 @@ footer .status-dot{margin-right:7px}
 .kill{display:flex;align-items:center;gap:11px;background:#120e18f2;padding:9px 13px;font-size:22px;animation:kill-in .18s ease-out}
 .kill b{font-weight:600;text-transform:uppercase;letter-spacing:.5px}
 .kill-weapon{display:flex;align-items:center;gap:7px;font-size:13px;letter-spacing:1px;color:#c0b2cc;background:#241a2c;padding:4px 8px}
-.kill-weapon svg{color:#efe7f5}
+.equipment-icon{display:block;flex:0 0 auto;object-fit:contain;user-select:none}
+.kill-weapon .equipment-icon{opacity:1}
 .kill-hs{color:var(--gold);font-style:normal;font-size:17px}
 .kill.leaving{animation:kill-out 1.8s forwards}
 @keyframes kill-in{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}
@@ -324,7 +325,7 @@ footer .status-dot{margin-right:7px}
 .player.observed{box-shadow:0 0 0 1px var(--accent-bright)}
 .player-meta{display:flex;align-items:center;gap:11px;font-size:13px;color:#b9aac6;margin-top:3px}
 .player-weapon{display:inline-flex;align-items:center;gap:5px;color:#ddd2e6}
-.player-weapon svg{opacity:.9}
+.player-weapon .equipment-icon{opacity:.9}
 .health{position:absolute;left:0;bottom:0;height:2px}
 .roster{position:absolute;top:352px;width:262px}
 .roster-0{left:28px}.roster-1{right:28px}
@@ -334,7 +335,7 @@ footer .status-dot{margin-right:7px}
 .avatar{display:grid;place-items:center;background:#2c1b30;color:var(--accent-bright);height:57px;width:54px}
 .lower-third small{font-size:10px;letter-spacing:1px;color:#cfc2da}
 .lower-third b{display:block;font-size:29px;font-weight:500}
-.lower-third>svg{color:#e8dcf0}
+.lower-third>.equipment-icon{opacity:.95}
 .lower-third>span:last-child{font-size:27px}
 .hud-footer{position:absolute;bottom:22px;left:28px;right:28px;display:flex;justify-content:space-between;font-size:12px;letter-spacing:3px;color:#c6b7d2}
 .hud-footer>span:first-child{font-size:24px;font-weight:700;color:#fff}
@@ -344,7 +345,7 @@ footer .status-dot{margin-right:7px}
 .utility i b{font-size:9px}
 .utility.compact{color:#a394b3;gap:7px}
 .hud-banner .utility{color:#e2d5ec}
-.hud-banner .utility svg{opacity:.85}
+.hud-banner .utility .equipment-icon{opacity:.85}
 .hud-banner>i{font-style:normal;color:#7e6c90;margin:0 4px}
 .radar{position:absolute;left:28px;top:28px;width:300px;height:300px;background:#100b16e8;border:2px solid var(--line)}
 .radar img,.radar-grid{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}

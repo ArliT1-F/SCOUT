@@ -102,7 +102,9 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 
 `src/weapons.ts` classifies every slot in `allplayers[].weapons` from its GSI `type` (rifle, sniper, SMG, pistol, shotgun, MG, knife, grenade, taser, C4) and reads the active one from `state: "active"` (or `"reloading"`), so the roster strip and the killfeed agree on what a player is holding. Utility is counted per player (HE, flashes, smoke, molotov/incendiary, decoy, Zeus, defuse kit) and summed per side for the economy banner.
 
-`src/icons.tsx` draws a dedicated monochrome SVG silhouette for every weapon the HUD names — AK-47, the M4s, AWP/SSG snipers, the SMGs, shotguns, LMGs, all pistols, the knife, each grenade, Zeus and C4 — sized per canvas so the killfeed and roster strip show the actual gun rather than one shared shape. Nothing is borrowed, nothing is downloaded; a weapon without a dedicated glyph falls back to its class silhouette, then the generic one. Player photos and richer artwork remain unimplemented and would need assets an operator supplies.
+`src/icons.tsx` uses the Counter-Strike 2 equipment SVGs in `public/icons/equipment/` for the killfeed, player roster, lower-third and utility indicators. The icons are served locally (no runtime download), use each weapon's original proportions, and are mapped from the GSI weapon name; unrecognized items fall back to a matching class icon when possible. Knife variants and the standard weapons/utilities are included.
+
+**Asset attribution:** the SVGs are sourced from [Juknum/counter-strike-icons](https://github.com/Juknum/counter-strike-icons/tree/main/cs2/panorama/images/icons/equipment) (snapshot `d21042432beb189c855fc0857680416401795ac5`). The upstream repository identifies the Counter-Strike assets as Valve Corporation property and notes they are not licensed for commercial use without Valve's permission. See `public/icons/equipment/ATTRIBUTION.txt` and Valve's [Steam Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/).
 
 ### Clocks
 
