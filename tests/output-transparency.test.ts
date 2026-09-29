@@ -41,7 +41,8 @@ test('no rule paints a background on the html/:root canvas',()=>{
 });
 
 test('the dark operator-panel background is scoped away from the output routes',()=>{
- const panel=rules.filter(rule=>backgrounds(rule).some(d=>/#0c0e12/i.test(d)));
+ // The exact hex is the theme's near-black (#0b0a0d); what matters is where it may be painted.
+ const panel=rules.filter(rule=>backgrounds(rule).some(d=>/#0b0a0d/i.test(d)));
  assert.equal(panel.length,1,'exactly one rule should paint the panel background');
  assert.ok(hitsBody(panel[0])&&!hitsRoot(panel[0]),`panel background must live on <body>, not the canvas: ${panel[0].selector}`);
  assert.match(panel[0].selector,/:not\(\.output-body\)/,`panel background must not apply to the output body: ${panel[0].selector}`);

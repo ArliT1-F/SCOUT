@@ -9,7 +9,7 @@ export interface ResolvedSide {id:string;name:string;tag?:string;color?:string;l
 export interface ResolvedSides {CT:ResolvedSide;T:ResolvedSide;source:SideSource;map?:string;confidence:'engaged'|'inferred'|'guess'}
 const normalize=(value?:string)=>value?.trim().toLowerCase();
 const rank:Record<SideSource,number>={names:0,roster:1,stored:2,config:3,'stand-in':4};
-const stand=(side:Side,name?:string):ResolvedSide=>({id:`${side}:${normalize(name)||'unknown'}`,name:name||side,color:side==='CT'?'#b7a0ed':'#d8eab0',source:'stand-in'});
+const stand=(side:Side,name?:string):ResolvedSide=>({id:`${side}:${normalize(name)||'unknown'}`,name:name||side,color:side==='CT'?'#d970c2':'#e8c97e',source:'stand-in'});
 export class SideTracker {
  private binding:{CT:string;T:string}|undefined; private map?:string;
  resolve(state:MatchState,config:any):ResolvedSides {

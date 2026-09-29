@@ -1,7 +1,7 @@
 import express from 'express';
 import {createServer} from 'node:http';
 import {WebSocketServer,WebSocket} from 'ws';
-import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
+import {readFile,writeFile,rename,mkdir,readdir,unlink} from 'node:fs/promises';
 import {createWriteStream} from 'node:fs';
 import path from 'node:path';
 import {z} from 'zod';
@@ -9,18 +9,55 @@ import {MatchStore,FeedMonitor,type TokenSource} from './state.js';
 import {EventTracker} from './events.js';
 import {SideTracker,configSides} from './sides.js';
 import {seriesState} from './series.js';
+import {configSchema,normalizeConfig,type ScoutConfig} from './config.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // Only the *source* of the token is ever recorded — the token value itself is never stored or logged.
 const tokenSource:TokenSource=process.env.GSI_TOKEN?'env':'default';
 const feed=new FeedMonitor(tokenSource,port);
-const config=JSON.parse(await readFile('config/teams.json','utf8'));
+// Operator configuration (teams, rosters, map series, tournament tree) is loaded through the same
+// schema the panel saves with, so a hand-edited file is normalized exactly like a panel edit.
+let config:ScoutConfig;
+try{config=normalizeConfig(JSON.parse(await readFile('config/teams.json','utf8')))}
+catch(error:any){console.error('[config] config/teams.json is invalid:',error.message);throw error}
 // Radar calibration is operator data: pos_x/pos_y/scale from resource/overviews/<map>.txt, plus an
 // optional image under public/radars/. A map without an entry has no radar, never a made-up one.
 let radars:any={}; try {radars=JSON.parse(await readFile('config/radars.json','utf8'))} catch (error:any) {console.warn('[radars] config/radars.json unreadable — the radar stays off:',error.message)}
-const controlsSchema=z.object({scene:z.enum(['live','matchup','lineups','veto','break','winner']),radar:z.boolean(),killfeed:z.boolean(),lowerThird:z.boolean(),economy:z.boolean(),techPause:z.boolean(),swapped:z.boolean()});
+const controlsSchema=z.object({scene:z.enum(['live','matchup','lineups','veto','bracket','break','winner']),radar:z.boolean(),killfeed:z.boolean(),lowerThird:z.boolean(),economy:z.boolean(),techPause:z.boolean(),swapped:z.boolean()});
 let controls=controlsSchema.parse({scene:'live',radar:true,killfeed:true,lowerThird:true,economy:false,techPause:false,swapped:false});
 try {controls=controlsSchema.parse(JSON.parse(await readFile('config/operator.json','utf8')))} catch{}
+// Team logos and map pictures are operator uploads. They live under public/uploads/ (gitignored)
+// and are stored as plain image files referenced by path from config/teams.json.
+const UPLOAD_ROOT='public/uploads';
+const UPLOAD_KINDS:Record<string,{dir:string;exts:Record<string,string>}>={
+ logo:{dir:'logos',exts:{'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/gif':'gif','image/webp':'webp','image/svg+xml':'svg'}},
+ map:{dir:'maps',exts:{'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/gif':'gif','image/webp':'webp','image/svg+xml':'svg'}},
+};
+await mkdir(path.join(UPLOAD_ROOT,'logos'),{recursive:true});
+await mkdir(path.join(UPLOAD_ROOT,'maps'),{recursive:true});
+// The upload body is a base64 data URL, so this route gets its own larger JSON parser before the
+// 1 mb global limit applies to the GSI hot path.
+const uploadSchema=z.object({kind:z.enum(['logo','map']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
+app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
+ const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ const parsed=uploadSchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Expected {kind, name, data} with a base64 image data URL'});return}
+ const {kind,name,data}=parsed.data;
+ const match=/^data:(image\/(?:png|jpeg|jpg|gif|webp|svg\+xml));base64,([A-Za-z0-9+/=]+)$/.exec(data);
+ const spec=UPLOAD_KINDS[kind];
+ if(!match||!spec){res.status(400).json({error:'Unsupported image — upload a PNG, JPEG, GIF, WEBP or SVG'});return}
+ const buffer=Buffer.from(match[2],'base64');
+ if(buffer.length<8||buffer.length>5*1024*1024){res.status(400).json({error:'Image must be between 8 bytes and 5 MB'});return}
+ const mime=match[1].toLowerCase(), ext=spec.exts[mime];
+ const slug=(name.replace(/\.[a-z0-9]+$/i,'').replace(/[^a-z0-9-_]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,48)||'image').toLowerCase();
+ const file=`${Date.now()}-${slug}.${ext}`, dir=path.join(UPLOAD_ROOT,spec.dir);
+ await mkdir(dir,{recursive:true});
+ await writeFile(path.join(dir,file),buffer);
+ res.json({path:`uploads/${spec.dir}/${file}`});
+});
+// Uploaded assets must be reachable in production too, where the Vite public/ copy in dist/ is a
+// build-time snapshot and would miss anything the admin uploads later.
+app.use('/uploads',express.static(UPLOAD_ROOT,{immutable:true,maxAge:'7d'}));
 app.use(express.json({limit:'1mb'}));
 const wss=new WebSocketServer({server,path:'/ws'});
 function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars}}
@@ -58,6 +95,39 @@ app.post('/gsi',(req,res)=>{
  res.sendStatus(200); broadcast();
 });
 app.get('/api/status',(_req,res)=>res.json(snapshot()));
+app.get('/api/config',(_req,res)=>res.json(config));
+// Saving the operator configuration replaces config/teams.json atomically and broadcasts it to
+// every connected view, so the HUD picks up teams, rosters, maps and the bracket without a restart.
+app.put('/api/config',async(req,res)=>{
+ const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ const parsed=configSchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Invalid configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'config'} ${issue.message}`).slice(0,6).join('; ')});return}
+ const next=normalizeConfig(parsed.data);
+ try {
+  await writeFile('config/teams.json.tmp',JSON.stringify(next,null,2));
+  await rename('config/teams.json.tmp','config/teams.json');
+  config=next;
+  await pruneUploads(next);
+  broadcast();res.json(config);
+ }catch{res.status(500).json({error:'Could not save configuration'})}
+});
+// Uploaded logos and map pictures are replaced freely; anything no longer referenced by the saved
+// configuration is deleted so public/uploads/ cannot grow without bound across a long tournament.
+async function pruneUploads(current:ScoutConfig){
+ const referenced=new Set<string>();
+ const keep=(value?:string)=>{if(value&&value.startsWith('uploads/')) referenced.add(value)};
+ for(const team of current.teams) keep(team.logo);
+ for(const map of current.maps) keep(map.image);
+ for(const kind of ['logos','maps']){
+  const dir=path.join(UPLOAD_ROOT,kind);
+  let files:string[]=[];try{files=await readdir(dir)}catch{continue}
+  for(const file of files){
+   if(file==='.gitkeep') continue;
+   const rel=`uploads/${kind}/${file}`;
+   if(!referenced.has(rel)){try{await unlink(path.join(dir,file))}catch{}}
+  }
+ }
+}
 app.put('/api/controls',async(req,res)=>{
  // Reject cross-site operator mutations; this is a local, trusted-LAN service.
  const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
