@@ -1,6 +1,5 @@
 import {formatOf,type SeriesState} from '../server/series';
 import {splitRoster,type PlayerCard} from '../server/players';
-import {calibrationFor} from './radar';
 // What the full-canvas broadcast scenes show, derived from the operator's configuration. Pure and
 // separate from the JSX so the derivations (who won, what the series score is, where a bracket line
 // runs) can be tested without a browser. The scenes are config-first on purpose: matchup, lineups and
@@ -21,9 +20,10 @@ export const sceneTeams=(config:any,swapped=false):[SceneTeam,SceneTeam]=>{const
 export const mapLabel=(name?:string)=>String(name||'').replace(/^(de|cs|ar)_/i,'').replace(/_/g,' ').toUpperCase();
 
 export interface MapCard {index:number;name:string;label:string;image:string;pick:Slot|'decider';status:'upcoming'|'live'|'done';score?:[number,number];winner?:Slot}
-// A map with no uploaded picture falls back to its radar overview (custom upload or the shipped pack), so
-// the series scene has real imagery out of the box. The component still handles that file being absent.
-export function mapCards(config:any,radars?:any):MapCard[] {
+// A map with no uploaded picture falls back to the shipped thumbnail (public/thumbs/), so the matchup and
+// map series scenes have real imagery out of the box. Radar overviews (public/radars/) are the custom
+// radar's own imagery and are deliberately never used here; the component handles a missing file anyway.
+export function mapCards(config:any):MapCard[] {
  return (Array.isArray(config?.maps)?config.maps:[]).map((raw:any,index:number):MapCard=>{
   const name=String(raw?.name||'');
   const status=raw?.status==='done'||raw?.status==='live'?raw.status:'upcoming';
@@ -31,7 +31,7 @@ export function mapCards(config:any,radars?:any):MapCard[] {
   const score=pair&&pair.every((value:number)=>Number.isFinite(value))?[pair[0],pair[1]] as [number,number]:undefined;
   // Only a finished map has a winner; a live score is a score, not a result.
   const winner:Slot|undefined=status==='done'&&score?(score[0]>score[1]?'A':score[1]>score[0]?'B':undefined):undefined;
-  const image=String(raw?.image||'')||calibrationFor(radars,name)?.image||(name?`radars/${name}.png`:'');
+  const image=String(raw?.image||'')||(name?`thumbs/${name}.png`:'');
   return {index,name,label:mapLabel(name),image,pick:raw?.pick==='A'||raw?.pick==='B'?raw.pick:'decider',status,score,winner};
  });
 }

@@ -45,9 +45,9 @@ test('map cards carry picks, results, winners and a picture fallback',()=>{
  assert.deepEqual(cards.map(card=>[card.label,card.pick,card.status,card.winner]),[['MIRAGE','A','done','A'],['INFERNO','B','live',undefined],['NUKE','decider','upcoming',undefined]]);
  assert.deepEqual(cards[1].score,[8,6],'a live map shows its running score');
  assert.equal(cards[1].winner,undefined,'but a live score is not a result');
- assert.equal(cards[0].image,'radars/de_mirage.png','no upload: the shipped radar overview');
+ assert.equal(cards[0].image,'thumbs/de_mirage.png','no upload: the shipped map thumbnail');
  assert.equal(mapCards(config({maps:[{name:'de_mirage',image:'uploads/maps/m.png'}]}))[0].image,'uploads/maps/m.png','an uploaded picture wins');
- assert.equal(mapCards(config({maps:[{name:'de_mirage'}]}),{maps:{de_mirage:{posX:1,posY:1,scale:5,image:'uploads/radars/custom.png'}}})[0].image,'uploads/radars/custom.png','a custom radar upload is the next fallback');
+ assert.equal(mapCards(config({maps:[{name:'de_x'}]}))[0].image,'thumbs/de_x.png','the thumbnail path is derived for any map — radar overviews are never the scene picture');
  assert.equal(mapCards(config({maps:[{name:'de_x',score:[5,5],status:'done'}]}))[0].winner,undefined,'a tie has no winner');
  assert.deepEqual(mapCards(undefined),[]);
  assert.equal(mapCards({maps:[{name:'de_x',score:['a','b'],status:'done'}]})[0].score,undefined,'garbage scores are dropped, not printed');
