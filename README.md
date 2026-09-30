@@ -17,6 +17,32 @@ npm run shell:test          # Rust: the overlay shell's decision logic (needs on
 
 Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
 
+### Operator access from another machine
+
+The host listens on every interface, so the panel already opens on a second laptop. What it will not do is let randoms on the venue network change the broadcast: every **mutation** (`/api/controls`, `/api/config`, `/api/layout`, `/api/radars`, `/api/upload`, `/api/obs*`) needs either a request from the host's own machine or the panel token. Every **read** stays open — an OBS browser source or a wall display on another PC has to load `/obs`, its assets, its WebSocket feed and `/api/status` with no credentials at all, and the output routes contain nothing the stream does not show anyway.
+
+The host prints where the panel is reachable when it starts, and the token is in that link:
+
+```text
+[panel] Remote control is ON — open one of these from the other machine. The link carries the token, once:
+[panel]   http://192.168.1.50:8080/?token=…
+```
+
+Opening that link (or typing the token into the panel's unlock screen) trades it for an HttpOnly session cookie and a redirect that drops the token from the address bar and the history. The header then reads **REMOTE · <address>** with a **Sign out** button, and the panel behaves exactly as it does on the host machine. A browser that refuses the cookie can keep the token in `sessionStorage` and send it as `X-Scout-Token: <token>` (or `Authorization: Bearer <token>`) instead — same for `curl` and scripts. `GET /api/session` reports what the current request is (`authenticated`, `local`, `via`, `address`, `startedAt`, `expiresAt`) and never carries the token.
+
+| Variable | What it does |
+| --- | --- |
+| `SCOUT_PANEL_TOKEN` | The panel token. Without it one is generated per run and printed on the console — the only place the token is ever shown. It is never written to `config/`, never returned by an API and never logged, and it is compared in constant time. |
+| `SCOUT_REMOTE=off` | Remote control is refused everywhere; only the host machine can operate the panel. The overlay keeps working for every viewer. |
+| `SCOUT_REQUIRE_TOKEN=1` | Even the host machine has to unlock the panel. |
+| `SCOUT_ALLOWED_HOSTS` | Comma-separated names to accept as the operator's own — for a reverse proxy or tunnel that keeps its public name in the URL while rewriting `Host` (see below). |
+
+- A session lasts 12 hours of *use* (each request refreshes it), lives in memory only — restarting the host signs everyone out — and the least recently used one is dropped once 32 are open. A host that runs as more than one process (a serverless platform, a container fleet) should be given a fixed `SCOUT_PANEL_TOKEN` and rely on the header form: a session cookie only exists on the process that issued it, while the token is checked on every request.
+- Five wrong tokens from one address lock that address out for ten minutes, and the panel reports how many attempts are left. The token is 24 random bytes, so guessing was already hopeless; this only stops a LAN brute force from getting a try rate.
+- A request that *looks* local but names a public host is refused. Two things look like that: a proxy or tunnel next to the host (it connects from `127.0.0.1` while carrying the visitor's public name), and a page on `evil.com` whose DNS record points at the host's LAN address. Both are refused with `untrusted-host` unless the name is in `SCOUT_ALLOWED_HOSTS`. Mutations additionally require the `Origin` to match the host they were sent to, and a WebSocket handshake whose `Origin` names another site is rejected.
+- No TLS is added. On a plain-HTTP LAN the token is as private as the network it crosses — the same network that already carries the GSI feed. Keep the panel on a trusted LAN or put `nginx`/`caddy`/a tunnel in front of it with the name listed in `SCOUT_ALLOWED_HOSTS`; do not forward port 8080 to the internet.
+- **Verified here**: the live host is driven over HTTP from a second address in `tests/panel-live.test.ts` (refusals, the token link, the cookie and header sessions, sign-out, the lockout, the rebound-host case and the WebSocket handshakes), and the policy itself in `tests/auth.test.ts`. Not verified: a real second laptop on a real venue network, and a real reverse proxy.
+
 ### CS2 connection
 
 1. Copy `config/gamestate_integration_overlay.cfg` to `Counter-Strike Global Offensive/game/csgo/cfg/`.
@@ -64,7 +90,8 @@ A sanitized fixture with the same structure ships in `tests/fixtures/observer-mi
 
 In LIVE scene add Game Capture for `cs2.exe`, then Browser Source:
 
-- URL: `http://127.0.0.1:8080/obs` (OBS and host on same PC)
+- URL: `http://127.0.0.1:8080/obs` (OBS and host on same PC),
+  or `http://<host-ip>:8080/obs` when OBS runs on a second machine — the overlay needs no token, so a browser source can always load it. The Setup guide's **Copy OBS source URL** copies the address you opened the panel on, which is the right one for both cases.
 - Width 1920; height 1080
 - Disable “Shutdown source when not visible”
 - Leave **Custom CSS** empty; no chroma key; **do not use Window Capture for the overlay**
@@ -75,7 +102,7 @@ Use `http://127.0.0.1:8080/obs?checker=1` in a normal browser to verify transpar
 
 If the overlay still covers the game: confirm the source URL is `/obs` (not `/` or `/admin`), that Custom CSS is empty, and that the active scene is **Live game** — matchup, lineups, series, tree, winner and break are full-canvas graphics with their own background, and cover the game capture by design.
 
-Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin.
+Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin, and the operator panel from another machine is covered in [Operator access from another machine](#operator-access-from-another-machine).
 
 ### Team sides
 
@@ -228,7 +255,7 @@ Behaviour worth knowing:
 
 ### Operator controls
 
-Scene selection (live, matchup, lineups, map series, tournament tree, winner, break), killfeed, lower-third, economy, technical pause, team display swap and the break countdown are saved to ignored `config/operator.json` and broadcast to all connected views. Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
+Scene selection (live, matchup, lineups, map series, tournament tree, winner, break), killfeed, lower-third, economy, technical pause, team display swap and the break countdown are saved to ignored `config/operator.json` and broadcast to all connected views. The panel header names the session driving the broadcast — **LOCAL SESSION** on the host machine, **REMOTE · <address>** for one unlocked from another machine, with **Sign out** — so an operator can always see whether someone else is holding the panel (see [Operator access from another machine](#operator-access-from-another-machine)). Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
 
 ### Repositioning the overlay
 
@@ -248,4 +275,4 @@ This is **not yet tournament-production verified**.
 - **Verified here**: synthetic-state, configuration, scene-derivation, OBS-protocol (against a protocol-faithful mock) and shell-decision tests; `tsc` and the production build; and the rendered HUD, scenes and panel, checked as headless-Chromium screenshots against the real host driven through its HTTP API and the recorded-feed replay.
 - **Not verifiable here**: a real CS2 observer, a real OBS Studio and Windows hardware were unavailable. Actual 20 Hz GSI compatibility, transparent OBS compositing, the OBS bridge against a real obs-websocket, and the shell's behaviour on Windows (a transparent, click-through, non-activating WebView2 window; F8; following CS2) must be verified on the observer machine. The shell could not be compiled against Tauri in this environment.
 
-Security: binds `0.0.0.0` for remote operator/preview use. Run only on a trusted LAN and restrict firewall ingress. Operator controls and configuration (`/api/controls`, `/api/config`, `/api/upload`, `/api/obs*`) are unauthenticated, with a same-origin mutation check; don't expose the service to the public internet. The OBS password is never part of any of them — it only comes from `OBS_WS_PASSWORD`. Remote Google Fonts are optional visual enhancement; system font fallbacks work offline.
+Security: binds `0.0.0.0` so the panel can be driven from another machine, and every mutation then needs either a request from the host machine or the panel token (see [Operator access from another machine](#operator-access-from-another-machine)). Run it on a trusted LAN and restrict firewall ingress; don't expose the service to the public internet, and put TLS in front of it if you do. The token and the OBS password are never part of the configuration, the API or a log line — the OBS password only ever comes from `OBS_WS_PASSWORD`. Not verified here: TLS termination in front of the host, and a real second machine on a real venue network.

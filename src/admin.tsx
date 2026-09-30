@@ -3,6 +3,7 @@ import {Image as ImageIcon,Plus,Save,Trash2,Upload,X} from 'lucide-react';
 import {emptyPlayer,type ScoutConfig,type TeamConfig,type MapConfig,type BracketMatch} from '../server/config';
 import type {RadarsConfig,RadarMapConfig} from '../server/radars';
 import {assetUrl} from './assets';
+import {apiFetch} from './session';
 import {breakClock,BREAK_TITLE} from './scenes';
 // The operator-side editors behind Teams & players, Match setup and Tournament tree. Everything here
 // edits a local draft of config/teams.json; the host persists it through PUT /api/config and pushes
@@ -21,7 +22,7 @@ export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'log
   setError('');setBusy(true);
   try{
    const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(Error('could not read the file'));reader.readAsDataURL(file)});
-   const res=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind,name:file.name,data})});
+   const res=await apiFetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind,name:file.name,data})});
    const body=await res.json().catch(()=>({}));
   if(!res.ok) throw Error(body.error||'Upload failed');
    onChange(String(body.path||''));
