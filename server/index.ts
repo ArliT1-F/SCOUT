@@ -16,8 +16,29 @@ import {UPLOAD_DIRS,referencedUploads,isPrunable} from './uploads.js';
 import {controlsSchema,defaultControls,type Controls} from './controls.js';
 import {ObsBridge} from './obs.js';
 import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './obs-config.js';
+import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,type PanelSessionView} from './auth.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
+// ---- Operator access from another machine (server/auth.ts). Reads stay open on purpose: the OBS
+// browser source of a second machine has to load /obs and its WebSocket feed with no credentials, and
+// so does a wall display. Everything that *changes* the broadcast needs authority: the operator at
+// this machine, or a session unlocked with the panel token. With no SCOUT_PANEL_TOKEN the host
+// generates one per run and prints it here — the console is the only place it is ever shown.
+const panelToken=process.env.SCOUT_PANEL_TOKEN?.trim()||'';
+const panel=new PanelAuth({
+ token:panelToken,
+ remoteEnabled:process.env.SCOUT_REMOTE?.toLowerCase()!=='off',
+ requireLocalToken:process.env.SCOUT_REQUIRE_TOKEN==='1',
+ allowedHosts:process.env.SCOUT_ALLOWED_HOSTS,
+});
+if(panelToken&&panelToken.length<16) console.warn(`[panel] SCOUT_PANEL_TOKEN is only ${panelToken.length} characters — use a long random token when the network is not yours alone.`);
+if(panel.tokenSource==='generated') console.log('[panel] No SCOUT_PANEL_TOKEN set, so this run has its own token. Set the variable to keep one token across restarts.');
+if(panel.remoteEnabled){
+ const nearby=panelUrls(port);
+ console.log('[panel] Remote control is ON — open one of these from the other machine. The link carries the token, once:');
+ for(const base of nearby.length?nearby:[`http://localhost:${port}`]) console.log(`[panel]   ${base}/?token=${encodeURIComponent(panel.token)}`);
+ if(!nearby.length) console.log('[panel]   (no LAN address found — connect to this machine through its own address)');
+} else console.log('[panel] Remote control is OFF (SCOUT_REMOTE=off): only a request from this machine can change the broadcast.');
 // Only the *source* of the token is ever recorded — the token value itself is never stored or logged.
 const tokenSource:TokenSource=process.env.GSI_TOKEN?'env':'default';
 const feed=new FeedMonitor(tokenSource,port);
@@ -54,11 +75,54 @@ const UPLOAD_KINDS:Record<string,{dir:string;exts:Record<string,string>}>={
  player:{dir:'players',exts:IMAGE_EXTS},
 };
 for(const dir of UPLOAD_DIRS) await mkdir(path.join(UPLOAD_ROOT,dir),{recursive:true});
+// ---- The gate in front of every mutation. It is deliberately path/method based rather than a list of
+// routes: a route added later is protected by construction, whichever operator feature it belongs to.
+// POST /gsi is CS2's own feed and authenticates with the GSI token inside its body, and POST/DELETE
+// /api/session is the way in and the way out.
+function isProtected(req:express.Request){
+ if(!req.path.startsWith('/api/')) return false;
+ if(req.method==='GET'||req.method==='HEAD'||req.method==='OPTIONS') return false;
+ return req.path!=='/api/session';
+}
+// Same-origin as well as token: a browser page on another site must not be able to drive the panel,
+// and a name the operator listed (a proxy that rewrites Host) is treated as the operator's own.
+function sameOrigin(req:express.Request){return originTrusted(req.get('origin'),req.get('host'),panel.allowedHosts)}
+function panelRequest(req:express.Request){return {address:req.socket.remoteAddress,host:req.get('host'),cookie:req.get('cookie'),headers:req.headers}}
+app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
+ if(!isProtected(req)) return next();
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site operator requests are refused. Open the panel itself.'});return}
+ const decision=panel.authorize(panelRequest(req));
+ if(decision.ok) return next();
+ res.status(decision.status).json({error:decision.message,code:decision.code,attemptsLeft:decision.attemptsLeft});
+});
+// `?token=…` is the link the host prints: it becomes a cookie and a redirect, so the token never
+// stays in the address bar, in the browser history or in a Referer sent to another origin (the
+// panel loads its fonts from one).
+app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
+ const raw=req.query?.token;
+ if(req.method!=='GET'||req.path.startsWith('/api/')||typeof raw!=='string'||!raw) return next();
+ const attempt=panel.unlock({token:raw,address:req.socket.remoteAddress,host:req.get('host'),userAgent:req.get('user-agent'),secure:requestIsSecure(req.headers)});
+ if(!attempt.ok){
+  if(attempt.retryAfterMs) res.setHeader('Retry-After',String(Math.ceil(attempt.retryAfterMs/1000)));
+  // The refusal page is plain HTML written by hand, so the message is escaped rather than trusted:
+  // it can name the address the request came from.
+  const escape=(value:string)=>value.replace(/[&<>]/g,character=>character==='&'?'&amp;':character==='<'?'&lt;':'&gt;');
+  res.status(attempt.status).type('html').send(`<!doctype html><meta charset="utf-8"><title>SCOUT — panel locked</title><body style="font:14px system-ui;background:#0b0a0d;color:#efeaf2;padding:48px"><h1 style="font-size:18px">${attempt.code==='throttled'?'Too many wrong tokens':'That link is not valid'}</h1><p style="color:#ab9fb5;max-width:520px">${escape(attempt.message)}</p><p style="color:#7e7289">The token is printed on the host console when it starts.</p>`);
+  console.warn(`[panel] refused a token link from ${req.socket.remoteAddress||'unknown'} — ${attempt.code}`);
+  return;
+ }
+ console.log(`[panel] remote session opened from ${attempt.session.address} (${attempt.session.userAgent||'unknown client'}) — ${panel.sessionCount} active`);
+ res.setHeader('Set-Cookie',attempt.cookie);
+ const query:Record<string,string>={};
+ for(const [key,value] of Object.entries(req.query)) if(key!=='token'&&typeof value==='string') query[key]=value;
+ const search=new URLSearchParams(query).toString();
+ res.redirect(302,req.path+(search?'?'+search:''));
+});
 // The upload body is a base64 data URL, so this route gets its own larger JSON parser before the
 // 1 mb global limit applies to the GSI hot path.
 const uploadSchema=z.object({kind:z.enum(['logo','map','radar','player']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
 app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
- const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ if(!sameOrigin(req)){res.sendStatus(403);return}
  const parsed=uploadSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Expected {kind, name, data} with a base64 image data URL'});return}
  const {kind,name,data}=parsed.data;
@@ -84,11 +148,55 @@ app.use('/radars',express.static('public/radars'));
 // so they get a route of their own instead of relying on the build-time copy in dist/.
 app.use('/thumbs',express.static('public/thumbs'));
 app.use(express.json({limit:'1mb'}));
-const wss=new WebSocketServer({server,path:'/ws'});
-function snapshot(){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()}}}
+// The WebSocket carries the same snapshot the public overlay renders, so it stays readable — but a
+// handshake from another site is refused: no legitimate cross-site client exists, and a rebound
+// domain reaching this host is exactly what it looks like. A browser sends Origin, a native client
+// does not, and a proxy keeps the public name in Host; those are the cases that pass.
+const wss=new WebSocketServer({noServer:true});
+server.on('upgrade',(req,socket,head)=>{
+ let pathname='';
+ try {pathname=new URL(req.url||'/','http://localhost').pathname} catch {}
+ if(pathname!=='/ws'){socket.destroy();return}
+ if(!originTrusted(req.headers.origin,req.headers.host,panel.allowedHosts)){
+  console.warn(`[panel] refused a WebSocket handshake with Origin ${req.headers.origin} (host ${req.headers.host}) — add that name to SCOUT_ALLOWED_HOSTS if it is your own panel address.`);
+  socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+  socket.destroy();return;
+ }
+ wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws,req));
+});
+function snapshot(session?:PanelSessionView){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{})}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
-wss.on('connection',ws=>ws.send(JSON.stringify(snapshot())));
+// The first snapshot of a connection carries *that* connection's session view, so the panel knows
+// whether it is local, remote, authenticated and when its session expires without a second request.
+wss.on('connection',(ws,req)=>ws.send(JSON.stringify(snapshot(req?panel.view({address:req.socket.remoteAddress,host:req.headers.host,cookie:req.headers.cookie,headers:req.headers}):undefined))));
 setInterval(broadcast,1000).unref();
+// ---- Panel session: unlock with the token the host printed, keep the cookie, or send the token as
+// `X-Scout-Token` / `Authorization: Bearer` on each mutation (that is the path for a script, and for a
+// browser that refuses the cookie). Neither endpoint ever returns the token.
+app.get('/api/session',(req,res)=>res.json(panel.view(panelRequest(req))));
+const unlockSchema=z.object({token:z.string().trim().min(1).max(256)});
+app.post('/api/session',(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ const parsed=unlockSchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Enter the panel token printed by the host.',code:'no-session'});return}
+ const attempt=panel.unlock({token:parsed.data.token,address:req.socket.remoteAddress,host:req.get('host'),userAgent:req.get('user-agent'),secure:requestIsSecure(req.headers)});
+ if(!attempt.ok){
+  if(attempt.retryAfterMs) res.setHeader('Retry-After',String(Math.ceil(attempt.retryAfterMs/1000)));
+  // The address and the reason are logged; the token that was tried never is.
+  console.warn(`[panel] refused an unlock from ${req.socket.remoteAddress||'unknown'} — ${attempt.code}${attempt.attemptsLeft!==undefined?` (${attempt.attemptsLeft} attempt(s) left)`:''}`);
+  res.status(attempt.status).json({error:attempt.message,code:attempt.code,attemptsLeft:attempt.attemptsLeft});
+  return;
+ }
+ console.log(`[panel] remote session opened from ${attempt.session.address} (${attempt.session.userAgent||'unknown client'}) — ${panel.sessionCount} active`);
+ res.setHeader('Set-Cookie',attempt.cookie);
+ res.json(panel.view({...panelRequest(req),headers:{},cookie:`${PANEL_COOKIE}=${attempt.session.id}`}));
+});
+app.delete('/api/session',(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(panel.logout(cookieValue(req.get('cookie'),PANEL_COOKIE))) console.log(`[panel] a remote session ended — ${panel.sessionCount} active`);
+ res.setHeader('Set-Cookie',clearedCookie(requestIsSecure(req.headers)));
+ res.json(panel.view({...panelRequest(req),headers:{},cookie:''}));
+});
 // ---- Optional OBS Studio bridge (server/obs.ts). Nothing here can affect GSI ingest or the overlay: the bridge only
 // connects outward, every failure stays inside its own status, and with it off no socket is ever opened.
 async function saveControls(next:Controls){
@@ -135,12 +243,12 @@ app.post('/gsi',(req,res)=>{
  else if(feed.late().log) console.warn(`[gsi] ignoring a packet older than the current state (${feed.rejectedLate} ignored). Expected while replaying a recording against a warm host, or when a second observer pushes with an older clock.`);
  res.sendStatus(200); broadcast();
 });
-app.get('/api/status',(_req,res)=>res.json(snapshot()));
+app.get('/api/status',(req,res)=>res.json(snapshot(panel.view(panelRequest(req)))));
 app.get('/api/config',(_req,res)=>res.json(config));
 // Saving the operator configuration replaces config/teams.json atomically and broadcasts it to
 // every connected view, so the HUD picks up teams, rosters, maps and the bracket without a restart.
 app.put('/api/config',async(req,res)=>{
- const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ if(!sameOrigin(req)){res.sendStatus(403);return}
  const parsed=configSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'config'} ${issue.message}`).slice(0,6).join('; ')});return}
  const next=normalizeConfig(parsed.data);
@@ -165,8 +273,9 @@ async function pruneUploads(current:ScoutConfig,radarsConfig:any){
  }
 }
 app.put('/api/controls',async(req,res)=>{
- // Reject cross-site operator mutations; this is a local, trusted-LAN service.
- const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ // Cross-site and unauthenticated mutations never reach here — the gate above refuses both. This route
+ // only validates the switches and saves them.
+ if(!sameOrigin(req)){res.sendStatus(403);return}
  const parsed=controlsSchema.safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Invalid controls'});return}
  const before=controls.scene;
  try {await saveControls(parsed.data);res.json(controls)}catch{res.status(500).json({error:'Could not save controls'});return}
@@ -176,7 +285,7 @@ app.put('/api/controls',async(req,res)=>{
 // Radar calibration + custom images are operator data: the admin panel's Custom radars editor PUTs
 // here, the file is replaced atomically, and every output view re-renders with the new radar.
 app.put('/api/radars',async(req,res)=>{
- const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ if(!sameOrigin(req)){res.sendStatus(403);return}
  const parsed=radarsSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid radar configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'radars'} ${issue.message}`).slice(0,6).join('; ')});return}
  const next=parsed.data;
@@ -191,7 +300,7 @@ app.put('/api/radars',async(req,res)=>{
 // Overlay element positions from the admin's Arrange mode. Saved as top-left coordinates on the
 // 1920×1080 canvas; an empty elements map is the shipped CSS default layout.
 app.put('/api/layout',async(req,res)=>{
- const origin=req.get('origin');if(origin && new URL(origin).host!==req.get('host')){res.sendStatus(403);return}
+ if(!sameOrigin(req)){res.sendStatus(403);return}
  const parsed=layoutSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid layout: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'layout'} ${issue.message}`).slice(0,6).join('; ')});return}
  try {
@@ -204,7 +313,6 @@ app.put('/api/layout',async(req,res)=>{
 // OBS integration API. Every mutation is same-origin only, like the rest of the operator API, and none of it can
 // return or store the OBS password.
 const obsView=()=>({config:obsConfig,status:obs.status()});
-const sameOrigin=(req:express.Request)=>{const origin=req.get('origin');return !origin||new URL(origin).host===req.get('host')};
 app.get('/api/obs',(_req,res)=>res.json(obsView()));
 app.put('/api/obs',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
