@@ -7,6 +7,21 @@ export interface RadarCalibration {posX:number;posY:number;scale:number;size:num
 export interface RadarConfig {overviewSize?:number;maps?:Record<string,Partial<RadarCalibration>>}
 export interface RadarDot {steamid:string;name:string;side:'CT'|'T';u:number;v:number;yaw?:number;alive:boolean;observed:boolean;color?:string}
 export interface RadarBomb {u:number;v:number;planted:boolean}
+export type GrenadeKind='smoke'|'flash'|'he'|'decoy'|'unknown';
+export interface RadarGrenade {id:string;kind:GrenadeKind;u:number;v:number;deployed:boolean}
+
+export function grenadeKind(type?:string):GrenadeKind {
+ const key=String(type||'').trim().toLowerCase().replace(/^weapon_/,'');
+ switch(key){
+  case 'smoke': case 'smokegrenade': return 'smoke';
+  case 'flash': case 'flashbang': return 'flash';
+  case 'frag': case 'he': case 'hegrenade': return 'he';
+  case 'fire': case 'inferno': case 'molotov': case 'incendiary': case 'incgrenade': case 'firebomb': return 'fire';
+  case 'decoy': return 'decoy';
+  default: return 'unknown';
+ }
+}
+
 const OVERVIEW_SIZE=1024;
 export function calibrationFor(radars:any,map?:string):RadarCalibration|undefined {
  const raw=map?radars?.maps?.[map]:undefined;
@@ -49,5 +64,14 @@ export function radarPoints(state:MatchState,cal:RadarCalibration,opts:{playerSt
  dots.sort((a,b)=>a.side===b.side?a.name.localeCompare(b.name):a.side==='CT'?-1:1);
  const planted=state.bomb?.state==='planted';
  const bombAt=projectPoint(parsePoint(state.bomb?.position)||{x:NaN,y:NaN},cal);
- return {dots,bomb:bombAt?{...bombAt,planted}:undefined};
+ const grenades:RadarGrenade[]=[];
+ for(const [id,grenade] of Object.entries(state.grenades||{})){
+    const at=projectPoint(parsePoint(grenade?.position)||{x:NaN,y:NaN},cal);
+    if(!at) continue;
+    const kind=grenadeKind(grenade?.type);
+    const effect=Number(grenade?.effecttime);
+    grenades.push({id,kind,u:at.u,v:at.v,deployed:(kind==='smoke'||kind==='fire')&&Number.isFinite(effect)&&effect>0});
+    grenades.sort((a,b)=>a.id.localeCompare(b.id));
+    return {dots,bomb:bombAt?{...bombAt,planted}:undefined,grenades};
+ }
 }

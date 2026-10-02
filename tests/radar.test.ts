@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {calibrationFor,parsePoint,projectPoint,yawOf,radarPoints} from '../src/radar';
+import {calibrationFor,parsePoint,projectPoint,yawOf,radarPoints,grenadeKind} from '../src/radar';
 import type {MatchState} from '../server/state';
 
 // Published CS2 overview values (resource/overviews/de_mirage.txt): the top-left corner of the radar
@@ -78,4 +78,33 @@ test('the bomb dot appears only while the bomb is planted',()=>{
  assert.ok(Math.abs(bomb.u-0.0996)<0.001&&Math.abs(bomb.v-0.1002)<0.001,`bomb at ${bomb.u},${bomb.v}`);
  assert.equal(radarPoints({...base,bomb:{state:'defused',position:'-2720, 1200, 0'}} as unknown as MatchState,mirage).bomb!.planted,false);
  assert.equal(radarPoints(base,mirage).bomb,undefined,'a carried bomb has no position and no dot');
+});
+
+test('grenade types map across the naming variants CS2 builds report',()=>{
+ for(const type of ['smoke','Smoke','smokegrenade','weapon_smokegrenade']) assert.equal(grenadeKind(type),'smoke',type);
+ for(const type of ['flash','flashbang','weapon_flashbang']) assert.equal(grenadeKind(type),'flash',type);
+ for(const type of ['frag','he','hegrenade','weapon_hegrenade']) assert.equal(grenadeKind(type),'he',type);
+ for(const type of ['fire','inferno','molotov','incendiary','incgrenade','weapon_molotov','weapon_incgrenade']) assert.equal(grenadeKind(type),'fire',type);
+ assert.equal(grenadeKind('decoy'),'decoy');
+ assert.equal(grenadeKind('something-new'),'unknown','an unrecognized grenade still gets a generic marker');
+ assert.equal(grenadeKind(undefined),'unknown');
+});
+
+test('thrown utility projects onto the radar; off-map and positionless grenades are dropped',()=>{
+ const state={allplayers:{},grenades:{
+  s1:{type:'smoke',position:'-3230, 1713, 0',lifetime:'3.1',effecttime:'15.2'},
+  f1:{type:'fire',position:'-2720, 1200, 0',effecttime:'5.8'},
+  h1:{type:'hegrenade',position:'-2720, 1200, 0'},
+  off:{type:'smoke',position:'999999, 999999, 0'},
+  nopos:{type:'flash'},
+ }} as unknown as MatchState;
+ const {grenades}=radarPoints(state,mirage);
+ assert.deepEqual(grenades.map(nade=>nade.id),['f1','h1','s1'],'sorted by id; off-map and positionless dropped');
+ const smoke=grenades.find(nade=>nade.id==='s1')!;
+ assert.deepEqual([smoke.u,smoke.v],[0,0]);
+ assert.equal(smoke.kind,'smoke');
+ assert.equal(smoke.deployed,true,'a smoke with effect time left renders bloomed');
+ assert.equal(grenades.find(nade=>nade.id==='f1')!.deployed,true);
+ assert.equal(grenades.find(nade=>nade.id==='h1')!.deployed,false,'an HE has no persistent effect to bloom');
+ assert.equal(radarPoints({allplayers:{}} as unknown as MatchState,mirage).grenades.length,0,'no grenades block, no markers');
 });

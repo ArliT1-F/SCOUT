@@ -2,7 +2,8 @@ import {validateGsi,sanitize,BLOCKED_KEYS,type Issue} from './schema.js';
 export type {Issue} from './schema.js';
 export interface WeaponState { name:string; type:string; state:string; ammo_clip?:number; ammo_reserve?:number }
 export interface PlayerState { steamid:string; name:string; observer_slot?:number; team:'CT'|'T'; activity?:string; state:{health:number;armor:number;helmet?:boolean;money:number;round_kills:number;round_killhs?:number;flashed?:number;burning?:number;defusekit?:boolean}; weapons:Record<string,WeaponState>; match_stats:{kills:number;deaths:number;assists:number}; position?:string;forward?:string }
-export interface MatchState { provider?:{steamid?:string;timestamp?:number};map?:{name:string;phase:string;round:number;team_ct:{name:string;score:number};team_t:{name:string;score:number}};round?:{phase:string;win_team?:'CT'|'T';bomb?:string};player?:PlayerState;allplayers?:Record<string,PlayerState>;phase_countdowns?:{phase:string;phase_ends_in:string|number};bomb?:{state:string;countdown?:string;position?:string};grenades?:Record<string,unknown> }
+export interface GrenadeState { type?:string; owner?:string; lifetime?:string|number; effecttime?:string|number; position?:string; velocity?:string }
+export interface MatchState { provider?:{steamid?:string;timestamp?:number};map?:{name:string;phase:string;round:number;team_ct:{name:string;score:number};team_t:{name:string;score:number}};round?:{phase:string;win_team?:'CT'|'T';bomb?:string};player?:PlayerState;allplayers?:Record<string,PlayerState>;phase_countdowns?:{phase:string;phase_ends_in:string|number};bomb?:{state:string;countdown?:string;position?:string};grenades?:Record<string,GrenadeState> }
 
 export function mergeDelta(base: Record<string,any>, delta: Record<string,any>): Record<string,any> {
  const out = {...base};
