@@ -94,7 +94,7 @@ packet({**base(1, 1, 0, "over", round_wins=round_wins), "round": {"phase": "over
 # --- round 2: Solaris plant, bomb explodes for the T side -----------------
 packet({**base(2, 1, 0, "freezetime", round_wins=round_wins), "allplayers": roster(ROSTER), "phase_countdowns": {"phase": "freezetime", "phase_ends_in": "14.9"}})
 packet({**base(2, 1, 0, "live", round_wins=round_wins), "allplayers": roster(ROSTER, money={n: 2600 for n in NAMES}), "phase_countdowns": {"phase": "live", "phase_ends_in": "110.0"}})
-packet(delta(bomb={"state": "carrying", "player": STEAM["susi"], "position": "-800.00, 300.00, 10.00"}))
+packet(delta(bomb={"state": "carried", "player": STEAM["susi"], "position": "-800.00, 300.00, 10.00"}))
 for ends in ["36.4", "33.2", "29.9"]:
     packet(delta(round={"phase": "live", "bomb": "planted"}, phase_countdowns={"phase": "bomb", "phase_ends_in": ends},
                  bomb={"state": "planted", "countdown": ends, "player": STEAM["susi"], "position": "-800.00, 300.00, 10.00"}))

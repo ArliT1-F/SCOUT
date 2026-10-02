@@ -19,6 +19,15 @@ test('coerces the strings CS2 sends for numbers',()=>{
  assert.ok(!('warmup' in payload.map));
 });
 
+test('accepts documented CS2 bomb states, including carried and planting',()=>{
+ const states=['carried','planting','planted','defusing','defused','exploded','dropped','carrying'];
+ for(const state of states){
+  const {payload,issues}=validateGsi({bomb:{state}});
+  assert.deepEqual(issues,[],`unexpected validation issue for bomb.state=${state}`);
+  assert.equal(payload.bomb.state,state);
+ }
+});
+
 test('repairs a bad field and keeps the rest of the subtree',()=>{
  const {payload,issues}=validateGsi({map:{name:'de_nuke',round:'not-a-round',team_ct:{score:5},team_t:{score:'x'}},player:{steamid:'1',name:'nova',state:{health:72,money:'lots'},weapons:{weapon_0:{name:'weapon_awp'}}},round:{phase:'live',win_team:''}});
  assert.deepEqual(issues,[{path:'map.round',reason:'expected an integer'},{path:'map.team_t.score',reason:'expected an integer'},{path:'player.state.money',reason:'expected an integer'}]);
