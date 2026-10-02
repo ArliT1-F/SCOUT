@@ -13,3 +13,8 @@ src-tauri/target/
 src-tauri/core/target/
 src-tauri/core/Cargo.lock
 src-tauri/gen/
+
+# Windows installer build output (scripts/build-installer.mjs)
+build/
+dist-stage/
+dist-installer/

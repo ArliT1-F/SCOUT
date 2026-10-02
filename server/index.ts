@@ -17,6 +17,7 @@ import {controlsSchema,defaultControls,type Controls} from './controls.js';
 import {ObsBridge} from './obs.js';
 import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './obs-config.js';
 import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,type PanelSessionView} from './auth.js';
+import {appPath} from './runtime.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // ---- Operator access from another machine (server/auth.ts). Reads stay open on purpose: the OBS
@@ -335,6 +336,11 @@ app.post('/api/obs/refresh-overlay',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  try {res.json({refreshed:await obs.refreshOverlay()})}catch(error:any){res.status(502).json({error:error.message})}
 });
-if(process.env.NODE_ENV==='production'){app.use(express.static('dist'));app.get('*',(_req,res)=>res.sendFile(path.resolve('dist/index.html')))}else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true,allowedHosts:true},appType:'spa'});app.use(vite.middlewares)}
+if(process.env.NODE_ENV==='production'){app.use(express.static(appPath('dist')));app.get('*',(_req,res)=>res.sendFile(appPath('dist','index.html')))}else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true,allowedHosts:true},appType:'spa'});app.use(vite.middlewares)}
 app.use((err:any,_req:any,res:any,_next:any)=>{res.status(err.status||500).json({error:err.status===400?'Invalid JSON':'Request failed'})});
+// A packaged install starts the host from a launcher (installer/README.md). Recording the process id
+// lets scout-stop.cmd - and the uninstaller - stop this host instead of guessing among node
+// processes; the value is only ever used after checking it is really a node.exe. A checkout never
+// sets the variable, so nothing is written next to the sources.
+if(process.env.SCOUT_PID_FILE) await writeFile(process.env.SCOUT_PID_FILE,String(process.pid)).catch(()=>{});
 server.listen(port,'0.0.0.0',()=>console.log('SCOUT host ready on port '+port+'\n[gsi] expecting CS2 pushes at '+feed.uri+' · token source: '+tokenSource+(tokenSource==='default'?' (built-in CHANGE_ME — set GSI_TOKEN before using a changed cfg token)':'')));
