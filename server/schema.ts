@@ -29,7 +29,9 @@ export const schemas={
  player,
  allplayers:z.record(player),
  phase_countdowns:z.object({phase:text,phase_ends_in:clock}).passthrough(),
- bomb:z.object({state:oneOf('carrying','planted','defusing','defused','exploded','dropped'),countdown:clock,player:text,position:text}).passthrough(),
+ // CS2 uses "carried" (not "carrying") and reports the transient "planting" state too.
+ // Keep "carrying" accepted for compatibility with older SCOUT recordings.
+ bomb:z.object({state:oneOf('carried','carrying','planting','planted','defusing','defused','exploded','dropped'),countdown:clock,player:text,position:text}).passthrough(),
  grenades:z.record(grenade),
 };
 function reasonOf(error:z.ZodError,field:z.ZodTypeAny):string {const issue=error.issues[0]; if(!issue) return 'invalid value'; const described=(field as any)?._def?.description; return issue.message==='Invalid input'&&described?`expected ${described}`:issue.message}
