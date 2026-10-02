@@ -411,6 +411,8 @@ footer .status-dot{margin-right:7px}
 .radar .dot b{position:absolute;left:50%;top:50%;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:13px solid #f2eef5;margin:-6px 0 0 -5px;transform-origin:50% 60%}
 .radar .bomb{position:absolute;width:12px;height:12px;margin:-6px 0 0 -6px;background:var(--gold);transform:rotate(45deg)}
 .radar .bomb.planted{animation:radar-blink 1s steps(2,end) infinite}
+/* Thrown utility: one marker per live grenade, coloured by type. A deployed smoke or burning molly
+   draws bloomed while its effect lasts; sizes are readability markers, not true effect footprints. */
 .radar .nade{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;box-shadow:0 0 0 2px #100b16}
 .radar .nade-smoke{background:#cfd3d8cc}
 .radar .nade-smoke.deployed{width:26px;height:26px;margin:-13px 0 0 -13px;background:#cfd3d833;border:2px solid #e8ebeeaa;box-shadow:none}

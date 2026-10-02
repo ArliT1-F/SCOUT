@@ -7,9 +7,13 @@ export interface RadarCalibration {posX:number;posY:number;scale:number;size:num
 export interface RadarConfig {overviewSize?:number;maps?:Record<string,Partial<RadarCalibration>>}
 export interface RadarDot {steamid:string;name:string;side:'CT'|'T';u:number;v:number;yaw?:number;alive:boolean;observed:boolean;color?:string}
 export interface RadarBomb {u:number;v:number;planted:boolean}
-export type GrenadeKind='smoke'|'flash'|'he'|'decoy'|'unknown';
+export type GrenadeKind='smoke'|'flash'|'he'|'fire'|'decoy'|'unknown';
 export interface RadarGrenade {id:string;kind:GrenadeKind;u:number;v:number;deployed:boolean}
-
+// GSI's grenade `type` is not one stable vocabulary — builds and docs variously report `smoke` or
+// `smokegrenade`, `frag` or `hegrenade`, `fire`/`inferno` or `molotov` — so match every variant seen in
+// the wild, case-insensitively and with or without the `weapon_` prefix. Anything unrecognized still
+// gets a marker (`unknown`) rather than vanishing: a live grenade the overlay hides is worse than a
+// generic dot.
 export function grenadeKind(type?:string):GrenadeKind {
  const key=String(type||'').trim().toLowerCase().replace(/^weapon_/,'');
  switch(key){
@@ -21,7 +25,6 @@ export function grenadeKind(type?:string):GrenadeKind {
   default: return 'unknown';
  }
 }
-
 const OVERVIEW_SIZE=1024;
 export function calibrationFor(radars:any,map?:string):RadarCalibration|undefined {
  const raw=map?radars?.maps?.[map]:undefined;
@@ -64,14 +67,17 @@ export function radarPoints(state:MatchState,cal:RadarCalibration,opts:{playerSt
  dots.sort((a,b)=>a.side===b.side?a.name.localeCompare(b.name):a.side==='CT'?-1:1);
  const planted=state.bomb?.state==='planted';
  const bombAt=projectPoint(parsePoint(state.bomb?.position)||{x:NaN,y:NaN},cal);
+ // Thrown utility from GSI's `grenades` block: same projection and off-map policy as players, so an
+ // execute reads on the radar as it happens. A smoke or molly with effect time left is `deployed`
+ // and renders bloomed; anything without a usable position simply has no marker.
  const grenades:RadarGrenade[]=[];
  for(const [id,grenade] of Object.entries(state.grenades||{})){
-    const at=projectPoint(parsePoint(grenade?.position)||{x:NaN,y:NaN},cal);
-    if(!at) continue;
-    const kind=grenadeKind(grenade?.type);
-    const effect=Number(grenade?.effecttime);
-    grenades.push({id,kind,u:at.u,v:at.v,deployed:(kind==='smoke'||kind==='fire')&&Number.isFinite(effect)&&effect>0});
-    grenades.sort((a,b)=>a.id.localeCompare(b.id));
-    return {dots,bomb:bombAt?{...bombAt,planted}:undefined,grenades};
+  const at=projectPoint(parsePoint(grenade?.position)||{x:NaN,y:NaN},cal);
+  if(!at) continue;
+  const kind=grenadeKind(grenade?.type);
+  const effect=Number(grenade?.effecttime);
+  grenades.push({id,kind,u:at.u,v:at.v,deployed:(kind==='smoke'||kind==='fire')&&Number.isFinite(effect)&&effect>0});
  }
+ grenades.sort((a,b)=>a.id.localeCompare(b.id));
+ return {dots,bomb:bombAt?{...bombAt,planted}:undefined,grenades};
 }

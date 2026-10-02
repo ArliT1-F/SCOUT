@@ -2,6 +2,10 @@ import {validateGsi,sanitize,BLOCKED_KEYS,type Issue} from './schema.js';
 export type {Issue} from './schema.js';
 export interface WeaponState { name:string; type:string; state:string; ammo_clip?:number; ammo_reserve?:number }
 export interface PlayerState { steamid:string; name:string; observer_slot?:number; team:'CT'|'T'; activity?:string; state:{health:number;armor:number;helmet?:boolean;money:number;round_kills:number;round_killhs?:number;flashed?:number;burning?:number;defusekit?:boolean}; weapons:Record<string,WeaponState>; match_stats:{kills:number;deaths:number;assists:number}; position?:string;forward?:string }
+// One live grenade from GSI's `grenades` block (subscribed via `allgrenades` in the cfg): a thrown,
+// bounced or burning piece of utility with a world position. `type` varies between CS2 builds and
+// docs (`smoke`/`smokegrenade`, `frag`/`hegrenade`, `fire`/`inferno`/`molotov`), so the radar matches
+// every known variant rather than one spelling.
 export interface GrenadeState { type?:string; owner?:string; lifetime?:string|number; effecttime?:string|number; position?:string; velocity?:string }
 export interface MatchState { provider?:{steamid?:string;timestamp?:number};map?:{name:string;phase:string;round:number;team_ct:{name:string;score:number};team_t:{name:string;score:number}};round?:{phase:string;win_team?:'CT'|'T';bomb?:string};player?:PlayerState;allplayers?:Record<string,PlayerState>;phase_countdowns?:{phase:string;phase_ends_in:string|number};bomb?:{state:string;countdown?:string;position?:string};grenades?:Record<string,GrenadeState> }
 

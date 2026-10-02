@@ -16,7 +16,7 @@ import {phaseView} from './phases';
 import {formatClock,interpolatedClock} from './clock';
 import {weaponInfo,activeWeapon,utilityOf,teamUtility,type Utility} from './weapons';
 import {WeaponIcon,UtilityIcon} from './icons';
-import {calibrationFor,radarPoints,type RadarConfig} from './radar';
+import {calibrationFor,radarPoints,type RadarConfig,type GrenadeKind} from './radar';
 import {buildRoster,identify,shownName,cardOf} from '../server/players';
 import {assetUrl} from './assets';
 import {SceneStage} from './stage';
@@ -66,7 +66,8 @@ function FeedPanel({gsi,now,connected}:{gsi?:GsiDiagnostics;now:number;connected
 }
 // Radar: live GSI positions projected through the operator's calibration. The image is optional —
 // without it the grid still shows where everyone is, which is what calibration debugging needs.
-const NADE_LABEL:Record<string,string>={smoke:'Smoke grenade', flash:'Flashbang', he:'HE grenade', fire:'Molotov / incendiary', decoy:'Decoy grenade', unknown:'Grenade'};
+// Thrown utility renders as per-type markers from the same projection (see src/radar.ts).
+const NADE_LABEL:Record<GrenadeKind,string>={smoke:'Smoke grenade',flash:'Flashbang',he:'HE grenade',fire:'Molotov / incendiary',decoy:'Decoy grenade',unknown:'Grenade'};
 function Radar({state,sides,radars,pos,nameOf}:{state:MatchState;sides:ResolvedSides;radars?:RadarConfig;pos?:React.CSSProperties;nameOf?:(player:{steamid?:string;name?:string},side?:string)=>string}){
  const cal=calibrationFor(radars,state.map?.name);
  const [imageOk,setImageOk]=useState(true);
