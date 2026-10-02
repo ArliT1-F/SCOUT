@@ -641,3 +641,137 @@ footer .status-dot{margin-right:7px}
 .logout-button{display:inline-flex;align-items:center;gap:5px;font-size:8px;letter-spacing:1px;border:1px solid var(--line);border-radius:4px;padding:4px 7px;color:var(--text-dim)}
 .logout-button:hover{border-color:var(--accent-deep);color:var(--accent-bright)}
 @media(max-width:700px){.unlock-card{padding:24px 20px}}
+
+/* Square 10-player roster styles */
+.roster-squares {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: flex-start;
+}
+.roster {
+  position: absolute;
+  top: 154px;
+  width: auto;
+}
+.roster-0 {
+  left: 32px;
+}
+.roster-1 {
+  right: 32px;
+}
+.roster-1 .roster-label {
+  flex-direction: row-reverse;
+}
+.roster-1 .roster-squares {
+  flex-direction: row-reverse;
+}
+.player {
+  position: relative;
+  width: 76px;
+  background: #140e1be8;
+  border-radius: 4px;
+  border: 1px solid #2f213b;
+  border-top: 3px solid var(--team);
+  border-left: none;
+  margin-top: 0;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: all 0.2s ease;
+}
+.player.observed {
+  box-shadow: 0 0 0 2px var(--accent-bright), 0 0 16px rgba(217, 112, 194, 0.4);
+}
+.player.dead {
+  opacity: 0.4;
+  filter: grayscale(0.8);
+}
+.player-avatar-box {
+  position: relative;
+  width: 66px;
+  height: 66px;
+  background: #0d0813;
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.player-steam-avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.player-steam-fallback {
+  color: #614e74;
+}
+.player-avatar-box .slot {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  background: rgba(13, 8, 19, 0.75);
+  color: #d9cfe2;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 2px;
+  line-height: 1;
+}
+.player-hp-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  transition: height 0.25s ease;
+}
+.player-dead-mark {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 10, 15, 0.75);
+  color: #e65c5c;
+  font-size: 26px;
+  font-weight: 900;
+}
+.player-steam-name {
+  width: 100%;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f2eef5;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.3px;
+}
+.player-square-stats {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2px;
+  padding: 0 2px;
+  font-size: 11px;
+}
+.sq-hp {
+  font-weight: 700;
+  color: #e2d8ec;
+}
+.sq-weapon {
+  color: #bfaecf;
+  display: inline-flex;
+  align-items: center;
+}
+.player.empty.square-empty {
+  opacity: 0.35;
+  border-top-color: #4a3c57;
+}
+.player.empty.square-empty .player-avatar-box {
+  background: #100a18;
+}
