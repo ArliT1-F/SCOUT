@@ -1,4 +1,3 @@
-import {fetchSteamAvatar,getAllCachedAvatars} from "./steam-avatar.js";
 import express from 'express';
 import {createServer} from 'node:http';
 import {WebSocketServer,WebSocket} from 'ws';
@@ -166,7 +165,7 @@ server.on('upgrade',(req,socket,head)=>{
  }
  wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws,req));
 });
-function snapshot(session?:PanelSessionView){return {state:store.state,avatars:getAllCachedAvatars(),lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{})}}
+function snapshot(session?:PanelSessionView){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{})}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 // The first snapshot of a connection carries *that* connection's session view, so the panel knows
 // whether it is local, remote, authenticated and when its session expires without a second request.
@@ -235,11 +234,6 @@ app.post('/gsi',(req,res)=>{
  if(report.firstAllplayers) console.log(`[gsi] allplayers block received (${feed.allplayers} player${feed.allplayers===1?'':'s'}) — observer mode confirmed`);
  if(report.observerGap) console.warn(`[gsi] ${feed.accepted} packets accepted but no allplayers block yet — CS2 is playing, not spectating. Scoreboard and clock will work; rosters and killfeed stay empty until you join as observer or GOTV.`);
  if(raw && raw.writableLength<1e6) raw.write(JSON.stringify({receivedAt:Date.now(),payload})+'\n');
-  if(payload.allplayers && typeof payload.allplayers==='object'){
-  for(const sid of Object.keys(payload.allplayers)){
-   if(/^7656119\d{10}$/.test(sid)) fetchSteamAvatar(sid).then(url=>{if(url) broadcast()});
-  }
- }
  const ingested=store.ingest(payload);
  // Recovered subtrees are normal (CS2 empties fields between rounds), so they are counted and logged
  // at most once per 10 s instead of once per packet.
