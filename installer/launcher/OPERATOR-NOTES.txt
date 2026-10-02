@@ -1,0 +1,59 @@
+SCOUT - operator notes
+=================================================================================================
+
+This folder is SCOUT's data directory. Everything in it belongs to the operator: configuration,
+uploaded logos and portraits, radar images, recordings. Updating or uninstalling SCOUT never
+deletes it without asking first.
+
+Everyday things
+-------------------------------------------------------------------------------------------------
+  Start the host ........... "SCOUT host" on the desktop or in the Start menu, or scout-host.cmd
+                             in this folder. Leave the console window open while you broadcast:
+                             it prints the panel address and anything that goes wrong.
+  Open the control panel ... http://127.0.0.1:8080/admin
+                             The port is the one in port.txt below; the Start menu shortcuts were
+                             created with the port chosen at install time, so if you change the
+                             port later, edit the shortcuts (or re-run the installer).
+  OBS browser source ....... http://127.0.0.1:8080/obs
+                             1920x1080, "Shutdown source when not visible" off, no Custom CSS,
+                             no chroma key. Add Game Capture for cs2.exe under it.
+  Overlay shell ............ "SCOUT overlay shell" in the Start menu - a transparent, click-through
+                             window over CS2. F8 toggles it, Ctrl+Shift+F8 quits it. Needs the
+                             Microsoft WebView2 runtime (Windows 11 has it; the installer offers
+                             it on Windows 10).
+  Stop a host you cannot see  scout-stop.cmd in this folder (stops only SCOUT's node process).
+
+Files here
+-------------------------------------------------------------------------------------------------
+  config\teams.json ......... teams, rosters, map series and the tournament tree. The panel edits
+                              this; hand-editing works too and is normalized on load.
+  config\radars.json ........ radar calibration (posX/posY/scale/size) and per-map images.
+  config\gamestate_integration_overlay.cfg
+                              the Game State Integration config that was copied into CS2's cfg
+                              folder at install time. Copy it again after reinstalling CS2.
+  gsi_token.txt ............. the token CS2 pushes with. It must match the "auth" token inside the
+                              CS2 cfg file - change both or neither. The panel's Setup guide tab
+                              and the host console never print it.
+  port.txt .................. the port the host listens on (default 8080).
+  remote.txt ................ "on" or "off": may another machine open the control panel?
+  panel_token.txt ........... the token for that remote link, when remote is "on".
+  public\uploads\ ........... uploaded logos, map pictures, portraits and radar images.
+  public\radars\ ............ drop-in radar overviews: any square 1:1 image, named after the map.
+  public\thumbs\ ............ scene pictures for the Matchup and Map series scenes.
+  recordings\ ............... GSI recordings, only while the host runs with LOG_GSI=1.
+  scout.pid ................. written while the host runs; scout-stop.cmd reads it.
+
+When something does not work
+-------------------------------------------------------------------------------------------------
+  1. Start the host from a console window and read it. It prints the port it is on, where it
+     expects CS2 to push to, and which config file it could not parse.
+  2. No game data: is config\gamestate_integration_overlay.cfg in CS2's
+     game\csgo\cfg folder, does its auth token equal gsi_token.txt, and is CS2 running in
+     Fullscreen Windowed?
+  3. Panel from another machine: is remote.txt "on", did the firewall rule get installed, and did
+     you use the one-time link the host printed (it carries the token)?
+  4. The overlay shell shows nothing: is the host running, is CS2 the foreground window, and is
+     the Microsoft WebView2 runtime installed?
+
+The rest of the documentation is installed next to the program files (docs\ beside the Start menu
+shortcut's target), and in the project's README.

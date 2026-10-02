@@ -15,6 +15,19 @@ npm start                   # serves production build
 npm run shell:test          # Rust: the overlay shell's decision logic (needs only a Rust toolchain)
 ```
 
+### Install on a Windows observer machine
+
+`npm run package:windows` builds **`SCOUT-Setup-<version>.exe`**: one wizard that installs the host
+with its own bundled Node runtime (no Node.js or npm on the observer's machine), the built panel and
+overlay pages, the CS2 Game State Integration config — detected Steam library, chosen port and
+token — the overlay shell, the firewall rule for a panel or OBS on another machine, and the
+shortcuts to start it all. Operator data (teams, uploads, radar images, recordings) is kept in
+`%APPDATA%\SCOUT`, so re-running a newer installer updates the program without touching match data.
+
+Building it needs Windows (or those tools), Rust with `cargo install tauri-cli --version "^2"`, and
+Inno Setup 6.3+; what the wizard asks, where every file lands and what has and has not been verified
+are in [`installer/README.md`](installer/README.md).
+
 Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
 
 ### Operator access from another machine
