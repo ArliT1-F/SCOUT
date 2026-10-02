@@ -16,7 +16,7 @@ import {phaseView} from './phases';
 import {formatClock,interpolatedClock} from './clock';
 import {weaponInfo,activeWeapon,utilityOf,teamUtility,type Utility} from './weapons';
 import {WeaponIcon,UtilityIcon} from './icons';
-import {calibrationFor,radarPoints,type RadarConfig} from './radar';
+import {calibrationFor,radarPoints,type RadarConfig,type GrenadeKind} from './radar';
 import {buildRoster,identify,shownName,cardOf} from '../server/players';
 import {assetUrl} from './assets';
 import {SceneStage} from './stage';
@@ -66,18 +66,21 @@ function FeedPanel({gsi,now,connected}:{gsi?:GsiDiagnostics;now:number;connected
 }
 // Radar: live GSI positions projected through the operator's calibration. The image is optional —
 // without it the grid still shows where everyone is, which is what calibration debugging needs.
+// Thrown utility renders as per-type markers from the same projection (see src/radar.ts).
+const NADE_LABEL:Record<GrenadeKind,string>={smoke:'Smoke grenade',flash:'Flashbang',he:'HE grenade',fire:'Molotov / incendiary',decoy:'Decoy grenade',unknown:'Grenade'};
 function Radar({state,sides,radars,pos,nameOf}:{state:MatchState;sides:ResolvedSides;radars?:RadarConfig;pos?:React.CSSProperties;nameOf?:(player:{steamid?:string;name?:string},side?:string)=>string}){
  const cal=calibrationFor(radars,state.map?.name);
  const [imageOk,setImageOk]=useState(true);
  if(!cal) return null;
- const {dots,bomb}=radarPoints(state,cal,{colors:{CT:sides.CT.color,T:sides.T.color}});
+ const {dots,bomb,grenades}=radarPoints(state,cal,{colors:{CT:sides.CT.color,T:sides.T.color}});
   return <div className={'radar'+(imageOk&&cal.image?' with-image':'')} style={pos}>
   {imageOk&&cal.image?<img src={'/'+cal.image.replace(/^\//,'')} alt="" onError={()=>setImageOk(false)}/>:<div className="radar-grid"><span>RADAR IMAGE MISSING</span><small>public/{cal.image}</small></div>}
   {dots.map(dot=><i key={dot.steamid} className={'dot'+(dot.side==='CT'?' ct':' t')+(dot.alive?'':' dead')+(dot.observed?' observed':'')} style={{left:dot.u*100+'%',top:dot.v*100+'%',['--team']:dot.color||(dot.side==='CT'?'#d970c2':'#e8c97e')} as any} title={nameOf?nameOf({steamid:dot.steamid,name:dot.name},dot.side):dot.name}>
    {dot.observed&&dot.yaw!==undefined&&<b style={{transform:`rotate(${dot.yaw}deg)`}}/>}
   </i>)}
   {bomb&&<i className={'bomb'+(bomb.planted?' planted':'')} style={{left:bomb.u*100+'%',top:bomb.v*100+'%'}}/>}
-  <span className="radar-label">{state.map?.name?.replace('de_','').toUpperCase()||'—'}<small>{dots.length} TRACKED</small></span>
+  {grenades.map(nade=><i key={nade.id} className={'nade nade-'+nade.kind+(nade.deployed?' deployed':'')} style={{left:nade.u*100+'%',top:nade.v*100+'%'}} title={NADE_LABEL[nade.kind]}/>)}
+  <span className="radar-label">{state.map?.name?.replace('de_','').toUpperCase()||'—'}<small>{dots.length} TRACKED{grenades.length>0?` · ${grenades.length} NADE${grenades.length===1?'':'S'}`:''}</small></span>
  </div>;
 }
 const radarDesc=(calibration:any,map?:string)=>calibration?`Live positions · ${map?.replace('de_','').toUpperCase()}`:`No calibration for ${map||'the current map'}`;
