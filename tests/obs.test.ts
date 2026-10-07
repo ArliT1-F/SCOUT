@@ -26,7 +26,7 @@ test('we subscribe to general, scene and output events only — never the high-v
 
 test('the saved OBS configuration is defaulted, trimmed and cannot hold a password or a non-websocket address',()=>{
  const defaults=obsConfigSchema.parse({});
- assert.deepEqual(defaults,{enabled:false,url:OBS_DEFAULT_URL,sync:'scout',sceneMap:{live:'',matchup:'',lineups:'',veto:'',bracket:'',winner:'',break:''},browserSource:''});
+ assert.deepEqual(defaults,{enabled:false,url:OBS_DEFAULT_URL,sync:'scout',sceneMap:{live:'',matchup:'',lineups:'',veto:'',bracket:'',winner:'',break:'',recap:'',stats:''},browserSource:''});
  const parsed=obsConfigSchema.parse({enabled:true,url:' ws://10.0.0.5:4455 ',sync:'both',sceneMap:{live:' GAME ',break:'BRB',nonsense:'x'},browserSource:' Overlay ',password:'hunter2'});
  assert.equal(parsed.url,'ws://10.0.0.5:4455');
  assert.deepEqual([parsed.sceneMap.live,parsed.sceneMap.break,parsed.browserSource],['GAME','BRB','Overlay']);

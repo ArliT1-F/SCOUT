@@ -32,7 +32,10 @@ export async function apiFetch(path:string,init:RequestInit={}):Promise<Response
  const res=await fetch(path,authInit(init));
  if(res.status===401||res.status===403){
   const body=await res.clone().json().catch(()=>({}) as any);
-  if(body&&body.code) denied?.(String(body.error||'The host refused that request.'),String(body.code));
+  const authenticationCodes=new Set(['no-session','bad-session','remote-disabled','untrusted-host','throttled']);
+  // 403 is also used for valid lower-privilege roles. A capability denial must not erase an
+  // authenticated designer/viewer session or push the user back to the token-unlock screen.
+  if(body&&authenticationCodes.has(String(body.code))) denied?.(String(body.error||'The host refused that request.'),String(body.code));
  }
  return res;
 }
@@ -72,7 +75,7 @@ export function UnlockScreen({session,message,onUnlocked}:{session:PanelSessionV
      <input type="password" value={token} autoFocus autoComplete="off" spellCheck={false} placeholder="paste the token from the host console" onChange={event=>setToken(event.target.value)}/>
     </label>
     <button className="button primary wide" type="submit" disabled={busy}><KeyRound size={15}/>{busy?'Checking…':'Unlock panel'}</button>
-    <p className="unlock-hint">The host prints a ready-to-open link with the token in it when it starts, and shows the token itself on its own console. It is never part of the configuration, the API or a log line. Set <code>SCOUT_PANEL_TOKEN</code> to keep one token across restarts.</p>
+    <p className="unlock-hint">The host prints a ready-to-open link with the token in it when it starts. Protect that one-time console output. The token is never stored in configuration or returned by an API, and routine request/audit logs omit it. Set <code>SCOUT_PANEL_TOKEN</code> to keep one token across restarts.</p>
    </>}
    <div className="unlock-facts">
     <span><Monitor size={13}/>{session?.local?'This machine':'Another machine'}</span>
@@ -87,11 +90,11 @@ export function UnlockScreen({session,message,onUnlocked}:{session:PanelSessionV
 // nothing to sign out of, so the button only appears for a remote one.
 export function SessionPill({session,onLogout}:{session:PanelSessionView|null;onLogout:()=>void}){
  if(!session) return <span className="local-pill"><span className="status-dot"/> LOCAL SESSION</span>;
- if(session.local) return <span className="local-pill" title={`Requests from this machine are trusted: the panel is open on ${session.host||'this host'}.`}><span className="status-dot"/> LOCAL SESSION</span>;
+ if(session.local) return <span className="local-pill" title={`Requests from this machine are trusted: the panel is open on ${session.host||'this host'}.`}><span className="status-dot"/> LOCAL SESSION · {session.role?.toUpperCase()||'OWNER'}</span>;
  if(!session.authenticated) return <span className="local-pill remote locked" title="This visitor has no panel authority."><span className="status-dot amber"/> REMOTE · LOCKED</span>;
  const until=session.expiresAt?new Date(session.expiresAt).toLocaleTimeString():null;
- return <span className="local-pill remote" title={`Operator session opened from ${session.address}${until?`, ends around ${until}`:''}.`}>
-  <span className="status-dot"/> REMOTE · {session.via==='header'?'TOKEN':'SESSION'} · {session.address||session.host}
+ return <span className={'local-pill remote role-'+(session.role||'viewer')} title={`${session.operator} · ${session.role?.toUpperCase()} · ${session.address}${until?` · session ends around ${until}`:''}`}>
+  <span className="status-dot"/> REMOTE · {session.via==='header'?'TOKEN':'SESSION'} · {session.address||session.host} · {session.operator||'Operator'} · {session.role?.toUpperCase()||'VIEWER'}
   <button className="logout-button" onClick={onLogout}><LogOut size={11}/>Sign out</button>
  </span>;
 }

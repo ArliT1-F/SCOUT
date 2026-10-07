@@ -7,6 +7,7 @@ import {splitRoster,type PlayerCard} from '../server/players';
 import type {SceneId} from '../server/controls';
 import type {SeriesState} from '../server/series';
 import type {ResolvedSides} from '../server/sides';
+import type {KillEvent,RoundEvent} from '../server/events';
 // The full-canvas broadcast scenes: matchup, lineups, map series, tournament tree, winner and break. Each
 // one owns the whole 1920×1080 canvas (the live scoreboard steps aside) and is drawn from the operator's
 // configuration, so it is correct before CS2 is even running. Team colours arrive as --a / --b / --team
@@ -183,13 +184,41 @@ function BreakScene({config,teams,cards,breakEndsAt,now}:{config:any;teams:[Scen
  </Frame>;
 }
 
+function RoundRecapScene({config,teams,sides,events}:{config:any;teams:[SceneTeam,SceneTeam];sides?:ResolvedSides;events?:{kills?:KillEvent[];rounds?:RoundEvent[]}}){
+ const round=events?.rounds?.slice().reverse()[0];
+ const kills=(events?.kills||[]).filter(kill=>round&&kill.map===round.map&&kill.round===round.round).slice(-5).reverse();
+ const winner=round?.winner==='CT'?'CT':round?.winner==='T'?'T':undefined;
+ const winnerTeam=winner?teams.find(team=>sideOfTeam(sides,team.id)===winner):undefined;
+ const reason=round?.reason==='bomb'?'Bomb detonation':round?.reason==='defuse'?'Bomb defused':round?.reason==='elimination'?'Team eliminated':round?.reason==='time'?'Time expired':'Round result';
+ return <Frame config={config} teams={teams} label="Round recap">
+  <div className="st-recap">
+   <motion.div className="st-recap-kicker" {...rise(0,-12)}>ROUND {round?.round??'—'} · {round?.map?.replace(/^de_/,'').toUpperCase()||'LIVE MATCH'}</motion.div>
+   {winnerTeam?<><motion.div className="st-recap-winner" style={tint(winnerTeam.color)} {...rise(1,22)}><Crest team={winnerTeam} size={132}/><div><small>ROUND WON BY</small><h1>{winnerTeam.name}</h1><span>{reason}</span></div><b className="st-recap-score">{round?.ctScore??0}<i>:</i>{round?.tScore??0}</b></motion.div><motion.div className="st-recap-kills" {...rise(2,18)}><small>ELIMINATIONS · {kills.length}</small>{kills.length?kills.map((kill,index)=><div key={kill.id} className="st-recap-kill"><b>{kill.killerName||'UNKNOWN'}</b><span>{kill.weapon?.replace('weapon_','').replace(/_/g,' ').toUpperCase()||'ELIMINATION'}{kill.headshot?' · HEADSHOT':''}</span><b>{kill.victimName}</b><i>0{index+1}</i></div>):<p>No credited kills were captured for this round.</p>}</motion.div></>:<div className="st-recap-empty"><small>ROUND RECAP</small><h1>Waiting for a confirmed round result</h1><p>The recap uses only round results derived from CS2 GSI. It never guesses a winner.</p></div>}
+  </div>
+ </Frame>;
+}
+function PlayerStatsScene({config,teams,sides,players}:{config:any;teams:[SceneTeam,SceneTeam];sides?:ResolvedSides;players:LiveLike[]}){
+ const ordered=teams.map(team=>{const side=sideOfTeam(sides,team.id);const rows=players.filter(player=>!side||player.team===side).sort((a,b)=>(b.match_stats?.kills||0)-(a.match_stats?.kills||0)).slice(0,5);return {team,side,rows}});
+ return <Frame config={config} teams={teams} label="Player statistics">
+  <div className="st-stats">
+   <motion.div className="st-stats-title" {...rise(0,-14)}><small>THE NUMBERS THAT MATTER</small><h1>PLAYER STATISTICS</h1><span>{config?.event?.stage||'CURRENT MAP'} · LIVE GSI</span></motion.div>
+   <div className="st-stats-columns">{ordered.map(({team,side,rows},teamIndex)=><motion.section className="st-stats-team" style={tint(team.color)} key={team.id} {...rise(teamIndex+1,20)}>
+    <header><Crest team={team} size={58}/><div><h2>{team.name}</h2><small>{side?`${side} SIDE`:'ROSTER'}</small></div><span>LIVE</span></header>
+    <div className="st-stat-head"><b>PLAYER</b><span>K</span><span>D</span><span>A</span><span>MVP</span></div>
+    {rows.length?rows.map((player,index)=><div className="st-stat-row" key={player.steamid||player.name||index}><b>{player.name||'Unknown player'}</b><span>{player.match_stats?.kills??'—'}</span><span>{player.match_stats?.deaths??'—'}</span><span>{player.match_stats?.assists??'—'}</span><span>{player.match_stats?.mvp??'—'}</span></div>):<div className="st-stats-empty">Waiting for player statistics from the observer feed.</div>}
+   </motion.section>)}</div>
+   <div className="st-stats-foot">KILLS <b>K</b> · DEATHS <b>D</b> · ASSISTS <b>A</b> · MVP AWARDS <b>MVP</b> — DATA PROVIDED BY CS2 GSI</div>
+  </div>
+ </Frame>;
+}
+
 export interface SceneProps {
  scene:SceneId;config:any;swapped:boolean;series?:SeriesState;sides?:ResolvedSides;
- players:LiveLike[];nameOf:(player:LiveLike,side?:string)=>string;
+ players:LiveLike[];nameOf:(player:LiveLike,side?:string)=>string;events?:{kills?:KillEvent[];rounds?:RoundEvent[]};
  // Host-clock time in ms (already corrected for the browser's clock skew) and the break timer's end.
  breakEndsAt:number|null;now:number;
 }
-export function SceneStage({scene,config,swapped,series,sides,players,nameOf,breakEndsAt,now}:SceneProps){
+export function SceneStage({scene,config,swapped,series,sides,players,nameOf,events,breakEndsAt,now}:SceneProps){
  const teams=sceneTeams(config,swapped), cards=useMemo(()=>mapCards(config),[config]);
  const wins=seriesScore(config,series,sides), score:[number,number]=teams[0].slot==='A'?[wins.a,wins.b]:[wins.b,wins.a];
  let body:React.ReactNode=null;
@@ -202,5 +231,7 @@ export function SceneStage({scene,config,swapped,series,sides,players,nameOf,bre
  else if(scene==='bracket') body=<BracketScene key="bracket" config={config} teams={teams}/>;
  else if(scene==='winner') body=<WinnerScene key="winner" config={config} teams={teams} series={series} sides={sides} cards={cards}/>;
  else if(scene==='break') body=<BreakScene key="break" config={config} teams={teams} cards={cards} breakEndsAt={breakEndsAt} now={now}/>;
+ else if(scene==='recap') body=<RoundRecapScene key="recap" config={config} teams={teams} sides={sides} events={events}/>;
+ else if(scene==='stats') body=<PlayerStatsScene key="stats" config={config} teams={teams} sides={sides} players={players}/>;
  return <AnimatePresence mode="wait">{body}</AnimatePresence>;
 }

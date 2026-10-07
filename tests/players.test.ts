@@ -151,7 +151,7 @@ test('every upload a saved config references is protected from pruning, portrait
   {id:'b',name:'B',logo:'https://cdn.example/b.png',players:[]},
  ]}),{maps:{de_mirage:{image:'uploads/radars/1-m.png'},de_nuke:{image:'radars/de_nuke.png'},de_x:undefined}});
  assert.deepEqual([...refs].sort(),['uploads/logos/1-a.png','uploads/maps/1-mirage.png','uploads/players/1-n.png','uploads/radars/1-m.png']);
- assert.deepEqual([...UPLOAD_DIRS],['logos','maps','radars','players']);
+ assert.deepEqual([...UPLOAD_DIRS],['logos','maps','radars','players','overlays']);
 });
 
 test('pruning deletes stale unreferenced files but spares references, drafts and .gitkeep',()=>{

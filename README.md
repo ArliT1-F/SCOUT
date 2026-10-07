@@ -28,33 +28,45 @@ Building it needs Windows (or those tools), Rust with `cargo install tauri-cli -
 Inno Setup 6.3+; what the wizard asks, where every file lands and what has and has not been verified
 are in [`installer/README.md`](installer/README.md).
 
-Routes: `/` and `/admin` operator panel; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
+Routes: `/` and `/admin` operator panel; `/?remote=1` touch-first remote console; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
 
-### Operator access from another machine
+### Operator access, roles and control handoff
 
-The host listens on every interface, so the panel already opens on a second laptop. What it will not do is let randoms on the venue network change the broadcast: every **mutation** (`/api/controls`, `/api/config`, `/api/layout`, `/api/radars`, `/api/upload`, `/api/obs*`) needs either a request from the host's own machine or the panel token. Every **read** stays open — an OBS browser source or a wall display on another PC has to load `/obs`, its assets, its WebSocket feed and `/api/status` with no credentials at all, and the output routes contain nothing the stream does not show anyway.
+SCOUT keeps the broadcast output public while protecting operator surfaces. `/obs`, `/game`, their uploaded assets, the public match snapshot and the wall-display feed need no credentials so the existing CS2/GSI/OBS setup continues to work. State-changing requests and private operator reads require either a trusted request from the host machine, a signed-in session, or a role-scoped token. The feed endpoint `POST /gsi` remains authenticated separately by the CS2 `GSI_TOKEN`.
 
-The host prints where the panel is reachable when it starts, and the token is in that link:
+The host prints where the panel is reachable when it starts, and the primary owner token is in that one-time link:
 
 ```text
 [panel] Remote control is ON — open one of these from the other machine. The link carries the token, once:
 [panel]   http://192.168.1.50:8080/?token=…
 ```
 
-Opening that link (or typing the token into the panel's unlock screen) trades it for an HttpOnly session cookie and a redirect that drops the token from the address bar and the history. The header then reads **REMOTE · <address>** with a **Sign out** button, and the panel behaves exactly as it does on the host machine. A browser that refuses the cookie can keep the token in `sessionStorage` and send it as `X-Scout-Token: <token>` (or `Authorization: Bearer <token>`) instead — same for `curl` and scripts. `GET /api/session` reports what the current request is (`authenticated`, `local`, `via`, `address`, `startedAt`, `expiresAt`) and never carries the token.
+Opening the link (or typing the token into the panel unlock screen) trades it for an HttpOnly session cookie and a redirect that drops the token from the address bar/history. `GET /api/session` describes the current request (`authenticated`, `local`, `via`, `role`, `operator`, `capabilities`, `address`, expiry) and never carries a secret. A browser that cannot keep the cookie can store its token in `sessionStorage` and send it as `X-Scout-Token` or `Authorization: Bearer`; native tools and Companion use the same header. Tokens must never go in query strings except the one-time startup link.
+
+| Role | Capability | Intended operator |
+| --- | --- | --- |
+| **Owner** | All capabilities; can issue/revoke operators and take over a live lease | Primary host operator |
+| **Producer** | `control` + `match-edit` | Scene, round, archive and recording operation |
+| **Designer** | `design` | Themes, layers, custom graphics, radar and event packages; no live control |
+| **Viewer** | Read-only | Talent, observers or clients reviewing the production |
+
+Issue individual tokens in **Operators & audit**. Each 192-bit secret is shown once and only its salted SHA-256 digest is persisted in ignored `config/operators.json`. Revocation immediately invalidates the token and closes its sessions. Never share the primary owner token with a Stream Deck/Companion; issue a dedicated Producer credential. The roles and the exact REST requests for Companion are documented in [`docs/COMPANION.md`](docs/COMPANION.md).
+
+Only one Producer/Owner controls live actions at a time. **Take control** creates a renewable 45-second lease; an action renews it. Another producer sees who owns it and must wait for release/expiry. The owner can explicitly take over. Claims, releases, takeovers, scene/control changes, design/config saves, recordings, archives, uploads, package movement and operator issue/revocation are recorded in the owner-visible audit trail under `recordings/` (bounded, rotating JSONL). The lease is intentionally memory-only and resets on host restart.
 
 | Variable | What it does |
 | --- | --- |
-| `SCOUT_PANEL_TOKEN` | The panel token. Without it one is generated per run and printed on the console — the only place the token is ever shown. It is never written to `config/`, never returned by an API and never logged, and it is compared in constant time. |
-| `SCOUT_REMOTE=off` | Remote control is refused everywhere; only the host machine can operate the panel. The overlay keeps working for every viewer. |
+| `SCOUT_PANEL_TOKEN` | Primary Owner token. Without it, one is generated per run. The host deliberately prints it once in the startup unlock link; protect that console output. It is never written to config or returned by an API, and routine request/audit logs omit it. |
+| `SCOUT_REMOTE=off` | Rejects remote panel sessions and tokens; local host operation still works, and public overlay output is unaffected. |
 | `SCOUT_REQUIRE_TOKEN=1` | Even the host machine has to unlock the panel. |
-| `SCOUT_ALLOWED_HOSTS` | Comma-separated names to accept as the operator's own — for a reverse proxy or tunnel that keeps its public name in the URL while rewriting `Host` (see below). |
+| `SCOUT_ALLOWED_HOSTS` | Comma-separated names accepted for a reverse proxy/tunnel that rewrites `Host`. |
 
-- A session lasts 12 hours of *use* (each request refreshes it), lives in memory only — restarting the host signs everyone out — and the least recently used one is dropped once 32 are open. A host that runs as more than one process (a serverless platform, a container fleet) should be given a fixed `SCOUT_PANEL_TOKEN` and rely on the header form: a session cookie only exists on the process that issued it, while the token is checked on every request.
-- Five wrong tokens from one address lock that address out for ten minutes, and the panel reports how many attempts are left. The token is 24 random bytes, so guessing was already hopeless; this only stops a LAN brute force from getting a try rate.
-- A request that *looks* local but names a public host is refused. Two things look like that: a proxy or tunnel next to the host (it connects from `127.0.0.1` while carrying the visitor's public name), and a page on `evil.com` whose DNS record points at the host's LAN address. Both are refused with `untrusted-host` unless the name is in `SCOUT_ALLOWED_HOSTS`. Mutations additionally require the `Origin` to match the host they were sent to, and a WebSocket handshake whose `Origin` names another site is rejected.
-- No TLS is added. On a plain-HTTP LAN the token is as private as the network it crosses — the same network that already carries the GSI feed. Keep the panel on a trusted LAN or put `nginx`/`caddy`/a tunnel in front of it with the name listed in `SCOUT_ALLOWED_HOSTS`; do not forward port 8080 to the internet.
-- **Verified here**: the live host is driven over HTTP from a second address in `tests/panel-live.test.ts` (refusals, the token link, the cookie and header sessions, sign-out, the lockout, the rebound-host case and the WebSocket handshakes), and the policy itself in `tests/auth.test.ts`. Not verified: a real second laptop on a real venue network, and a real reverse proxy.
+- A cookie session lasts 12 hours of use and lives in memory; restarting signs everyone out. There are at most 32 concurrent sessions. Header tokens are checked on every request, so Companion/native clients do not depend on a process-local cookie.
+- Five wrong tokens from one address lock that address for ten minutes. The host does not log the candidate token.
+- Public-host rebinding, cross-site mutations and WebSocket handshakes from a different site are refused. If a proxy rewrites `Host`, list only your own hostname in `SCOUT_ALLOWED_HOSTS`.
+- No TLS is added. On a plain-HTTP LAN the token is only as private as the network it crosses. Keep the panel on a trusted LAN/VPN or use a TLS reverse proxy; do not expose port 8080 to the public internet.
+- `GET /api/remote/state` is an authenticated Producer/Owner feedback endpoint; `POST /api/remote/action` is role- and lease-protected. Private operator/audit and event-pack export routes enforce their own capabilities. Public match/output reads remain intentionally public.
+- **Verified here**: the host is driven over HTTP from a second address in `tests/panel-live.test.ts`; tests cover refusals, one-time link/cookie, role-scoped tokens, producer lease/action, designer denials, authenticated Companion feedback, revocation, lockout, rebound-host and WebSocket-origin cases. Real venue networking/proxy TLS remains an on-site check.
 
 ### CS2 connection
 
@@ -82,11 +94,15 @@ The host prints the same story in its console: the expected URI and token source
 
 Packets are validated per subtree before merging (`server/schema.ts`, zod): every GSI block is optional, numbers that CS2 sends as strings (`"phase_ends_in":"71.4"`, `"health":"100"`) are coerced, empty enums like `round.win_team:""` delete the key instead of failing, and unknown fields/blocks pass through untouched so a CS2 update cannot break a live broadcast. A malformed field is dropped and counted — `gsi.subtreeIssues` on `/api/status`, logged at most once per 10 s — while the rest of the packet still merges. Validation never throws and never rejects a packet; `__proto__`, `constructor`, `prototype`, `auth`, `previously`, `added` and `removed` are stripped at every depth.
 
-### Recording and replaying a real feed
+### Replay Studio and session archive
 
-`LOG_GSI=1 npm run dev` writes every accepted payload to ignored `recordings/gsi-<timestamp>.jsonl` — one line per packet as `{"receivedAt":<ms>,"payload":{…}}`, with the token stripped. Logging is opt-in and a session file is not rotated: monitor disk usage or rotate externally. Slow WebSocket consumers are dropped and reconnect automatically.
+**Replay Studio** separates three tasks that should not be confused during an event:
 
-To capture on the observer machine: start the host with `LOG_GSI=1`, play a match so CS2 pushes (warmup plus one full round is plenty), and keep the file — `recordings/` is gitignored.
+- GSI recording is opt-in: start the host with `LOG_GSI=1`, or use the Producer-controlled recorder in the panel. Accepted payloads are written as JSONL with their auth token stripped; files rotate at 32 MiB and up to 12 captures are retained under ignored `recordings/`.
+- Load a local GSI JSONL file or a saved host capture in **Replay Studio**. It reconstructs snapshots locally, samples for preview, and plays/seeks/slows them down only in the operator dashboard preview. The replay never posts to `/gsi`, never changes `/obs`, and never overwrites the live host state. The safe local preview limit is 32 MiB and 100,000 lines.
+- **Session archive** is a separate manual capture of match identity and derived kill/round events. Start/end it from the producer panel; up to 40 match summaries persist in `recordings/matches.json`, with a 10,000-event cap per match. Browse/filter by the event timeline in the archive view and export one match as JSON. This is not a raw GSI recording.
+
+The developer CLI below is a different tool: it deliberately POSTs packets back into the target host for integration testing. **Never run it against a host that is on air**; it injects packets exactly as CS2 does.
 
 ```sh
 npm run replay -- recordings/gsi-<timestamp>.jsonl              # real time, recorded spacing
@@ -95,9 +111,7 @@ npm run replay -- recordings/<file>.jsonl --max-gap 2000        # skip long paus
 npm run replay -- recordings/<file>.jsonl --dry                 # print the plan, post nothing
 ```
 
-Replay posts each recorded payload back to `POST /gsi` with the host token (`--token`, else `GSI_TOKEN`, else `CHANGE_ME`). It stops with an explicit message on a token mismatch, on an unreachable host, or after three consecutive non-200 responses, and finishes by printing the host's revision delta — `0 merged` means the host already holds newer provider timestamps, so restart it before replaying an older recording. **Never replay against a host that is on air**: it injects packets exactly as CS2 does.
-
-A sanitized fixture with the same structure ships in `tests/fixtures/observer-mirage-nuke.jsonl` (invented names and SteamIDs; 30 packets covering warmup, a pistol round, a plant and defuse, halftime side swap and a map change). It drives `tests/fixtures.test.ts`, and `python3 tests/fixtures/generate.py` rebuilds it.
+A sanitized fixture with the same structure ships in `tests/fixtures/observer-mirage-nuke.jsonl` (invented names and SteamIDs; 30 packets covering warmup, a pistol round, a plant and defuse, halftime side swap and a map change). It drives the parser, event derivation and CLI tests; `python3 tests/fixtures/generate.py` rebuilds it.
 
 ### OBS
 
@@ -113,9 +127,9 @@ In LIVE scene add Game Capture for `cs2.exe`, then Browser Source:
 
 Use `http://127.0.0.1:8080/obs?checker=1` in a normal browser to verify transparency: it draws a checkerboard behind the canvas, and only the HUD panels should be filled. Never use the `?checker=1` URL as the OBS source.
 
-If the overlay still covers the game: confirm the source URL is `/obs` (not `/` or `/admin`), that Custom CSS is empty, and that the active scene is **Live game** — matchup, lineups, series, tree, winner and break are full-canvas graphics with their own background, and cover the game capture by design.
+If the overlay still covers the game: confirm the source URL is `/obs` (not `/` or `/admin`), that Custom CSS is empty, and that the active scene is **Live game** — matchup, lineups, series, tree, winner, break, round recap and player stats are full-canvas graphics with their own background, and cover the game capture by design.
 
-Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin, and the operator panel from another machine is covered in [Operator access from another machine](#operator-access-from-another-machine).
+Use browser preview URLs only for remotely inspecting this workspace. Local OBS uses the localhost URL above. Frontend API and WS connections are same-origin; remote operator authentication and output access are covered in [Operator access, roles and control handoff](#operator-access-roles-and-control-handoff).
 
 ### Team sides
 
@@ -167,7 +181,7 @@ GSI reports the countdown as it was when the packet was sent, so the HUD extrapo
 - `posX` / `posY` / `scale` are the values from the game's own `resource/overviews/<map>.txt` (the top-left corner of the overview in world units, and world units per overview pixel). The shipped file lists the current active-duty pool, dust2, overpass, train and vertigo; add a map by copying its overview values. A map without an entry has **no** radar and the toggle stays disabled with a hint — positions are never drawn against a guess.
 - `src/radar.ts` projects the live `allplayers[].position` through that calibration (`u = (x - posX) / scale / size`, `v = (posY - y) / scale / size`) and returns dots with side, alive state, heading and colour. Points outside the overview are dropped rather than clamped to a wrong place (nuke's lower level, players in the air), `forward` is accepted both as a yaw and as a vector, and a player without a usable position simply has no dot.
 - The radar renders live dots, the observed player with a heading arrow, the bomb marker once it is planted, and **thrown utility** from GSI's `grenades` block (already subscribed via `allgrenades` in the cfg): smokes, flashes, HEs, molotovs/incendiaries and decoys each get their own marker, and a smoke with effect time left or a burning molly draws bloomed while it lasts. Type names are matched across the variants CS2 builds report (`smoke`/`smokegrenade`, `frag`/`hegrenade`, `fire`/`inferno`/`molotov`), so an execute reads on the radar as it happens; anything unrecognized still gets a generic marker rather than vanishing. The **map image is optional**: `image` in `config/radars.json` points at a file and defaults to `public/radars/<map>.png` — drop any square 1:1 overview there (the nine active-duty maps ship pre-filled from the [cs2-map-icons](https://github.com/MurkyYT/cs2-map-icons) radar pack) or upload one from the panel. Without an image the panel draws a grid so positions and calibration can still be checked. Radar overviews are the radar's imagery only — the Matchup and Map series scenes show the thumbnails from `public/thumbs/` instead.
-- **Custom radars in the panel** — *Overlay settings → Custom radars* edits the whole file: upload or replace the image per map (stored under `public/uploads/radars/`, pruned when replaced), tune `posX`/`posY`/`scale`/`size`, and add maps outside the default pool. **Save radars** sends `PUT /api/radars`, which validates (zod, `server/radars.ts`), writes `config/radars.json` atomically and broadcasts it to every output view. The preview picks up uploaded images and calibration edits before saving, so dots can be tuned against the image live. The same pack's scene pictures — `images/thumbs` — ship resized in `public/thumbs/` as the default pictures for the Matchup and Map series scenes (see [Broadcast scenes](#broadcast-scenes)), while `images/<map>.png` (map badges) stay ordinary images you can upload per map in **Match setup**.
+- **Custom radars in the panel** — *Map radars → Custom radars* edits the whole file: upload or replace the image per map (stored under `public/uploads/radars/`, pruned when replaced), tune `posX`/`posY`/`scale`/`size`, and add maps outside the default pool. **Save radars** sends `PUT /api/radars`, which validates (zod, `server/radars.ts`), writes `config/radars.json` atomically and broadcasts it to every output view. The preview picks up uploaded images and calibration edits before saving, so dots can be tuned against the image live. The same pack's scene pictures — `images/thumbs` — ship resized in `public/thumbs/` as the default pictures for the Matchup and Map series scenes (see [Broadcast scenes](#broadcast-scenes)), while `images/<map>.png` (map badges) stay ordinary images you can upload per map in **Match setup**.
 - Unverified without a real observer machine: the calibration values themselves, and the grenade `type`/`effecttime` vocabulary (matched defensively across every known spelling; verify a thrown smoke blooms and clears with the real feed). Verify by watching a player walk a known route with `cl_radar` in game — the dot must follow the same path on the same callouts.
 
 ### Phase-based visibility
@@ -205,7 +219,7 @@ The admin panel fully owns `config/teams.json`: **Teams & players**, **Match set
 - **Map series** — event name, stage, best-of format, MR and OT length, plus the map list (name, pick, status, score) with an uploaded picture per map shown on the Map series scene and the series panel; a map without an upload uses the shipped thumbnail (`public/thumbs/`) on the scene. These are operator series cards; live round scores still come from GSI.
 - **Tournament tree** — an editable single-elimination bracket (rounds → matches → seeds with team bindings, map scores, status). Setting a match winner writes the winner forward positionally (match *i* of round *r* feeds match ⌊i/2⌋ of round *r+1*) both in the panel and in the host's normalization, so the tree can never disagree with its own results. The same tree renders as the **Tournament tree** broadcast scene.
 
-Uploads go through `POST /api/upload` as base64 data URLs (≤ 5 MB, image MIME whitelist) and are stored under `public/uploads/logos/`, `maps/`, `players/` and `radars/` — gitignored, served at `/uploads/...` in dev and production, and pruned automatically when a saved configuration no longer references them. A file uploaded in the last 15 minutes is never pruned, so a portrait that is waiting for its **Save** click survives someone else's save. Config keeps only the asset path.
+Uploads go through `POST /api/upload` as base64 data URLs (≤ 5 MB, image MIME whitelist) and are stored under `public/uploads/logos/`, `maps/`, `players/`, `radars/` and `overlays/` — gitignored, served at `/uploads/...` in dev and production, and pruned automatically when a saved configuration no longer references them. A file uploaded in the last 15 minutes is never pruned, so a portrait that is waiting for its **Save** click survives someone else's save. Config keeps only the asset path.
 
 ### Player photos and aliases
 
@@ -221,7 +235,7 @@ CS2 keys `allplayers` by SteamID and does not repeat the id inside each entry; t
 
 ### Broadcast scenes
 
-Matchup, lineups, map series, tournament tree, winner and break are full-canvas 1920 × 1080 graphics with animated entrances, drawn from `config/teams.json` — so they are correct before CS2 is even running. A scene on air owns the canvas: the live scoreboard, footer and SIGNAL LOST banner step aside. While **Arrange** is on, the live layout is always shown so the drag handles sit on real elements.
+Matchup, lineups, map series, tournament tree, winner, break, round recap and player stats are full-canvas 1920 × 1080 graphics with animated entrances, drawn from `config/teams.json` — so they are correct before CS2 is even running. A scene on air owns the canvas: the live scoreboard, footer and SIGNAL LOST banner step aside. While **Arrange** is on, the live layout is always shown so the drag handles sit on real elements.
 
 | Scene | Shows | Comes from |
 | --- | --- | --- |
@@ -231,6 +245,8 @@ Matchup, lineups, map series, tournament tree, winner and break are full-canvas 
 | Tournament tree | the bracket with connector lines, team logos, winners highlighted, a LIVE tab on the running match | bracket |
 | Winner | the champion, final score, per-map results, the starting five | see below |
 | Break | your wording, a countdown, and the next map | `config.break`, `controls.breakEndsAt` |
+| Round recap | Most recent confirmed GSI round result, map/round, score, reason and up to five matching kills | Derived round and kill events; no inferred winner |
+| Player stats | Live K / D / A / MVP comparison grouped by resolved team side | GSI `allplayers[].match_stats` |
 
 - **Series score**: the operator's recorded map results win; before any are entered the live GSI series score is used, credited through the resolved sides (a stand-in side has no team to credit).
 - **Winner**: the live GSI series winner, then recorded results, then the tree's final, then a finished map. With nothing decided it says so rather than guessing.
@@ -254,6 +270,27 @@ Behaviour worth knowing:
 - The address must be `ws://` or `wss://` and must not contain credentials. Settings live in ignored `config/obs.json`. API: `GET`/`PUT /api/obs` and `POST /api/obs/reconnect`, `/api/obs/switch`, `/api/obs/refresh-overlay` (same-origin only, like the rest of the operator API).
 - **Verification**: the bridge is tested over real WebSockets against a mock OBS written from the protocol document, including the document's worked authentication example, wrong and missing passwords, a kicked session, a refused connection, a dead socket and hostile frames. It has **not** been run against a real OBS Studio.
 
+### Overlay Studio and reusable themes
+
+**Overlay Studio** is a versioned, host-persisted design workspace (`config/overlay.json`) for owner/designer accounts. It edits the renderer used by `/obs`, `/game` and the live admin preview—not a separate mock:
+
+- Switch between **Layers** and **Theme & Style**. Every built-in layer can be renamed, shown/hidden, deleted/re-added, re-stacked, resized, moved, scaled, recoloured and routed to selected scenes. The live widgets include the event header, scoreboard, radar, killfeed, both rosters, lower-third, economy, footer, signal-loss and round/phase graphics.
+- Add custom text, image, shape and live-clock graphics. Text can use `{event}`, `{stage}`, `{map}`, `{phase}`, `{round}`, `{clock}`, `{score.ct}`, `{score.t}`, `{team.ct}`, `{team.t}` and `{series.ct}` placeholders. Uploads are local, MIME-checked files under `public/uploads/overlays/` and are pruned only after references are removed and the grace period expires.
+- Drag overlay layers directly on the scaled preview, or enter exact 1920 × 1080 geometry. Changes stay in the editor draft until **Publish to outputs**; the legacy **Arrange** handles remain available for the original position-only layout file.
+- Choose from art-directed SCOUT, Graphite/Broadcast, Arena/Cobalt, Crimson/Finals and Clean/Minimal starting systems. Tune nine palette tokens, display/UI fonts, panel material, information density, opacity, radius, border, motion, glow and scene texture. Save up to 20 named reusable presets. Theme presets and custom layers are included in event packs. Opacity is applied to HUD panels only; `<html>` and `<body>` remain transparent on output routes.
+
+The panel provides **on-air readiness** checks for the host, CS2/GOTV feed, team-side binding, current radar, optional OBS connection, enabled layers and match setup. The report is a production aid rather than a replacement for checking the actual OBS source and observer machine.
+
+### Versioned event packages
+
+Open **Event packages** to export or import a `scout-event-pack` v1 JSON manifest. It carries the match/team/roster/map/bracket config, radar calibration, saved layout, theme presets, overlay layers and referenced uploaded artwork. It excludes panel/operator tokens, audit history, OBS WebSocket passwords and machine-local OBS settings. The package has a 100-asset, 50 MiB unpacked-artwork ceiling; import validates schemas and image bytes, writes fresh upload paths, remaps every reference and publishes the included event state. Import replaces the host's current event setup and overlay design, so the UI asks for confirmation first. Export/import requires owner or designer permission; the import action is audited.
+
+### Companion and touch remote
+
+The touch console lives at `/?remote=1`, is designed for phone/tablet taps and uses the same authenticated control lease as the full panel. It exposes scene buttons (including recap and stats), graphics toggles, side swap and timed breaks; the owner can take over an active lease. Return to the full dashboard with **Full panel**.
+
+For Bitfocus Companion or other HTTP button controllers, use a dedicated Producer token and the authenticated `GET /api/remote/state` feedback plus `POST /api/remote/action` actions. The state response includes the active scene, controls, lease owner/expiry, recorder/archive status, available scene IDs and whether the caller currently controls the lease. Actions are audited and return updated feedback. See [`docs/COMPANION.md`](docs/COMPANION.md) for headers, button payloads, supported actions, recommended feedback and network precautions.
+
 ### Windows overlay shell (Tauri v2, optional)
 
 `src-tauri/` is a small Windows app that shows `/game` in a transparent, click-through, always-on-top window laid exactly over the CS2 window — an alternative to the OBS Browser Source for when the overlay should appear on the observer's own screen.
@@ -266,26 +303,26 @@ Behaviour worth knowing:
 - Build and run: install Rust and `cargo install tauri-cli --version "^2"`, then `npm run shell:build` (or `npm run shell:dev`). Options, environment variables and limits are in [`src-tauri/README.md`](src-tauri/README.md).
 - **Verification**: the shell's decisions (`src-tauri/core`) have unit tests, and the Win32 layer is executed against a fake `user32` (`npm run shell:test:win32`). The Tauri glue was type-checked against the documented Tauri 2.12 API. The shell has **not** been compiled against Tauri or run on Windows hardware — that has to happen on the observer machine.
 
-### Operator controls
+### Operator controls, archives and handoff
 
-Scene selection (live, matchup, lineups, map series, tournament tree, winner, break), killfeed, lower-third, economy, technical pause, team display swap and the break countdown are saved to ignored `config/operator.json` and broadcast to all connected views. The panel header names the session driving the broadcast — **LOCAL SESSION** on the host machine, **REMOTE · <address>** for one unlocked from another machine, with **Sign out** — so an operator can always see whether someone else is holding the panel (see [Operator access from another machine](#operator-access-from-another-machine)). Radar images are optional: see [Radar](#radar). Teams, rosters, maps and the bracket live in `config/teams.json`, edited from the panel as described above. Demo preview is local to the operator and never modifies server state.
+The Overview and **Broadcast scenes** tabs expose the active scene, radar/killfeed/lower-third/economy switches, technical pause, team-side swap, a break countdown and OBS scene sync. Recap and stats are selectable scenes alongside the existing map/match scenes. Producer actions save to ignored `config/operator.json` and broadcast to all output views; design and match configuration are protected by their own role capabilities.
 
-### Repositioning the overlay
+The header names the current operator and role. The Overview shows who holds the 45-second control lease, when it expires, and the owner takeover/release actions. The **Operators & audit** owner workspace issues/revokes Producer, Designer and Viewer tokens, lists active sessions and shows the bounded audit history. **Session archive** manually records a match identity and derived event timeline; **Replay Studio** locally previews recordings without changing the live GSI state. **On-air readiness** is available on Overview. See [Operator access, roles and control handoff](#operator-access-roles-and-control-handoff) for server-side enforcement and limits.
 
-*Overlay settings → Arrange* (the move icon on the preview) turns the preview into a drag surface: the event header, scoreboard, radar, killfeed, both rosters, player lower-third, economy bar and footer each get a dashed handle. Drag them where you want them, then **Save layout**:
+### Repositioning and editing the overlay
 
-- Positions are top-left coordinates on the 1920 × 1080 canvas, stored in ignored `config/layout.json` and pushed by `PUT /api/layout` to every connected view — the preview and both output routes follow, no restart. An entry with no stored position keeps its CSS default.
-- **Reset positions** restores the shipped defaults (an empty `elements` map), **Discard** drops unsaved moves. Nothing moves on air until **Save layout**.
-- Dragging measures against the scaled `.hud` box, so the scaled preview and the full-size output agree to the pixel, and every element is clamped to keep a visible strip on-canvas so a panel can never be dragged out of reach behind the overflow clip.
-- Transient centred graphics (SIGNAL LOST, phase banners and cards, round results, the full-screen broadcast scenes) are not movable by design — they anchor to the centre of the frame.
+**Overlay Studio → Layers** is the main editor for all HUD widgets. Select a layer to set identity, geometry, typography, colour/fill, opacity, stack level and exact scene visibility; add, remove, hide and re-add built-ins; or add custom text, image, shape and clock widgets. Preview changes stay local until you publish the overlay. **Theme & Style** manages reusable broadcast identities and saved presets.
 
-## Scope / remaining work
+The Move icon on the shared preview toggles **Arrange**. It gives direct drag handles for the original CSS-anchored event header, scoreboard, radar, killfeed, rosters, lower-third, economy and footer; custom graphics are draggable too. **Save layout** persists those legacy positions in ignored `config/layout.json`. Precise geometry for any other built-in overlay layer (including centered phase/result widgets) is available in the Overlay Studio inspector and publishes through `config/overlay.json`. Both files are versioned separately so an older position-only setup continues to load.
 
-Every stage the specification listed now exists: player photos and alias overrides, rich broadcast scenes, the optional OBS WebSocket bridge and the Windows Tauri v2 shell. `/game` is still a plain browser renderer; the shell is what makes it a native window.
+The preview uses the real renderer on a 1920 × 1080 canvas. The Browser Source background remains transparent; full-screen scenes intentionally paint their own art direction. The theme's panel opacity, colours, typography, surface treatment and motion affect the visual layer without adding an opaque frame behind the game.
 
-This is **not yet tournament-production verified**.
+## Scope and verification
 
-- **Verified here**: synthetic-state, configuration, scene-derivation, OBS-protocol (against a protocol-faithful mock) and shell-decision tests; `tsc` and the production build; and the rendered HUD, scenes and panel, checked as headless-Chromium screenshots against the real host driven through its HTTP API and the recorded-feed replay.
-- **Not verifiable here**: a real CS2 observer, a real OBS Studio and Windows hardware were unavailable. Actual 20 Hz GSI compatibility, transparent OBS compositing, the OBS bridge against a real obs-websocket, and the shell's behaviour on Windows (a transparent, click-through, non-activating WebView2 window; F8; following CS2) must be verified on the observer machine. The shell could not be compiled against Tauri in this environment.
+All ten requested operator improvements are implemented and integrated: on-air preflight, an isolated local replay studio, searchable match archives, producer-selected recap and player-stat scenes, reusable broadcast themes, authenticated Companion actions/feedback, owner-managed operator roles and lease/audit, versioned secret-free event packages, and the touch-first remote console. The complete editable overlay layer stack (add/edit/remove/reorder/scene-route), custom graphics and theme system are documented under [Overlay Studio and reusable themes](#overlay-studio-and-reusable-themes). `/game` remains a plain browser renderer; the optional shell is what makes it a native click-through window.
 
-Security: binds `0.0.0.0` so the panel can be driven from another machine, and every mutation then needs either a request from the host machine or the panel token (see [Operator access from another machine](#operator-access-from-another-machine)). Run it on a trusted LAN and restrict firewall ingress; don't expose the service to the public internet, and put TLS in front of it if you do. The token and the OBS password are never part of the configuration, the API or a log line — the OBS password only ever comes from `OBS_WS_PASSWORD`. Not verified here: TLS termination in front of the host, and a real second machine on a real venue network.
+**Code and test verification completed in this checkout:** `npx tsc --noEmit`, `npm test` (204 passing tests, including live-host RBAC/Companion/lease checks and event-pack restore), and `npm run build` all pass. Vite emits existing `framer-motion` module-directive and >500 kB chunk-size warnings; the production build still completes successfully. An HTTP smoke check returned 200 for the operator, `/obs`, `/game`, touch remote and required APIs, and checked that the role-authenticated remote feedback responds. That confirms routing/API startup, not visual rendering: this environment had no browser binary and the Chromium download for Playwright failed, so the editor, theme appearance and `/obs` alpha have **not** had a screenshot/manual-browser check. The Agent Mode preview is available for review.
+
+**Still requires the actual tournament machine:** a real CS2 observer/GOTV feed and 20 Hz behavior, real OBS Browser Source alpha-compositing after theme changes, real `obs-websocket` interaction, and (if selected) the Tauri shell on Windows hardware. The HTTP endpoint and bridge tests use local/in-process fixtures; they cannot prove venue-network reliability or a complete real-match production rehearsal. Do an on-site preflight and confirm the transparent `/obs` source before going on air.
+
+Security: the service binds `0.0.0.0` so the panel and output can be reached on the LAN. Public overlay reads stay open by design; private operator reads and state-changing requests enforce their role/session rules. Run on a trusted LAN/VPN, restrict firewall ingress, do not expose port 8080 directly to the public internet, and use TLS when crossing untrusted networks. The panel/operator/GSI tokens and OBS password are never included in an event package; the OBS password only comes from `OBS_WS_PASSWORD`.

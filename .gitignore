@@ -6,6 +6,8 @@ recordings/*
 config/operator.json
 config/layout.json
 config/obs.json
+config/operators.json
+config/overlay.json
 public/uploads/*
 !public/uploads/.gitkeep
 # Windows overlay shell (src-tauri): build output and Tauri's generated schemas

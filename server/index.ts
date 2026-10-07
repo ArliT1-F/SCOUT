@@ -2,7 +2,6 @@ import express from 'express';
 import {createServer} from 'node:http';
 import {WebSocketServer,WebSocket} from 'ws';
 import {readFile,writeFile,rename,mkdir,readdir,unlink} from 'node:fs/promises';
-import {createWriteStream} from 'node:fs';
 import path from 'node:path';
 import {z} from 'zod';
 import {MatchStore,FeedMonitor,type TokenSource} from './state.js';
@@ -11,12 +10,18 @@ import {SideTracker,configSides} from './sides.js';
 import {seriesState} from './series.js';
 import {configSchema,normalizeConfig,type ScoutConfig} from './config.js';
 import {layoutSchema,type LayoutConfig} from './layout.js';
+import {defaultOverlay,overlaySchema,type OverlayConfig} from './overlay.js';
+import {OperatorDirectory} from './operators.js';
+import {ControlLease,type LeasePrincipal} from './lease.js';
+import {AuditTrail} from './audit.js';
+import {GsiRecorder,MatchArchiveStore} from './recordings.js';
+import {createEventPack,eventPackSchema,restoreEventPack} from './packs.js';
 import {radarsSchema} from './radars.js';
 import {UPLOAD_DIRS,referencedUploads,isPrunable} from './uploads.js';
-import {controlsSchema,defaultControls,type Controls} from './controls.js';
+import {controlsSchema,defaultControls,SCENE_IDS,type Controls} from './controls.js';
 import {ObsBridge} from './obs.js';
 import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './obs-config.js';
-import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,type PanelSessionView} from './auth.js';
+import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
 import {appPath} from './runtime.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
@@ -26,12 +31,18 @@ const port=Number(process.env.PORT)||8080;
 // this machine, or a session unlocked with the panel token. With no SCOUT_PANEL_TOKEN the host
 // generates one per run and prints it here — the console is the only place it is ever shown.
 const panelToken=process.env.SCOUT_PANEL_TOKEN?.trim()||'';
+let operatorStore=new OperatorDirectory();
+try{operatorStore=new OperatorDirectory(JSON.parse(await readFile('config/operators.json','utf8')))}catch(error:any){if(error?.code!=='ENOENT')console.warn('[operators] config/operators.json is invalid — using an empty operator directory:',error.message)}
 const panel=new PanelAuth({
- token:panelToken,
+ token:panelToken,operatorTokens:operatorStore.credentials,
  remoteEnabled:process.env.SCOUT_REMOTE?.toLowerCase()!=='off',
  requireLocalToken:process.env.SCOUT_REQUIRE_TOKEN==='1',
  allowedHosts:process.env.SCOUT_ALLOWED_HOSTS,
 });
+const lease=new ControlLease();
+const audit=new AuditTrail('recordings');await audit.load();
+const recorder=new GsiRecorder('recordings');await recorder.initialize(process.env.LOG_GSI==='1');
+const archives=new MatchArchiveStore('recordings/matches.json');await archives.load();
 if(panelToken&&panelToken.length<16) console.warn(`[panel] SCOUT_PANEL_TOKEN is only ${panelToken.length} characters — use a long random token when the network is not yours alone.`);
 if(panel.tokenSource==='generated') console.log('[panel] No SCOUT_PANEL_TOKEN set, so this run has its own token. Set the variable to keep one token across restarts.');
 if(panel.remoteEnabled){
@@ -40,7 +51,8 @@ if(panel.remoteEnabled){
  for(const base of nearby.length?nearby:[`http://localhost:${port}`]) console.log(`[panel]   ${base}/?token=${encodeURIComponent(panel.token)}`);
  if(!nearby.length) console.log('[panel]   (no LAN address found — connect to this machine through its own address)');
 } else console.log('[panel] Remote control is OFF (SCOUT_REMOTE=off): only a request from this machine can change the broadcast.');
-// Only the *source* of the token is ever recorded — the token value itself is never stored or logged.
+// The token source is reported in status. The value appears once in the intentional startup unlock link,
+// but is not persisted or repeated in request and audit logs.
 const tokenSource:TokenSource=process.env.GSI_TOKEN?'env':'default';
 const feed=new FeedMonitor(tokenSource,port);
 // Operator configuration (teams, rosters, map series, tournament tree) is loaded through the same
@@ -64,6 +76,10 @@ let layout:LayoutConfig={elements:{}};
 // A missing file is the normal first-run state (the file is gitignored and the CSS defaults apply),
 // so only a file that exists but cannot be parsed is worth a warning.
 try {layout=layoutSchema.parse(JSON.parse(await readFile('config/layout.json','utf8')))} catch (error:any) {try{await readFile('config/layout.json');console.warn('[layout] config/layout.json is invalid — the CSS defaults stay in use:',error.message)}catch{}}
+// Overlay Studio state is versioned independently from the legacy position-only layout, so saved
+// themes, layers and custom graphics can evolve without breaking older layout.json files.
+let overlay:OverlayConfig=defaultOverlay();
+try{overlay=overlaySchema.parse(JSON.parse(await readFile('config/overlay.json','utf8')))}catch(error:any){if(error?.code!=='ENOENT')console.warn('[overlay] config/overlay.json is invalid — using the production defaults:',error.message)}
 // Team logos, map pictures, player portraits and radar images are operator uploads. They live under
 // public/uploads/ (gitignored) and are stored as plain image files referenced by path from
 // config/teams.json or config/radars.json.
@@ -74,6 +90,7 @@ const UPLOAD_KINDS:Record<string,{dir:string;exts:Record<string,string>}>={
  map:{dir:'maps',exts:IMAGE_EXTS},
  radar:{dir:'radars',exts:IMAGE_EXTS},
  player:{dir:'players',exts:IMAGE_EXTS},
+ overlay:{dir:'overlays',exts:IMAGE_EXTS},
 };
 for(const dir of UPLOAD_DIRS) await mkdir(path.join(UPLOAD_ROOT,dir),{recursive:true});
 // ---- The gate in front of every mutation. It is deliberately path/method based rather than a list of
@@ -89,13 +106,48 @@ function isProtected(req:express.Request){
 // and a name the operator listed (a proxy that rewrites Host) is treated as the operator's own.
 function sameOrigin(req:express.Request){return originTrusted(req.get('origin'),req.get('host'),panel.allowedHosts)}
 function panelRequest(req:express.Request){return {address:req.socket.remoteAddress,host:req.get('host'),cookie:req.get('cookie'),headers:req.headers}}
+function privateRead(req:express.Request,res:express.Response,capability:PanelCapability){
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site operator requests are refused.',code:'untrusted-origin'});return false}
+ const decision=panel.authorize(panelRequest(req));
+ if(!decision.ok){res.status(decision.status).json({error:decision.message,code:decision.code});return false}
+ res.locals.access=decision;return permit(res,capability);
+}
 app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
  if(!isProtected(req)) return next();
  if(!sameOrigin(req)){res.status(403).json({error:'Cross-site operator requests are refused. Open the panel itself.'});return}
  const decision=panel.authorize(panelRequest(req));
- if(decision.ok) return next();
+ if(decision.ok){res.locals.access=decision;return next()}
  res.status(decision.status).json({error:decision.message,code:decision.code,attemptsLeft:decision.attemptsLeft});
 });
+function accessPrincipal(res:express.Response):Principal{return res.locals.access?.principal||{id:'system',name:'SCOUT system',role:'owner'}};
+function permit(res:express.Response,capability:PanelCapability){
+ const principal=accessPrincipal(res);
+ if(hasCapability(principal.role,capability))return true;
+ res.status(403).json({error:`${capability} permission is required. Your role is ${principal.role}.`,code:'insufficient-role',capability,role:principal.role});return false;
+}
+function ownerOnly(res:express.Response){
+ if(accessPrincipal(res).role==='owner')return true;
+ res.status(403).json({error:'Owner access is required for this operation.',code:'insufficient-role',role:accessPrincipal(res).role});return false;
+}
+function leaseControl(req:express.Request,res:express.Response,force=false){
+ const principal=accessPrincipal(res);const result=lease.claim(principal,force);
+ if(!result.ok){res.status(result.code==='control-role-required'?403:423).json({error:result.error,code:result.code,lease:result.lease});return false}
+ audit.record(principal,'control.lease.claim',force?'owner takeover':'broadcast control claimed');
+ broadcast();return true;
+}
+function requireControl(req:express.Request,res:express.Response){
+ const principal=accessPrincipal(res);const result=lease.renew(principal);
+ if(!result.ok){res.status(result.code==='control-role-required'?403:423).json({error:result.error,code:result.code,lease:result.lease});return false}
+ return true;
+}
+function releaseControl(req:express.Request,res:express.Response,force=false){
+ const principal=accessPrincipal(res);const result=lease.release(principal,force);
+ if(!result.ok){res.status(423).json({error:result.error,code:result.code,lease:result.lease});return false}
+ audit.record(principal,'control.lease.release',force?'owner released active controller':'broadcast control released');broadcast();res.json({lease:result.lease});return true;
+}
+async function saveOperatorDirectory(){
+ await mkdir('config',{recursive:true});await writeFile('config/operators.json.tmp',operatorStore.serialize());await rename('config/operators.json.tmp','config/operators.json');panel.setOperatorTokens(operatorStore.credentials);
+}
 // `?token=…` is the link the host prints: it becomes a cookie and a redirect, so the token never
 // stays in the address bar, in the browser history or in a Referer sent to another origin (the
 // panel loads its fonts from one).
@@ -121,9 +173,10 @@ app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
 });
 // The upload body is a base64 data URL, so this route gets its own larger JSON parser before the
 // 1 mb global limit applies to the GSI hot path.
-const uploadSchema=z.object({kind:z.enum(['logo','map','radar','player']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
+const uploadSchema=z.object({kind:z.enum(['logo','map','radar','player','overlay']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
 app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'design'))return;
  const parsed=uploadSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Expected {kind, name, data} with a base64 image data URL'});return}
  const {kind,name,data}=parsed.data;
@@ -137,6 +190,7 @@ app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
  const file=`${Date.now()}-${slug}.${ext}`, dir=path.join(UPLOAD_ROOT,spec.dir);
  await mkdir(dir,{recursive:true});
  await writeFile(path.join(dir,file),buffer);
+ audit.record(accessPrincipal(res),'asset.upload',`uploads/${spec.dir}/${file} · ${buffer.length} bytes`);
  res.json({path:`uploads/${spec.dir}/${file}`});
 });
 // Uploaded assets must be reachable in production too, where the Vite public/ copy in dist/ is a
@@ -148,6 +202,8 @@ app.use('/radars',express.static('public/radars'));
 // Scene thumbnails (public/thumbs/<map>.png) are replaced the same way — dropped in mid-event —
 // so they get a route of their own instead of relying on the build-time copy in dist/.
 app.use('/thumbs',express.static('public/thumbs'));
+// Event packs include locally uploaded, validated artwork; only this route gets a larger parser.
+app.use('/api/pack/import',express.json({limit:'70mb'}));
 app.use(express.json({limit:'1mb'}));
 // The WebSocket carries the same snapshot the public overlay renders, so it stays readable — but a
 // handshake from another site is refused: no legitimate cross-site client exists, and a rebound
@@ -165,7 +221,7 @@ server.on('upgrade',(req,socket,head)=>{
  }
  wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws,req));
 });
-function snapshot(session?:PanelSessionView){return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{})}}
+function snapshot(session?:PanelSessionView){const active=archives.active;return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,overlay,lease:lease.view(session?.principalId||undefined),recording:recorder.status,archive:active?{id:active.id,name:active.name,startedAt:active.startedAt,eventCount:active.events.length}:null,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{})}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 // The first snapshot of a connection carries *that* connection's session view, so the panel knows
 // whether it is local, remote, authenticated and when its session expires without a second request.
@@ -189,14 +245,50 @@ app.post('/api/session',(req,res)=>{
   return;
  }
  console.log(`[panel] remote session opened from ${attempt.session.address} (${attempt.session.userAgent||'unknown client'}) — ${panel.sessionCount} active`);
+ audit.record(attempt.session.principal,'session.unlock',`${attempt.session.address} · ${attempt.session.principal.role}`);
  res.setHeader('Set-Cookie',attempt.cookie);
  res.json(panel.view({...panelRequest(req),headers:{},cookie:`${PANEL_COOKIE}=${attempt.session.id}`}));
 });
 app.delete('/api/session',(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ const current=panel.view(panelRequest(req));
+ if(current.principalId&&current.role){const principal={id:current.principalId,name:current.operator,role:current.role};if(current.role==='owner')lease.release(principal);audit.record(principal,'session.logout',`${current.address} · ${current.via||'session'}`)}
  if(panel.logout(cookieValue(req.get('cookie'),PANEL_COOKIE))) console.log(`[panel] a remote session ended — ${panel.sessionCount} active`);
  res.setHeader('Set-Cookie',clearedCookie(requestIsSecure(req.headers)));
  res.json(panel.view({...panelRequest(req),headers:{},cookie:''}));
+});
+const operatorInput=z.object({label:z.string().trim().min(1).max(64),role:z.enum(['producer','designer','viewer'])}).strip();
+app.get('/api/operators',(req,res)=>{
+ if(!privateRead(req,res,'manage-operators'))return;
+ res.json({operators:operatorStore.list(),sessions:panel.activeSessions()});
+});
+app.post('/api/operators',async(req,res)=>{
+ if(!permit(res,'manage-operators'))return;
+ const parsed=operatorInput.safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Provide an operator name and role (producer, designer, or viewer).'});return}
+ try{const created=operatorStore.issue(parsed.data);await saveOperatorDirectory();audit.record(accessPrincipal(res),'operators.issue',`${created.operator.label} · ${created.operator.role}`);res.json(created)}catch(error:any){res.status(400).json({error:error.message||'Could not issue operator access'})}
+});
+app.delete('/api/operators/:id',async(req,res)=>{
+ if(!permit(res,'manage-operators'))return;
+ const id=String(req.params.id||'');if(!operatorStore.revoke(id)){res.status(404).json({error:'Active operator not found'});return}
+ try{await saveOperatorDirectory();audit.record(accessPrincipal(res),'operators.revoke',id);res.json({ok:true,operators:operatorStore.list()})}catch{res.status(500).json({error:'Could not persist operator revocation'})}
+});
+app.get('/api/lease',(req,res)=>{
+ const current=panel.view(panelRequest(req));res.json({lease:lease.view(current.principalId||undefined)});
+});
+app.post('/api/lease',(req,res)=>{
+ if(!permit(res,'control'))return;
+ const parsed=z.object({force:z.boolean().optional().default(false)}).safeParse(req.body||{});if(!parsed.success){res.status(400).json({error:'Invalid lease request'});return}
+ if(parsed.data.force&&accessPrincipal(res).role!=='owner'){res.status(403).json({error:'Only an owner can take over an active control lease.',code:'insufficient-role'});return}
+ if(!leaseControl(req,res,parsed.data.force))return;res.json({lease:lease.view(accessPrincipal(res).id)});
+});
+app.delete('/api/lease',(req,res)=>{
+ if(!permit(res,'control'))return;
+ const force=req.query.force==='1';if(force&&accessPrincipal(res).role!=='owner'){res.status(403).json({error:'Only an owner can release another operator’s lease.',code:'insufficient-role'});return}
+ releaseControl(req,res,force);
+});
+app.get('/api/audit',(req,res)=>{
+ if(!privateRead(req,res,'view-audit'))return;
+ const count=Math.min(1000,Math.max(1,Number(req.query.limit)||200));res.json({entries:audit.list(count)});
 });
 // ---- Optional OBS Studio bridge (server/obs.ts). Nothing here can affect GSI ingest or the overlay: the bridge only
 // connects outward, every failure stays inside its own status, and with it off no socket is ever opened.
@@ -214,8 +306,6 @@ const obs=new ObsBridge({
  onProgramScene:name=>{const next=planObsToScout(obsConfig,name,controls.scene);if(next) saveControls({...controls,scene:next}).catch(()=>{})},
 });
 obs.configure(obsConfig);
-let raw:ReturnType<typeof createWriteStream>|undefined;
-if(process.env.LOG_GSI==='1'){await mkdir('recordings',{recursive:true});raw=createWriteStream(`recordings/gsi-${Date.now()}.jsonl`,{flags:'a'});raw.on('error',error=>{console.error('GSI recording disabled:',error.message);raw=undefined})}
 app.post('/gsi',(req,res)=>{
  if(req.body?.auth?.token!==(process.env.GSI_TOKEN||'CHANGE_ME')){
   // ~20 Hz of rejects would flood the console, so the reason is logged at most once per 10 s.
@@ -233,23 +323,79 @@ app.post('/gsi',(req,res)=>{
  if(report.first) console.log(`[gsi] first packet accepted — blocks: ${Object.keys(feed.blocks).join(', ')||'(none)'}${feed.provider?', provider '+feed.provider:''}`);
  if(report.firstAllplayers) console.log(`[gsi] allplayers block received (${feed.allplayers} player${feed.allplayers===1?'':'s'}) — observer mode confirmed`);
  if(report.observerGap) console.warn(`[gsi] ${feed.accepted} packets accepted but no allplayers block yet — CS2 is playing, not spectating. Scoreboard and clock will work; rosters and killfeed stay empty until you join as observer or GOTV.`);
- if(raw && raw.writableLength<1e6) raw.write(JSON.stringify({receivedAt:Date.now(),payload})+'\n');
+ recorder.write(Date.now(),payload);
  const ingested=store.ingest(payload);
  // Recovered subtrees are normal (CS2 empties fields between rounds), so they are counted and logged
  // at most once per 10 s instead of once per packet.
  if(ingested){const derived=events.observe(store.state,Date.now(),ingested.reset);
-  for(const kill of derived.kills) console.log(`[events] round ${kill.round+1}: ${kill.killerName||'unknown'} killed ${kill.victimName}${kill.headshot?' (headshot)':''}`);
-  if(derived.ended) console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`);
+  for(const kill of derived.kills){archives.addKill(kill);console.log(`[events] round ${kill.round+1}: ${kill.killerName||'unknown'} killed ${kill.victimName}${kill.headshot?' (headshot)':''}`)}
+  if(derived.ended){archives.addRound(derived.ended);console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`)}
   const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}
  else if(feed.late().log) console.warn(`[gsi] ignoring a packet older than the current state (${feed.rejectedLate} ignored). Expected while replaying a recording against a warm host, or when a second observer pushes with an older clock.`);
  res.sendStatus(200); broadcast();
 });
 app.get('/api/status',(req,res)=>res.json(snapshot(panel.view(panelRequest(req)))));
+app.get('/api/pack/export',async(req,res)=>{
+ if(!privateRead(req,res,'design'))return;
+ try{const pack=await createEventPack(config,radars,layout,overlay,UPLOAD_ROOT);const slug=(config.event.name||'SCOUT-event').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,48)||'scout-event';audit.record(accessPrincipal(res),'event-pack.export',`${slug} · ${pack.assets.length} assets`);res.setHeader('Content-Disposition',`attachment; filename="${slug}.scoutpack.json"`);res.json(pack)}catch(error:any){res.status(500).json({error:error.message||'Could not build event pack'})}
+});
+app.post('/api/pack/import',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'design'))return;
+ const checked=eventPackSchema.safeParse(req.body);if(!checked.success){res.status(400).json({error:'Invalid event pack: '+checked.error.issues.slice(0,6).map(issue=>`${issue.path.join('.')||'pack'} ${issue.message}`).join('; ')});return}
+ try{
+  const restored=await restoreEventPack(checked.data,UPLOAD_ROOT);
+  const files:[string,unknown][]=[['config/teams.json',restored.config],['config/radars.json',restored.radars],['config/layout.json',restored.layout],['config/overlay.json',restored.overlay]];
+  for(const [file,value] of files)await writeFile(file+'.tmp',JSON.stringify(value,null,2));
+  for(const [file] of files)await rename(file+'.tmp',file);
+  config=restored.config;radars=restored.radars;layout=restored.layout;overlay=restored.overlay;
+  await pruneUploads(config,radars,overlay);audit.record(accessPrincipal(res),'event-pack.import',`${config.event.name||'event'} · ${restored.assets} assets`);broadcast();res.json({ok:true,assets:restored.assets,assetBytes:restored.assetBytes,config,radars,layout,overlay});
+ }catch(error:any){res.status(400).json({error:error.message||'Could not import event pack'})}
+});
+app.get('/api/recordings',async(_req,res)=>res.json({files:await recorder.list(),status:recorder.status}));
+app.get('/api/recordings/:name',async(req,res)=>{
+ try{const body=await recorder.read(String(req.params.name));res.type('text/plain').send(body)}catch(error:any){res.status(error.code==='ENOENT'?404:400).json({error:error.message||'Could not read recording'})}
+});
+app.post('/api/recordings',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control')||!requireControl(req,res))return;
+ const parsed=z.object({enabled:z.boolean()}).safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Choose whether GSI recording is enabled.'});return}
+ try{const status=await recorder.setEnabled(parsed.data.enabled);audit.record(accessPrincipal(res),status.enabled?'recording.start':'recording.stop',status.file||'');broadcast();res.json({status,files:await recorder.list()})}catch(error:any){res.status(500).json({error:error.message||'Could not change recording state'})}
+});
+app.get('/api/archive',(_req,res)=>res.json({archives:archives.list(),active:archives.active?.id||null}));
+app.get('/api/archive/:id',(req,res)=>{const item=archives.detail(String(req.params.id));if(!item){res.status(404).json({error:'Match archive not found'});return}res.json(item)});
+app.post('/api/archive/start',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control')||!requireControl(req,res))return;
+ const parsed=z.object({name:z.string().trim().max(100).optional().default('')}).safeParse(req.body||{});if(!parsed.success){res.status(400).json({error:'Match name is too long.'});return}
+ try{const item=archives.start(parsed.data.name,config);audit.record(accessPrincipal(res),'archive.start',item.name);broadcast();res.json(item)}catch(error:any){res.status(409).json({error:error.message||'Could not start match archive'})}
+});
+app.post('/api/archive/finish',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control')||!requireControl(req,res))return;
+ const item=archives.finish();if(!item){res.status(409).json({error:'No match archive is active.'});return}
+ await archives.flush();audit.record(accessPrincipal(res),'archive.finish',item.name);broadcast();res.json(item);
+});
+app.get('/api/remote/state',(req,res)=>{if(!privateRead(req,res,'control'))return;const principal=accessPrincipal(res),currentLease=lease.view(principal.id);res.json({controls,lease:currentLease,canControl:!currentLease.holder||currentLease.mine,recording:recorder.status,archive:archives.active?{id:archives.active.id,name:archives.active.name,eventCount:archives.active.events.length}:null,scenes:SCENE_IDS,serverTime:Date.now()})});
+const remoteActionSchema=z.object({action:z.string().trim().min(1).max(80),minutes:z.number().int().min(1).max(600).optional()}).strip();
+app.post('/api/remote/action',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control')||!requireControl(req,res))return;
+ const parsed=remoteActionSchema.safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Invalid remote action'});return}
+ const action=parsed.data.action;let patch:Partial<Controls>|undefined;
+ if(action.startsWith('scene:')&&SCENE_IDS.includes(action.slice(6) as any))patch={scene:action.slice(6) as Controls['scene']};
+ else if(action.startsWith('toggle:')&&['radar','killfeed','lowerThird','economy','techPause','swapped'].includes(action.slice(7))){const key=action.slice(7) as keyof Controls;patch={[key]:!controls[key]} as Partial<Controls>}
+ else if(action==='break.start')patch={scene:'break',breakEndsAt:Date.now()+(parsed.data.minutes||5)*60_000};
+ else if(action==='break.stop')patch={scene:controls.scene==='break'?'live':controls.scene,breakEndsAt:null};
+ else{res.status(400).json({error:'Unsupported action. Use scene:<id>, toggle:<control>, break.start, or break.stop.'});return}
+ const before=controls.scene;await saveControls({...controls,...patch});audit.record(accessPrincipal(res),'remote.action',action);if(controls.scene!==before)void obs.onScoutScene(controls.scene);res.json({ok:true,controls,lease:lease.view(accessPrincipal(res).id)});
+});
 app.get('/api/config',(_req,res)=>res.json(config));
 // Saving the operator configuration replaces config/teams.json atomically and broadcasts it to
 // every connected view, so the HUD picks up teams, rosters, maps and the bracket without a restart.
 app.put('/api/config',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'match-edit'))return;
  const parsed=configSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'config'} ${issue.message}`).slice(0,6).join('; ')});return}
  const next=normalizeConfig(parsed.data);
@@ -258,6 +404,7 @@ app.put('/api/config',async(req,res)=>{
   await rename('config/teams.json.tmp','config/teams.json');
   config=next;
   await pruneUploads(next,radars);
+  audit.record(accessPrincipal(res),'match.config.update',`${config.teams.map(team=>team.name).join(' vs ')} · ${config.maps.length} maps`);
   broadcast();res.json(config);
  }catch{res.status(500).json({error:'Could not save configuration'})}
 });
@@ -265,8 +412,8 @@ app.put('/api/config',async(req,res)=>{
 // referenced by the saved configuration is deleted so public/uploads/ cannot grow without bound across
 // a long tournament. Recent uploads are spared (see server/uploads.ts) because they may be waiting for
 // their Save click. Drop-in files under public/radars/ are operator-managed and never pruned.
-async function pruneUploads(current:ScoutConfig,radarsConfig:any){
- const referenced=referencedUploads(current,radarsConfig);
+async function pruneUploads(current:ScoutConfig,radarsConfig:any,overlayConfig:OverlayConfig=overlay){
+ const referenced=referencedUploads(current,radarsConfig,overlayConfig);
  for(const kind of UPLOAD_DIRS){
   const dir=path.join(UPLOAD_ROOT,kind);
   let files:string[]=[];try{files=await readdir(dir)}catch{continue}
@@ -274,12 +421,11 @@ async function pruneUploads(current:ScoutConfig,radarsConfig:any){
  }
 }
 app.put('/api/controls',async(req,res)=>{
- // Cross-site and unauthenticated mutations never reach here — the gate above refuses both. This route
- // only validates the switches and saves them.
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control')||!requireControl(req,res))return;
  const parsed=controlsSchema.safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Invalid controls'});return}
  const before=controls.scene;
- try {await saveControls(parsed.data);res.json(controls)}catch{res.status(500).json({error:'Could not save controls'});return}
+ try {await saveControls(parsed.data);audit.record(accessPrincipal(res),'controls.update',`${before} → ${parsed.data.scene}`);res.json(controls)}catch{res.status(500).json({error:'Could not save controls'});return}
  // Fire and forget: OBS being slow or absent must never delay the operator's scene change.
  if(controls.scene!==before) void obs.onScoutScene(controls.scene);
 });
@@ -287,6 +433,7 @@ app.put('/api/controls',async(req,res)=>{
 // here, the file is replaced atomically, and every output view re-renders with the new radar.
 app.put('/api/radars',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'design'))return;
  const parsed=radarsSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid radar configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'radars'} ${issue.message}`).slice(0,6).join('; ')});return}
  const next=parsed.data;
@@ -295,6 +442,7 @@ app.put('/api/radars',async(req,res)=>{
   await rename('config/radars.json.tmp','config/radars.json');
   radars=next;
   await pruneUploads(config,next);
+  audit.record(accessPrincipal(res),'radars.update',`${Object.keys(radars.maps).length} calibrated maps`);
   broadcast();res.json(radars);
  }catch{res.status(500).json({error:'Could not save radar configuration'})}
 });
@@ -302,14 +450,29 @@ app.put('/api/radars',async(req,res)=>{
 // 1920×1080 canvas; an empty elements map is the shipped CSS default layout.
 app.put('/api/layout',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'design'))return;
  const parsed=layoutSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid layout: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'layout'} ${issue.message}`).slice(0,6).join('; ')});return}
  try {
   await writeFile('config/layout.json.tmp',JSON.stringify(parsed.data,null,2));
   await rename('config/layout.json.tmp','config/layout.json');
-  layout=parsed.data;
+  layout=parsed.data;audit.record(accessPrincipal(res),'layout.update','legacy position layout');
   broadcast();res.json(layout);
  }catch{res.status(500).json({error:'Could not save layout'})}
+});
+app.get('/api/overlay',(_req,res)=>res.json(overlay));
+app.put('/api/overlay',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'design'))return;
+ const parsed=overlaySchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Invalid overlay studio configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'overlay'} ${issue.message}`).slice(0,8).join('; ')});return}
+ try{
+  await writeFile('config/overlay.json.tmp',JSON.stringify(parsed.data,null,2));
+  await rename('config/overlay.json.tmp','config/overlay.json');
+  overlay=parsed.data;await pruneUploads(config,radars,overlay);
+  audit.record(accessPrincipal(res),'overlay.update',`${overlay.widgets.length} layers · ${overlay.theme.name}`);
+  broadcast();res.json(overlay);
+ }catch{res.status(500).json({error:'Could not save overlay studio configuration'})}
 });
 // OBS integration API. Every mutation is same-origin only, like the rest of the operator API, and none of it can
 // return or store the OBS password.
@@ -317,24 +480,27 @@ const obsView=()=>({config:obsConfig,status:obs.status()});
 app.get('/api/obs',(_req,res)=>res.json(obsView()));
 app.put('/api/obs',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
  const parsed=obsConfigSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid OBS settings: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'settings'} ${issue.message}`).slice(0,4).join('; ')});return}
  try {
   await writeFile('config/obs.json.tmp',JSON.stringify(parsed.data,null,2));
   await rename('config/obs.json.tmp','config/obs.json');
-  obsConfig=parsed.data;obs.configure(obsConfig);broadcast();res.json(obsView());
+  obsConfig=parsed.data;obs.configure(obsConfig);audit.record(accessPrincipal(res),'obs.settings.update',`${obsConfig.enabled?'enabled':'disabled'} · ${Object.values(obsConfig.sceneMap).filter(Boolean).length} scene mappings`);broadcast();res.json(obsView());
  }catch{res.status(500).json({error:'Could not save the OBS settings'})}
 });
-app.post('/api/obs/reconnect',(req,res)=>{if(!sameOrigin(req)){res.sendStatus(403);return}obs.reconnect();res.json(obsView())});
+app.post('/api/obs/reconnect',(req,res)=>{if(!sameOrigin(req)){res.sendStatus(403);return}if(!ownerOnly(res))return;obs.reconnect();audit.record(accessPrincipal(res),'obs.reconnect');res.json(obsView())});
 const obsSwitchSchema=z.object({scene:z.string().trim().min(1).max(200)});
 app.post('/api/obs/switch',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control')||!requireControl(req,res))return;
  const parsed=obsSwitchSchema.safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Choose an OBS scene'});return}
- try {await obs.switchScene(parsed.data.scene);res.json({ok:true,...obsView()})}catch(error:any){res.status(502).json({error:error.message})}
+ try {await obs.switchScene(parsed.data.scene);audit.record(accessPrincipal(res),'obs.scene.switch',parsed.data.scene);res.json({ok:true,...obsView()})}catch(error:any){res.status(502).json({error:error.message})}
 });
 app.post('/api/obs/refresh-overlay',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
- try {res.json({refreshed:await obs.refreshOverlay()})}catch(error:any){res.status(502).json({error:error.message})}
+ if(!permit(res,'control')||!requireControl(req,res))return;
+ try {const refreshed=await obs.refreshOverlay();audit.record(accessPrincipal(res),'obs.overlay.refresh',refreshed.join(', '));res.json({refreshed})}catch(error:any){res.status(502).json({error:error.message})}
 });
 if(process.env.NODE_ENV==='production'){app.use(express.static(appPath('dist')));app.get('*',(_req,res)=>res.sendFile(appPath('dist','index.html')))}else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true,allowedHosts:true},appType:'spa'});app.use(vite.middlewares)}
 app.use((err:any,_req:any,res:any,_next:any)=>{res.status(err.status||500).json({error:err.status===400?'Invalid JSON':'Request failed'})});

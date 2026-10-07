@@ -158,6 +158,8 @@ test('the printed link unlocks a browser and leaves no token in the address bar'
 test('the token in a header is enough for a script, and the session can be closed',async()=>{
  if(!REMOTE) return;
  const before=(await call('/api/status')).json.controls;
+ const lease=await call('/api/lease',{host:REMOTE,method:'POST',headers:{Origin:`http://${REMOTE}:${port}`,'X-Scout-Token':TOKEN},body:{force:true}});
+ assert.equal(lease.status,200,'the owner can claim or take over the control lease');
  const withHeader=await call('/api/controls',{host:REMOTE,method:'PUT',headers:{Origin:`http://${REMOTE}:${port}`,'X-Scout-Token':TOKEN},body:{...before,scene:'matchup'}});
  assert.equal(withHeader.status,200);
  assert.equal((await call('/api/status')).json.controls.scene,'matchup');
@@ -172,6 +174,37 @@ test('the token in a header is enough for a script, and the session can be close
  assert.equal(closed.status,200);
  assert.equal((await call('/api/session',{host:REMOTE,cookie:session})).json.authenticated,false,'a signed-out cookie is dead');
  await call('/api/controls',{method:'PUT',headers:{Origin:`http://127.0.0.1:${port}`},body:before});
+});
+
+test('role-scoped tokens enforce producer control, designer permissions, authenticated Companion feedback, and revocation',async()=>{
+ if(!REMOTE) return;
+ const origin=`http://${REMOTE}:${port}`,ownerHeaders={Origin:origin,'X-Scout-Token':TOKEN};
+ const before=(await call('/api/status')).json.controls;
+ const producerIssue=await call('/api/operators',{host:REMOTE,method:'POST',headers:ownerHeaders,body:{label:'Deck producer',role:'producer'}});
+ const designerIssue=await call('/api/operators',{host:REMOTE,method:'POST',headers:ownerHeaders,body:{label:'Overlay designer',role:'designer'}});
+ assert.equal(producerIssue.status,200);assert.equal(designerIssue.status,200);
+ const producerToken=producerIssue.json.token,designerToken=designerIssue.json.token;
+ assert.equal((await readFile(new URL('../config/operators.json',import.meta.url),'utf8')).includes(producerToken),false,'operator secrets are never persisted in plaintext');
+ // Clear a lease left by the earlier local-owner controls test, then let the actual producer claim it.
+ await call('/api/lease',{host:REMOTE,method:'POST',headers:ownerHeaders,body:{force:true}});
+ await call('/api/lease?force=1',{host:REMOTE,method:'DELETE',headers:ownerHeaders});
+ const producerHeaders={Origin:origin,'X-Scout-Token':producerToken};
+ const claim=await call('/api/lease',{host:REMOTE,method:'POST',headers:producerHeaders,body:{}});assert.equal(claim.status,200);
+ const action=await call('/api/remote/action',{host:REMOTE,method:'POST',headers:producerHeaders,body:{action:'scene:stats'}});assert.equal(action.status,200);assert.equal(action.json.controls.scene,'stats');
+ const feedback=await call('/api/remote/state',{host:REMOTE,headers:producerHeaders});assert.equal(feedback.status,200);assert.equal(feedback.json.controls.scene,'stats');assert.equal(feedback.json.lease.mine,true);assert.equal(feedback.json.canControl,true);
+ const designerHeaders={Origin:origin,'X-Scout-Token':designerToken};
+ const feedbackDenied=await call('/api/remote/state',{host:REMOTE,headers:designerHeaders});assert.equal(feedbackDenied.status,403);assert.equal(feedbackDenied.json.code,'insufficient-role');
+ const leaseDenied=await call('/api/lease',{host:REMOTE,method:'POST',headers:designerHeaders,body:{}});assert.equal(leaseDenied.status,403);
+ const overlay=(await call('/api/overlay')).json;
+ const designSave=await call('/api/overlay',{host:REMOTE,method:'PUT',headers:designerHeaders,body:overlay});assert.equal(designSave.status,200,'the designer may publish overlay design');
+ const actionDenied=await call('/api/remote/action',{host:REMOTE,method:'POST',headers:designerHeaders,body:{action:'scene:live'}});assert.equal(actionDenied.status,403);
+ for(const id of [producerIssue.json.operator.id,designerIssue.json.operator.id]){
+  const revoked=await call(`/api/operators/${encodeURIComponent(id)}`,{host:REMOTE,method:'DELETE',headers:ownerHeaders});assert.equal(revoked.status,200);
+ }
+ const revokedFeedback=await call('/api/remote/state',{host:REMOTE,headers:producerHeaders});assert.equal(revokedFeedback.status,401);assert.equal(revokedFeedback.json.code,'bad-session');
+ await call('/api/lease',{host:REMOTE,method:'POST',headers:ownerHeaders,body:{force:true}});
+ await call('/api/controls',{host:REMOTE,method:'PUT',headers:ownerHeaders,body:before});
+ await call('/api/lease?force=1',{host:REMOTE,method:'DELETE',headers:ownerHeaders});
 });
 
 test('guessing is throttled per address',async()=>{
