@@ -350,7 +350,13 @@ footer .status-dot{margin-right:7px}
 .phase-card{position:absolute;left:50%;transform:translateX(-50%);top:210px;text-align:center;background:#120e18f6;padding:26px 64px;border-top:3px solid var(--accent);border-bottom:3px solid var(--accent);animation:kill-in .18s ease-out}
 .phase-card h3{margin:0;font-size:52px;letter-spacing:9px}
 .phase-card p{margin:10px 0 0;color:#b8a9c3;letter-spacing:3px;font-size:17px}
-.killfeed{position:absolute;right:28px;top:166px;width:430px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;pointer-events:none}
+/* The live HUD reads in bands. The event header and the scoreboard ribbon own the top of the canvas
+   (the ribbon is 62–146px at the comfortable density), and everything the cast follows in a round starts
+   below it: the radar and the killfeed share the band at 176px — 30px of air under the ribbon, so the
+   radar can never sit on top of the match/round bar — and the rosters open the next one at 496px,
+   clear of the 300px radar above the left column. These are the shipped defaults; a saved
+   config/layout.json still overrides any of them, and the panel's Arrange mode drags from here. */
+.killfeed{position:absolute;right:28px;top:176px;width:430px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;pointer-events:none}
 .kill{display:flex;align-items:center;gap:11px;background:#120e18f2;padding:9px 13px;font-size:22px;animation:kill-in .18s ease-out}
 .kill b{font-weight:600;text-transform:uppercase;letter-spacing:.5px}
 .kill-weapon{display:flex;align-items:center;gap:7px;font-size:13px;letter-spacing:1px;color:#c0b2cc;background:#241a2c;padding:4px 8px}
@@ -376,7 +382,7 @@ footer .status-dot{margin-right:7px}
 .player-weapon{display:inline-flex;align-items:center;gap:5px;color:#ddd2e6}
 .player-weapon .equipment-icon{opacity:.9}
 .health{position:absolute;left:0;bottom:0;height:2px}
-.roster{position:absolute;top:352px;width:262px}
+.roster{position:absolute;top:496px;width:262px}
 .roster-0{left:28px}.roster-1{right:28px}
 .roster-label{font-size:13px;letter-spacing:3px;color:var(--accent-bright);text-transform:uppercase;display:flex;justify-content:space-between;margin-bottom:4px}
 .roster-label span{color:#8f7f9e}
@@ -401,7 +407,7 @@ footer .status-dot{margin-right:7px}
 .hud-banner .utility{color:#e2d5ec}
 .hud-banner .utility .equipment-icon{opacity:.85}
 .hud-banner>i{font-style:normal;color:#7e6c90;margin:0 4px}
-.radar{position:absolute;left:28px;top:28px;width:300px;height:300px;background:#100b16e8;border:2px solid var(--line)}
+.radar{position:absolute;left:28px;top:176px;width:300px;height:300px;background:#100b16e8;border:2px solid var(--line)}
 .radar img,.radar-grid{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .radar-grid{background:repeating-linear-gradient(0deg,#2a1e33 0 1px,transparent 1px 25px),repeating-linear-gradient(90deg,#2a1e33 0 1px,transparent 1px 25px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:#6d5b7e;letter-spacing:2px;font-size:13px}
 .radar-grid small{font-size:11px;color:#544368;letter-spacing:1px}
