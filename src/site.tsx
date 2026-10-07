@@ -1,6 +1,10 @@
 import React,{useEffect,useState} from 'react';
-import {ArrowRight,ArrowUpRight,Check,ChevronRight,CircleCheck,Copy,Download,Gamepad2,KeyRound,Layers,LayoutDashboard,Link2,Loader2,LogIn,Monitor,Palette,Radio,RefreshCw,ShieldCheck,Swords,Unplug,Users,Wifi,Zap} from 'lucide-react';
+import {Archive as ArchiveIcon,ArrowRight,ArrowUpRight,Check,ChevronRight,CircleCheck,Copy,Download,Gamepad2,KeyRound,Layers,LayoutDashboard,Link2,Loader2,LogIn,Monitor,Palette,Radio,RefreshCw,ShieldCheck,SlidersHorizontal,Swords,Unplug,Users,Wifi,Zap} from 'lucide-react';
 import {apiFetch,rememberToken} from './session';
+import {DEFAULT_WIDGETS} from '../server/overlay';
+import type {SceneId} from '../server/controls';
+import {PANEL_SECTIONS,SCENE_LIST} from './panel-catalog';
+import {HudStage} from './showcase';
 import type {AccountView,BetaStatusView,InstallationView} from '../server/beta';
 import type {LicenceView} from '../server/licensing';
 import type {PanelSessionView} from '../server/auth';
@@ -59,6 +63,7 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
    <a href="/welcome#scenes">Scenes</a>
    <a href="/welcome#maps">Maps</a>
    <a href="/welcome#beta">Closed beta</a>
+   <a href="/welcome#how">Under the hood</a>
    <a href="/welcome#faq">FAQ</a>
   </nav>
   <div className="site-nav-actions">
@@ -82,34 +87,23 @@ export function SiteFooter(){
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
 function Notice({tone='bad',children}:{tone?:'bad'|'ok'|'warn';children:React.ReactNode}){return <p className={`site-notice ${tone}`}>{children}</p>}
-// A CSS mock of the transparent HUD, so the landing page shows the product instead of an empty
-// frame. It is markup, not a screenshot: nothing here is loaded from the network, and it never
-// imitates live match data.
-function HudMock(){
- return <div className="site-hud">
-  <div className="site-hud-bar">
-   <span className="site-hud-team ct"><i/><b>NAVI</b><em>12</em></span>
-   <span className="site-hud-clock"><b>1:24</b><small>ROUND 21 · MR12</small></span>
-   <span className="site-hud-team t"><em>9</em><b>VITALITY</b><i/></span>
-  </div>
-  <div className="site-hud-radar"><img src="/thumbs/site/radar-mirage.jpg" alt="" loading="eager"/><span className="site-hud-radar-label">MIRAGE</span><i className="dot-a"/><i className="dot-b"/><i className="dot-c"/></div>
-  <div className="site-hud-kills">
-   <span><b>s1mple</b> AWP <em>ZywOo</em></span>
-   <span><b>apEX</b> AK-47 <em>Perfecto</em></span>
-   <span className="result">ROUND WON · T</span>
-  </div>
-  <div className="site-hud-lower"><span className="portrait"/><div><b>s1mple</b><small>AWPER · 24 / 11 · $4,150</small></div></div>
-  <span className="site-hud-caption">1920 × 1080 · transparent Browser Source</span>
- </div>;
-}
 // ------------------------------------------------------------------ landing page
+// The product page's rules, in one place:
+//   - it shows the product, not a drawing of it: every frame below is rendered by src/showcase,
+//     which mounts the same `Hud` component the panel previews and the /obs output use;
+//   - the words an operator needs before applying (Windows, CS2, OBS, no runtime to install) sit on
+//     the hero call to action, in one line;
+//   - the engineering detail lives further down, in "Under the hood", where the reader who wants it
+//     finds it — and where it does not stand between a first-time visitor and what SCOUT looks like;
+//   - the closed-beta flow is untouched: apply, a human reads it, an invite sets your password, the
+//     dashboard holds the launcher.
 const FEATURES=[
- {icon:ShieldCheck,title:'GSI only, by architecture',body:'CS2 pushes its own game state to a local HTTP feed. SCOUT reads that and nothing else: no injection, no memory reading, no hooks, nothing to trip an anti-cheat.'},
- {icon:Layers,title:'Transparent HUD + full-canvas scenes',body:'An OBS Browser Source renders the live scoreboard, radar, killfeed and economy bar — then the same output switches to matchup, veto, series and winner graphics.'},
- {icon:Palette,title:'Overlay Studio',body:'Move every layer on the 1920 × 1080 canvas, theme it, and publish it to the output while the match is running. Layouts and themes travel with the event.'},
- {icon:Users,title:'Several operators, one broadcast',body:'Owner, producer, designer and viewer roles, per-operator tokens, a 45-second control lease, and an audit trail of who switched what.'},
- {icon:Gamepad2,title:'Built for the observer PC',body:'The Windows launcher installs the host with its own runtime, writes the GSI config into the detected CS2 folder, and keeps match data separate from program files.'},
- {icon:Radio,title:'Replay, archives and OBS control',body:'GSI recording, round-by-round archives, replay previews, and optional two-way scene sync with OBS Studio over obs-websocket.'},
+ {icon:Radio,title:'Reads the game, never touches it',body:'Counter-Strike 2 publishes its own match state through Game State Integration. SCOUT reads that feed and derives the score, the rounds, the kills and the economy from it.'},
+ {icon:Monitor,title:'A live HUD that stays out of the way',body:'Scoreboard, tactical radar, killfeed, both rosters, the observed player and the footer sit over the game on a transparent browser source — nothing is covered that the cast needs.'},
+ {icon:Layers,title:'Nine scenes, one panel',body:'The live HUD, plus eight full-canvas graphics: matchup, lineups, map series, tournament tree, winner, break, round recap and player stats. All nine are switched from the panel while the match runs.'},
+ {icon:Palette,title:'Edit it while it is on air',body:'Teams, rosters, the bracket, the map order, the break wording and every layer of the overlay design are edited in the panel and reach all outputs immediately.'},
+ {icon:Users,title:'Built for a crew, not a password',body:'Owner, producer, designer and viewer roles with their own tokens, so the observer, the graphics operator and the tournament admin each get exactly what they need.'},
+ {icon:Gamepad2,title:'Installed on the observer PC',body:'A Windows launcher installs the host, the panel and the overlay pages, writes the CS2 config, and keeps team data and recordings in your own profile.'},
 ];
 // Whatever is in public/thumbs/site/ is what the page shows: the same nine active-duty maps the
 // broadcast scenes use, resized once for the web (see public/thumbs/README.txt).
@@ -137,9 +131,23 @@ const FAQ=[
  ['Does it work on FACEIT, ESEA or workshop maps?','GSI is a game feature, so it works wherever CS2 runs with the config installed — including workshop maps. Radar calibration for a custom map is a config entry, not a code change.'],
  ['What happens to my data?','Match data, uploads and recordings never leave your machine. The website stores the account you applied with, and the launcher link — nothing about the matches you broadcast.'],
 ];
+// The engineering, deliberately below the product story. Someone choosing an overlay for their cup
+// needs to know it will not touch the game; someone wiring OBS at 2am needs the port and the rules.
+const UNDER_THE_HOOD=[
+ {icon:ShieldCheck,title:'GSI only, by architecture',body:'CS2 pushes its own game state to a local HTTP feed; SCOUT reads that and nothing else — no injection, no memory reading, no hooks, nothing for an anti-cheat to look at.'},
+ {icon:Monitor,title:'Wired into OBS, not into the game',body:'One Browser Source on /obs at 1920 × 1080, no custom CSS, and the live scene is transparent. Optional two-way scene switching with OBS Studio over obs-websocket keeps your OBS scene and the broadcast scene together.'},
+ {icon:SlidersHorizontal,title:'Radar calibration per map',body:'posX, posY and scale live per map in config/radars.json, measured once in Map radars. The nine active-duty maps ship pre-filled from the cs2-map-icons pack; a custom map is a drop-in file, not a code change.'},
+ {icon:Users,title:'Several operators, one broadcast',body:'Per-operator tokens, a 45-second control lease that stops two people driving at once, and an audit trail of who switched what and when.'},
+ {icon:ArchiveIcon,title:'Recording, archives and replay',body:'GSI recording, round-by-round archives and replay previews, stored on the observer machine. Nothing is uploaded to us.'},
+];
 export function LandingPage(){
  const {status,offline}=useBetaStatus();
  const onHost=!offline&&!!status?.host;
+ // The scene the reader picked in the tour. The frame renders it with the product's own renderer,
+ // so the page never has to be updated by hand when a scene changes.
+ const [scene,setScene]=useState<SceneId>('live');
+ const active=SCENE_LIST.find(item=>item.id===scene)??SCENE_LIST[0];
+ const liveLayers=DEFAULT_WIDGETS.filter(widget=>widget.showOn.includes('live'));
  return <div className="site">
   <SiteNav account={status?.account??null} onHost={onHost}/>
   <main className="site-main">
@@ -148,43 +156,61 @@ export function LandingPage(){
     <div>
      <div className="site-eyebrow"><span className="site-eyebrow-dot"/>CLOSED BETA · CS2 BROADCAST OVERLAY</div>
      <h1 className="site-h1">A broadcast team for the tournaments that <em>cannot hire one</em>.</h1>
-     <p className="site-lead">SCOUT turns one observer PC into a full CS2 production: a transparent live HUD and full-canvas scenes for matchup, veto, map series, break and victory — driven by Game State Integration alone.</p>
+     <p className="site-lead">SCOUT turns one observer PC into a full CS2 production: a transparent live HUD and eight full-canvas scenes — the matchup, the map series, the bracket, the break, the trophy — all switched from one panel while the round is running.</p>
      <div className="site-cta">
       <a className="button primary" href="/apply"><Zap size={15}/>Apply for the closed beta</a>
       <a className="button" href="/login"><LogIn size={15}/>Sign in</a>
      </div>
-     <div className="site-facts">
-      <span><Check size={12}/>No injection</span>
-      <span><Check size={12}/>No memory reading</span>
-      <span><Check size={12}/>Windows launcher</span>
-      <span><Check size={12}/>OBS Browser Source</span>
+     <p className="site-requirements"><span className="site-requirements-label">What you need</span>Windows 10 or 11 (x64)<i/>Counter-Strike 2 and OBS Studio on the observer PC<i/>nothing else — the installer bundles its own runtime</p>
+    </div>
+    <div className="site-hero-art">
+     <HudStage scene="live" className="site-stage site-stage-hero"/>
+     <div className="site-stage-caption">
+      <span className="site-stage-badge"><span className="status-dot"/>THE PRODUCT, NOT A PICTURE OF IT</span>
+      <span>The live scene, rendered by the overlay the broadcast output uses. Sample match data.</span>
      </div>
     </div>
-    <div className="site-hero-art"><HudMock/></div>
    </section>
    <section className="site-strip">
-    <span><ShieldCheck size={15}/>Reads CS2 through its own GSI feed</span>
+    <span><ShieldCheck size={15}/>No injection, no memory reading</span>
     <span><Monitor size={15}/>Runs beside the game, never inside it</span>
-    <span><Radio size={15}/>One output, many scenes</span>
+    <span><Radio size={15}/>One output, nine scenes</span>
     <span><Wifi size={15}/>Your LAN, no cloud round-trip</span>
    </section>
    <section className="site-section" id="product">
     <div className="site-section-head"><span className="site-section-eyebrow">WHAT IT DOES</span><h2>Everything between the game and the stream</h2><p>One process on the observer machine, one transparent browser source in OBS, and an operator panel that never gets in the way of the round.</p></div>
+    <div className="site-layers">
+     <b>On the live HUD</b>
+     <div className="site-layer-chips">{liveLayers.map(widget=><span key={widget.id}>{widget.name}</span>)}</div>
+     <small>{liveLayers.length} layers, each one switched on or off from the panel while the round is running — four of them only appear when the game calls for them. The names are the Overlay Studio's own.</small>
+    </div>
     <div className="site-grid">{FEATURES.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
    </section>
+   <section className="site-section site-tour" id="scenes">
+    <div className="site-section-head"><span className="site-section-eyebrow">BROADCAST SCENES</span><h2>One click. On air.</h2><p>Pick a scene and watch the real renderer change: this frame is the same component the panel previews and the output plays, driven by sample event data — not a screenshot that goes stale.</p></div>
+    <div className="site-tour-grid">
+     <div className="site-tour-frame">
+      <HudStage scene={active.id} className="site-stage site-stage-tour"/>
+      <div className="site-stage-caption">
+       <span className="site-stage-badge"><span className="status-dot"/>ON AIR · {active.title.toUpperCase()}</span>
+       <span>{active.desc}. {active.id==='live'?'Sample match data.':'Sample event configuration.'}</span>
+      </div>
+     </div>
+     <div className="site-scene-picker" role="group" aria-label="Broadcast scenes">
+      {SCENE_LIST.map(({id,title,desc,icon:Icon})=><button key={id} type="button" aria-pressed={id===active.id} className={id===active.id?'chosen':''} onClick={()=>setScene(id)}>
+       <span className="site-scene-pick-icon"><Icon size={15}/></span>
+       <span className="site-scene-pick-text"><b>{title}</b><small>{desc}</small></span>
+       <ChevronRight size={14}/>
+      </button>)}
+     </div>
+    </div>
+   </section>
    <section className="site-section site-maps" id="maps">
-    <div className="site-section-head"><span className="site-section-eyebrow">THE MAP POOL</span><h2>Every active-duty map, ready on day one</h2><p>The matchup, veto and map-series scenes use the same pictures the panel does. Replace any of them with your own artwork in the admin — the filename is the contract, so a custom map is a drop-in file, not a code change.</p></div>
-    <div className="site-map-grid">{MAP_POOL.map(map=><figure className="site-map" key={map.file}>
+    <div className="site-section-head"><span className="site-section-eyebrow">THE MAP POOL</span><h2>Every active-duty map, ready on day one</h2><p>The matchup and map-series scenes use the same pictures the panel does. Nine maps ship pre-filled, and replacing one is a file drop, not a code change.</p></div>
+    <div className="site-map-strip">{MAP_POOL.map(map=><figure className="site-map-chip" key={map.file}>
      <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} loading="lazy" decoding="async"/>
      <figcaption><b>{map.label}</b><small>{map.role}</small></figcaption>
     </figure>)}</div>
-    <p className="site-map-note">Pictures ship from the <code>cs2-map-icons</code> pack (see <code>public/thumbs/README.txt</code>); radar calibration for the live HUD is per map and is measured once in <b>Map radars</b>.</p>
-   </section>
-   <section className="site-section site-scenes" id="scenes">
-    <div className="site-section-head"><span className="site-section-eyebrow">BROADCAST SCENES</span><h2>One click. On air.</h2><p>The panel switches the output between the live HUD and the full-canvas graphics a tournament actually needs.</p></div>
-    <div className="site-scene-row">
-     {[['01','Live game','Transparent HUD over the game capture'],['02','Matchup','Team cards, records and map pool'],['03','Veto','Map picks and bans as they happen'],['04','Map series','Scores, pictures and the decider'],['05','Break','Timer and sponsor-ready slate'],['06','Victory','Winner graphic, ready for the cast']].map(([n,title,body])=><div className="site-scene" key={n}><span className="site-scene-number">{n}</span><b>{title}</b><small>{body}</small></div>)}
-    </div>
    </section>
    <section className="site-section" id="beta">
     <div className="site-section-head"><span className="site-section-eyebrow">CLOSED BETA</span><h2>How access works</h2><p>We are admitting a small number of organisers at a time so every deployment is supported properly. Applications are reviewed by hand.</p></div>
@@ -192,6 +218,14 @@ export function LandingPage(){
     <div className="site-beta-cta">
      <div><b>Applications are open</b><p>Windows 10/11 (x64), Counter-Strike 2, and OBS Studio if you are streaming. The installer bundles its own runtime — no Node.js, no build tools.</p></div>
      <a className="button primary" href="/apply">Start your application<ArrowRight size={14}/></a>
+    </div>
+   </section>
+   <section className="site-section site-how" id="how">
+    <div className="site-section-head"><span className="site-section-eyebrow">UNDER THE HOOD</span><h2>How the overlay actually works</h2><p>The detail a technical lead asks about before anything gets installed on a tournament machine.</p></div>
+    <div className="site-how-grid">{UNDER_THE_HOOD.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
+    <div className="site-panel-map">
+     <div><b>Inside the operator panel</b><p>{PANEL_SECTIONS.length} sections, one for every job a broadcast has — and the panels marked <em>owner</em> only open for the account that owns the installation.</p></div>
+     <div className="site-panel-chips">{PANEL_SECTIONS.map(({name,icon:Icon,ownerOnly})=><span key={name}><Icon size={13}/>{name}{ownerOnly&&<em>owner</em>}</span>)}</div>
     </div>
    </section>
    {onHost&&<section className="site-section site-host-card">
