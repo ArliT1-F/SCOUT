@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img" aria-label="SCOUT">
+ <title>SCOUT</title>
+ <!-- The SCOUT mark, measured from src-tauri/icons/128x128.png: hub and axial spokes in the
+      brand's core accent, the four fatter diagonals in the bright tone, and the icon's centre
+      hole cut out so the mark sits on any surface. Keep this file in step with src/logo.tsx. -->
+ <defs>
+  <mask id="hole" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+   <rect width="100" height="100" fill="#fff"/>
+   <circle cx="50" cy="50" r="4.7" fill="#000"/>
+  </mask>
+ </defs>
+ <g mask="url(#hole)">
+  <g fill="#f0a9e2">
+   <rect x="45.45" y="14.8" width="9.1" height="35.2" rx="4.55" transform="rotate(45 50 50)"/>
+   <rect x="45.45" y="14.8" width="9.1" height="35.2" rx="4.55" transform="rotate(135 50 50)"/>
+   <rect x="45.45" y="14.8" width="9.1" height="35.2" rx="4.55" transform="rotate(225 50 50)"/>
+   <rect x="45.45" y="14.8" width="9.1" height="35.2" rx="4.55" transform="rotate(315 50 50)"/>
+  </g>
+  <g fill="#d970c2">
+   <circle cx="50" cy="50" r="13.4"/>
+   <rect x="47.15" y="14" width="5.7" height="36" rx="2.85" transform="rotate(90 50 50)"/>
+   <rect x="47.15" y="14" width="5.7" height="36" rx="2.85" transform="rotate(270 50 50)"/>
+   <rect x="47.15" y="14" width="5.7" height="36" rx="2.85"/>
+   <rect x="47.15" y="14" width="5.7" height="36" rx="2.85" transform="rotate(180 50 50)"/>
+  </g>
+ </g>
+</svg>

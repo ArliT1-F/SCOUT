@@ -5,6 +5,7 @@ import {assetUrl} from './assets';
 import {sceneTeams,teamBySlot,mapCards,nextMap,seriesScore,winnerOf,lineupFor,liveLineup,sideOfTeam,fitName,fitSize,breakWords,breakClock,bracketLayout,slotView,type SceneTeam,type MapCard,type LiveLike} from './scenes';
 import {splitRoster,type PlayerCard} from '../server/players';
 import {weaponLabel} from './weapons';
+import {ScoutMark} from './logo';
 import type {SceneId} from '../server/controls';
 import type {SeriesState} from '../server/series';
 import type {ResolvedSides} from '../server/sides';
@@ -36,7 +37,7 @@ const formatText=(config:any)=>`BEST OF ${String(config?.format||'bo3').replace(
 function Frame({config,teams,label,children}:{config:any;teams:[SceneTeam,SceneTeam];label:string;children:React.ReactNode}){
  return <motion.div className="stage" style={{['--a' as any]:teams[0].color,['--b' as any]:teams[1].color}} initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}} transition={{duration:.4}}>
   <div className="stage-wash"/><div className="stage-grid"/>
-  <div className="st-head"><div className="st-event">✳ <b>{config?.event?.name||'SCOUT'}</b>{config?.event?.stage&&<span>{config.event.stage}</span>}</div><div className="st-chip">{formatText(config)}</div></div>
+  <div className="st-head"><div className="st-event"><ScoutMark className="st-event-mark" size={26}/><b>{config?.event?.name||'SCOUT'}</b>{config?.event?.stage&&<span>{config.event.stage}</span>}</div><div className="st-chip">{formatText(config)}</div></div>
   {children}
   <div className="st-foot"><span>SCOUT<span className="tiny-plus">+</span></span><span>{label}</span></div>
  </motion.div>;

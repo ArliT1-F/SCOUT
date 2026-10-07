@@ -79,6 +79,30 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 - `GET /api/remote/state` is an authenticated Producer/Owner feedback endpoint; `POST /api/remote/action` is role- and lease-protected. Private operator/audit and event-pack export routes enforce their own capabilities. Public match/output reads remain intentionally public.
 - **Verified here**: the host is driven over HTTP from a second address in `tests/panel-live.test.ts`; tests cover refusals, one-time link/cookie, role-scoped tokens, producer lease/action, designer denials, authenticated Companion feedback, revocation, lockout, rebound-host and WebSocket-origin cases. Real venue networking/proxy TLS remains an on-site check.
 
+### The mark, the favicon and phones
+
+The SCOUT mark is an inline SVG (`src/logo.tsx`, `public/logo/scout-mark.svg`, `public/favicon.svg`,
+`public/favicon.png`, `public/apple-touch-icon.png`): eight rounded spokes and a hub, two pinks, and
+the app icon's centre hole cut by a mask so the mark sits on any surface. It replaced the `✳`
+character that used to stand in for a logo in the panel sidebar, the unlock screen, the touch remote,
+the landing page, the HUD event header and every broadcast scene's header. Geometry is measured from
+`src-tauri/icons/128x128.png` and pinned by `tests/logo.test.ts`, which also fails if the glyph comes
+back. The tab icon, the phone home-screen icon and the desktop shortcut are now the same artwork.
+
+The web surfaces are phone-first where it counts. The panel is a desktop console that now *works* on a
+phone — the sidebar becomes a drawer behind a top bar (≤ 700px) with 44px tap targets, one-column
+content, 16px inputs (so iOS does not zoom the page on focus) and safe-area padding for notches. The
+public pages reflow at ≤ 760px (and 320px is checked): one-column hero with full-width calls to
+action, a 3-up/2-up map strip, a stacked footer, and short nav labels so the phone header stays one
+row. `/?remote=1` remains the screen built for a phone in an operator's hand.
+
+Worth knowing: the panel's chrome used to be written with bare element selectors (`footer{}`, `nav{}`,
+`main{}`, `header{}`), which also matched the landing page's own `<footer>`, `<nav>`, `<main>` and
+`<header>` — on a 390px phone the landing page's three footer blocks were forced into one 812px row.
+Those rules are scoped to `.app` (`.app footer{}`), and `tests/mobile-layout.test.ts` refuses a bare
+structural element selector, a fixed-floor `auto-fit` grid track (the FAQ overflowed 320px), and a
+drawer whose classes are not rendered.
+
 ### Landing page, sign-in and the closed beta
 
 The public half of SCOUT lives at `/welcome` (the product page), `/apply` (the whitelist application),

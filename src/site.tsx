@@ -1,4 +1,5 @@
 import React,{useEffect,useState} from 'react';
+import {ScoutMark} from './logo';
 import {Archive as ArchiveIcon,ArrowRight,ArrowUpRight,Check,ChevronRight,CircleCheck,Copy,Download,Gamepad2,KeyRound,Layers,LayoutDashboard,Link2,Loader2,LogIn,Monitor,Palette,Radio,RefreshCw,ShieldCheck,SlidersHorizontal,Swords,Unplug,Users,Wifi,Zap} from 'lucide-react';
 import {apiFetch,rememberToken} from './session';
 import {DEFAULT_WIDGETS} from '../server/overlay';
@@ -54,7 +55,7 @@ function usePanelSession(){
 const statusLabel=(status:string)=>status==='approved'?'APPROVED':status==='rejected'?'NOT APPROVED':'IN REVIEW';
 const statusTone=(status:string)=>status==='approved'?'ok':status==='rejected'?'bad':'warn';
 // ------------------------------------------------------------------ shared chrome
-function SiteBrand(){return <a className="site-brand" href="/welcome"><span className="brand-symbol">✳</span> scout<span className="brand-dot">®</span></a>}
+function SiteBrand(){return <a className="site-brand" href="/welcome"><ScoutMark className="brand-symbol" size={26}/> scout<span className="brand-dot">®</span></a>}
 export function SiteNav({account,link,onHost=false,section=''}:{account:AccountView|null;link?:InstallationView|null;onHost?:boolean;section?:string}){
  return <header className="site-nav">
   <SiteBrand/>
@@ -67,9 +68,11 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
    <a href="/welcome#faq">FAQ</a>
   </nav>
   <div className="site-nav-actions">
-   {onHost&&<a className="site-ghost-link" href="/" title="The operator panel served by this machine">Operator panel<ArrowUpRight size={13}/></a>}
-   {account?<a className="button primary" href="/dashboard"><LayoutDashboard size={14}/>Dashboard</a>:<a className="site-ghost-link" href="/login"><LogIn size={13}/>Sign in</a>}
-   {!account&&<a className="button primary" href="/apply">Apply for access<ArrowRight size={14}/></a>}
+   {/* Phone-width labels: a nav that does not fit is a nav nobody reads. The long label is the
+       desktop one; CSS swaps in the short one under 560px (see "Small screens"). */}
+   {onHost&&<a className="site-ghost-link" href="/" title="The operator panel served by this machine"><span className="site-label-long">Operator panel</span><span className="site-label-short">Panel</span><ArrowUpRight size={13}/></a>}
+   {account?<a className="button primary" href="/dashboard"><LayoutDashboard size={14}/><span className="site-label-long">Dashboard</span><span className="site-label-short">Panel</span></a>:<a className="site-ghost-link" href="/login"><LogIn size={13}/>Sign in</a>}
+   {!account&&<a className="button primary" href="/apply"><span className="site-label-long">Apply for access</span><span className="site-label-short">Apply</span><ArrowRight size={14}/></a>}
   </div>
   {section&&<span className="site-nav-section">{section}</span>}
  </header>;
