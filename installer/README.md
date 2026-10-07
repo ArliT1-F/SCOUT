@@ -15,7 +15,7 @@ Prerequisites, all on the machine that builds (not on the machine that runs SCOU
 | | |
 | --- | --- |
 | **Node.js 20+** | builds the panel and the host; ships as the bundled runtime too |
-| **Rust + `cargo install tauri-cli --version "^2"`** | builds `scout-shell.exe` (skip with `--no-shell`) |
+| **Rust + `cargo install tauri-cli --version "^2"`** | builds `scout-shell.exe`, the launcher (overlay + operator panel), skip with `--no-shell` |
 | **[Inno Setup 6.3+](https://jrsoftware.org/isdl.php)** | packs the wizard (`ISCC.exe`) |
 | Internet | to fetch the Node runtime and the WebView2 bootstrapper, both verified/skipped cleanly if absent |
 
@@ -71,7 +71,7 @@ port and token, and adds the firewall rule if that task is ticked.
 | Program files | `%LOCALAPPDATA%\Programs\SCOUT` (per-user default; "install for all users" puts it under `C:\Program Files`) |
 | Data directory | `%APPDATA%\SCOUT` — `config\`, `public\uploads\`, `public\radars\`, `public\thumbs\`, `recordings\`, the launcher and the token/port files. It belongs to the account that ran the installer, so on a shared machine install it while logged in as the operator (the default, per-user install, always does) |
 | CS2 config | `<Steam>\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\gamestate_integration_overlay.cfg` (legacy `csgo\cfg` is detected too) |
-| Shortcuts | Start menu: SCOUT host · SCOUT control panel · SCOUT overlay shell · Stop the SCOUT host; desktop: SCOUT host (optional) |
+| Shortcuts | One primary entry — **SCOUT** — which is the launcher: it starts the host if needed, opens the control panel and shows the overlay over CS2 (F9 panel, F8 overlay, Ctrl+Shift+F8 quit). Below it, for advanced use: *SCOUT control panel (in your browser)*, *SCOUT host (advanced: shows the log)* and *Stop SCOUT*. Desktop: SCOUT (optional). |
 | Firewall rule | `SCOUT host` — inbound TCP on the chosen port, scoped to `…\SCOUT\runtime\node.exe`, all profiles |
 
 The split between program files and data directory is deliberate: `C:\Program Files` is not

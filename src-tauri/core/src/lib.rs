@@ -6,13 +6,16 @@
 //!
 //! * [`geometry`] — rectangles and what the Windows layer observed about the game window,
 //! * [`plan`] — the pure decision (cover the game / hide) and the [`plan::Tracker`] that applies it without flicker,
-//! * [`config`] — command line and environment parsing, URL and window-title matching.
+//! * [`config`] — command line and environment parsing, URL and window-title matching,
+//! * [`licence`] — the host's licence answer, parsed and turned into "may this launcher run".
 //!
 //! The Tauri application (`../src`) only observes Windows, asks these functions what to do, and does it.
 pub mod config;
 pub mod geometry;
+pub mod licence;
 pub mod plan;
 
 pub use config::ShellConfig;
 pub use geometry::{Rect, Target};
+pub use licence::{Licence, State};
 pub use plan::{plan, Action, Plan, Prefs, Reason, Tracker};

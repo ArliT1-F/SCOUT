@@ -1,0 +1,36 @@
+# SCOUT's checks, on every push and pull request: the host and the panel, the shell's decision
+# logic, and — on Windows — the installer that has to come out of all of it. The installer job runs on
+# tags and on demand only (see release.yml), because building it takes a Rust compile plus Inno Setup.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-and-panel:
+    name: Host, panel and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Types
+        run: ./node_modules/.bin/tsc --noEmit
+      - name: Panel and overlay build
+        run: npx vite build
+      - name: Tests
+        run: npm test
+
+  shell-core:
+    name: Shell decision logic (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Decisions, geometry, configuration and the licence parser
+        run: cargo test --manifest-path src-tauri/core/Cargo.toml

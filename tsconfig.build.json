@@ -1,10 +1,10 @@
 {
-  "//": "Emit the host as plain Node-runnable ESM for the Windows installer. `npm run dev` keeps using tsx on the TypeScript sources; a packaged install runs the compiled JavaScript, so no TypeScript runner ships with it. Every server import already carries an explicit .js specifier, which is what Node needs at runtime.",
+  "//": "Emit the host as plain Node-runnable ESM for the Windows installer. `npm run dev` keeps using tsx on the TypeScript sources; a packaged install runs the compiled JavaScript, so no TypeScript runner ships with it. Every server import already carries an explicit .js specifier, which is what Node needs at runtime. The host also uses one module that lives with the panel (src/radar.ts, the radar projection the overlay and the preflight share), so the root is the repository and the build stages both directories - without that, the packaged host cannot be built at all (TS6059).",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
-    "outDir": "build/server",
-    "rootDir": "server",
+    "outDir": "build",
+    "rootDir": ".",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": ["ES2022"],
@@ -12,5 +12,5 @@
     "sourceMap": false,
     "declaration": false
   },
-  "include": ["server"]
+  "include": ["server", "src/radar.ts"]
 }

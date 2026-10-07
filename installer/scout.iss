@@ -40,7 +40,7 @@ AppName=SCOUT
 AppVersion={#AppVersion}
 AppVerName=SCOUT {#AppVersion}
 AppPublisher=SCOUT
-AppComments=Counter-Strike 2 broadcast overlay: host, control panel and overlay shell
+AppComments=Counter-Strike 2 broadcast overlay: host, control panel and launcher (overlay + operator panel)
 DefaultDirName={autopf}\SCOUT
 DefaultGroupName=SCOUT
 DisableProgramGroupPage=no
@@ -110,18 +110,25 @@ Name: "{#DataDir}\public\uploads\maps"; Flags: uninsneveruninstall
 Name: "{#DataDir}\public\uploads\players"; Flags: uninsneveruninstall
 Name: "{#DataDir}\public\uploads\radars"; Flags: uninsneveruninstall
 
+; One icon does the whole thing: the launcher starts the host if it is not already running, opens the
+; control panel in a window of its own and puts the overlay over CS2. The console entries below it are
+; for whoever wants to watch the log or run SCOUT as a background service - the everyday path needs
+; neither a console nor a port number.
 [Icons]
-Name: "{group}\SCOUT host"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host (control panel, OBS pages, CS2 feed)"
-Name: "{group}\SCOUT control panel"; Filename: "http://127.0.0.1:{code:GetPort}/admin"; IconFilename: "{app}\host\scout.ico"; Comment: "Open the control panel in your browser"
-Name: "{group}\SCOUT overlay shell"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; Comment: "Transparent click-through overlay over CS2 (F8 toggles, Ctrl+Shift+F8 quits)"
-Name: "{group}\Stop the SCOUT host"; Filename: "{#DataDir}\scout-stop.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Stop a host that is still running"
+Name: "{group}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"
+Name: "{group}\SCOUT control panel (in your browser)"; Filename: "http://127.0.0.1:{code:GetPort}/admin"; IconFilename: "{app}\host\scout.ico"; Comment: "The control panel as a browser tab - handy for a second screen or a phone on the same network"
+Name: "{group}\SCOUT host (advanced: shows the log)"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Run only the SCOUT host, with its console visible. Unnecessary if you start SCOUT from the icon above"
+Name: "{group}\Stop SCOUT"; Filename: "{#DataDir}\scout-stop.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Stop a SCOUT host that is still running (for example one started by the advanced entry above)"
 Name: "{group}\{cm:UninstallProgram,SCOUT}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\SCOUT host"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Tasks: desktopicon
+Name: "{autodesktop}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"; Tasks: desktopicon
 
 [Run]
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing the Microsoft WebView2 runtime..."; Flags: waituntilterminated skipifdoesntexist; Check: NeedsWebView2 and IsTaskSelected('webview2')
-Filename: "{#DataDir}\scout-host.cmd"; Description: "Start the SCOUT host now"; Flags: postinstall nowait skipifsilent
-Filename: "http://127.0.0.1:{code:GetPort}/admin"; Description: "Open the SCOUT control panel"; Flags: postinstall shellexec nowait skipifsilent
+; Checked by default and first in the list: the finished installer hands over a running SCOUT, not a
+; console window and a port number to remember.
+Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; Description: "Start SCOUT now (control panel and overlay)"; Flags: postinstall nowait skipifsilent
+Filename: "http://127.0.0.1:{code:GetPort}/admin"; Description: "Open the control panel in a browser as well"; Flags: postinstall unchecked shellexec nowait skipifsilent
+Filename: "{#DataDir}\scout-host.cmd"; Description: "Advanced: run only the host, with its console visible"; Flags: postinstall unchecked nowait skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\host"

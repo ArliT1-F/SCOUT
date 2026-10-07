@@ -7,21 +7,33 @@ deletes it without asking first.
 
 Everyday things
 -------------------------------------------------------------------------------------------------
-  Start the host ........... "SCOUT host" on the desktop or in the Start menu, or scout-host.cmd
-                             in this folder. Leave the console window open while you broadcast:
-                             it prints the panel address and anything that goes wrong.
-  Open the control panel ... http://127.0.0.1:8080/admin
+  Start SCOUT .............. Press "SCOUT" in the Start menu or on the desktop. That one icon
+                             starts the host, opens this control panel in a window of its own and
+                             puts the overlay over CS2 - no console, nothing else to launch.
+                               F9 ............... show or hide the control panel window
+                               F8 ............... overlay over CS2 on or off
+                               Ctrl+Shift+F8 .... quit SCOUT (and the host it started)
+                             The window that starts is the launcher (scout-shell.exe); closing it
+                             with Ctrl+Shift+F8 also stops the host the launcher started. A host
+                             you started yourself (see below) is left alone.
+  Open the control panel ... http://127.0.0.1:8080/admin - also on the Start menu as "SCOUT control
+                             panel (in your browser)", which is handy for a second screen.
                              The port is the one in port.txt below; the Start menu shortcuts were
                              created with the port chosen at install time, so if you change the
                              port later, edit the shortcuts (or re-run the installer).
   OBS browser source ....... http://127.0.0.1:8080/obs
                              1920x1080, "Shutdown source when not visible" off, no Custom CSS,
                              no chroma key. Add Game Capture for cs2.exe under it.
-  Overlay shell ............ "SCOUT overlay shell" in the Start menu - a transparent, click-through
-                             window over CS2. F8 toggles it, Ctrl+Shift+F8 quits it. Needs the
-                             Microsoft WebView2 runtime (Windows 11 has it; the installer offers
-                             it on Windows 10).
-  Stop a host you cannot see  scout-stop.cmd in this folder (stops only SCOUT's node process).
+  Run only the host ........ "SCOUT host (advanced: shows the log)" in the Start menu, or
+                             scout-host.cmd in this folder. This is the old way: a console window
+                             you leave open while you broadcast, printing the addresses and
+                             anything that goes wrong. Use it when you want to see the log live.
+  Stop a host you cannot see  "Stop SCOUT" in the Start menu, or scout-stop.cmd in this folder
+                             (stops only SCOUT's node process, never every node.exe).
+  The host log .............. scout-host.log in this folder. When the launcher starts the host it
+                             is started without a console, and its output is written here instead
+                             (the last 1 MB). Attach this file when you ask for help.
+  Read this instead ......... GETTING-STARTED.md in the docs folder next to the program files.
 
 Files here
 -------------------------------------------------------------------------------------------------

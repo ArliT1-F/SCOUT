@@ -3,7 +3,7 @@
 //
 // What it does, in order:
 //   1. build the control panel and overlay pages (vite -> dist/)
-//   2. compile the host to plain JavaScript (tsc -p tsconfig.build.json -> build/server)
+//   2. compile the host to plain JavaScript (tsc -p tsconfig.build.json -> build/, server/ + src/radar.ts)
 //   3. build the overlay shell (cargo tauri build -> scout-shell.exe)
 //   4. install the host's production dependencies into a staging directory
 //   5. put a Node runtime in the staging directory, so the operator needs no Node.js
@@ -226,6 +226,9 @@ mkdirSync(hostStage,{recursive:true});
 
 // The host code and the panel it serves.
 cpSync(path.join(repoRoot,'build','server'),path.join(hostStage,'server'),{recursive:true});
+// The one module the host shares with the panel (src/radar.ts). The host imports it as
+// '../src/radar.js', so the staged tree has to keep the same shape: server/ next to src/.
+cpSync(path.join(repoRoot,'build','src'),path.join(hostStage,'src'),{recursive:true});
 cpSync(path.join(repoRoot,'dist'),path.join(hostStage,'dist'),{recursive:true});
 // Radar overviews, scene thumbnails and weapon icons travel inside dist/: vite copies public/ into
 // the panel build, the server serves that directory, and the installer seeds the operator's radar
@@ -344,7 +347,9 @@ banner('Adding the launcher and documentation');
 cpSync(path.join(repoRoot,'installer','launcher'),path.join(stage,'launcher'),{recursive:true});
 mkdirSync(path.join(stage,'docs'),{recursive:true});
 copyFileSync(path.join(repoRoot,'README.md'),path.join(stage,'docs','README.md'));
+copyFileSync(path.join(repoRoot,'docs','INSTALL.md'),path.join(stage,'docs','GETTING-STARTED.md'));
 copyFileSync(path.join(repoRoot,'installer','README.md'),path.join(stage,'docs','INSTALL-WINDOWS.md'));
+copyFileSync(path.join(repoRoot,'docs','BETA.md'),path.join(stage,'docs','ACCOUNTS-AND-BETA.md'));
 copyFileSync(path.join(repoRoot,'src-tauri','README.md'),path.join(stage,'docs','OVERLAY-SHELL.md'));
 log(`  launcher/ + docs/ (${readdirSync(path.join(stage,'docs')).length} documents)`);
 

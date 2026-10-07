@@ -1,0 +1,111 @@
+# SCOUT-Setup-<version>.exe, built and published by a runner rather than by hand.
+#
+# Push a tag (`git tag v0.4.0 && git push origin v0.4.0`) or run this workflow with an explicit
+# version. The installer is built on windows-latest by installer/README.md's own script — the same
+# `npm run package:windows` an operator would run, including its smoke test — and the resulting file
+# is attached to a GitHub release. That release is what the dashboard hands out by default
+# (DEFAULT_DOWNLOAD_URL in server/beta.ts), unless an operator publishes their own build from the
+# panel's Operations tab (docs/RELEASE.md).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version for the installer, e.g. 0.4.1 (defaults to the tag, or package.json)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    name: Build and publish the Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Rust and the Tauri CLI (the launcher is a Tauri app)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo's downloads and the shell's target directory
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/**/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Inno Setup (the wizard itself)
+        run: choco install innosetup --no-progress -y
+
+      - run: npm ci
+
+      - name: Decide the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if (-not $version -and "${{ github.ref_type }}" -eq "tag") { $version = "${{ github.ref_name }}".TrimStart("v") }
+          if (-not $version) { $version = (Get-Content package.json | ConvertFrom-Json).version }
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Version '$version' does not look like 0.1.0." }
+          "value=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Building SCOUT-Setup-$version.exe"
+
+      - name: Shell tests (the same decision logic the installer ships)
+        run: cargo test --manifest-path src-tauri/core/Cargo.toml
+
+      - name: Package
+        run: node scripts/build-installer.mjs --version ${{ steps.version.outputs.value }}
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $file = "dist-installer\SCOUT-Setup-${{ steps.version.outputs.value }}.exe"
+          if (-not (Test-Path $file)) { throw "$file was not produced." }
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+          "$hash  SCOUT-Setup-${{ steps.version.outputs.value }}.exe" | Out-File -Encoding ascii "dist-installer\SHA256SUMS.txt"
+          Get-Content "dist-installer\SHA256SUMS.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SCOUT-Setup-${{ steps.version.outputs.value }}
+          path: |
+            dist-installer/*.exe
+            dist-installer/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $tag = "v$env:VERSION"
+          $exe = "dist-installer\SCOUT-Setup-$env:VERSION.exe"
+          $sums = "dist-installer\SHA256SUMS.txt"
+          $notes = @(
+            "SCOUT-Setup-$env:VERSION.exe is the Windows installer: the host, the control panel, the overlay pages,"
+            "the CS2 Game State Integration config, the launcher (SCOUT Shell) and the start-menu shortcuts."
+            "It bundles its own Node runtime, so the machine needs no Node.js."
+            ""
+            "Verify the download against SHA256SUMS.txt before running it. The installer is not code-signed,"
+            "so Windows SmartScreen will ask first — see docs/RELEASE.md in the repository."
+          ) -join "`n"
+          Set-Content -Path notes.md -Value $notes -Encoding utf8
+          gh release view $tag --repo ${{ github.repository }} *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $exe $sums --clobber --repo ${{ github.repository }}
+          } else {
+            gh release create $tag $exe $sums --title "SCOUT $env:VERSION" --notes-file notes.md --repo ${{ github.repository }}
+          }
