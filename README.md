@@ -63,7 +63,9 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 | `SCOUT_BETA_API_URL` | Serves accounts from a hosted account service instead of this machine; the host proxies `/api/beta/*` to it unchanged. See [docs/BETA.md](docs/BETA.md). |
 | `SCOUT_BETA_DIR` | Where the local account store lives when no hosted service is configured (default `config/beta/`, gitignored). |
 | `SCOUT_BETA_AUTO_APPROVE=1` | Development only: approves applications the moment they arrive instead of waiting for an owner. |
-| `SCOUT_DOWNLOAD_URL`, `SCOUT_DOWNLOAD_VERSION`, `SCOUT_DOWNLOAD_NOTES` | What the dashboard's download card points at (default: this repository's GitHub releases). |
+| `SCOUT_DOWNLOAD_URL`, `SCOUT_DOWNLOAD_VERSION`, `SCOUT_DOWNLOAD_NOTES` | What the dashboard's download card points at (default: this repository's GitHub releases). A release published in the panel's **Operations** tab overrides it; see [docs/RELEASE.md](docs/RELEASE.md). |
+| `SCOUT_REQUIRE_LICENCE=1` | Makes `GET /api/beta/license` authoritative: the launcher hides its overlay while the answer is a refusal. Off by default — a licence server outage must never take a broadcast off air. |
+| `SCOUT_ACCOUNT_DB`, `SCOUT_BETA_API_KEY`, `SCOUT_ACCOUNT_APPLICATIONS`, `SCOUT_ACCOUNT_REVIEW_NOTE`, `SCOUT_ACCOUNT_NAME` | The hosted account service (`npm run account-service`): where its SQLite file lives, the key the host presents, closing applications, the note shown on the dashboard, and the name it reports. [docs/ACCOUNT-SERVICE.md](docs/ACCOUNT-SERVICE.md). |
 
 - A cookie session lasts 12 hours of use and lives in memory; restarting signs everyone out. There are at most 32 concurrent sessions. Header tokens are checked on every request, so Companion/native clients do not depend on a process-local cookie.
 - Five wrong tokens from one address lock that address for ten minutes. The host does not log the candidate token.
@@ -101,8 +103,23 @@ hosted deployment of the marketing site has no operator panel at all. `/`, `/adm
 - **Hosted accounts are one variable away.** With `SCOUT_BETA_API_URL` set, the host stops owning the
   accounts and proxies `/api/beta/*` to that service instead — same paths, same cookies, no CORS — while
   the launcher keeps using the device flow against it. [docs/BETA.md](docs/BETA.md) documents the REST
-  contract that service has to implement and what is deliberately still missing (email delivery, license
-  enforcement at runtime, payments).
+  contract; **`server/account-service.ts` is a complete implementation of it** — one HTTP listener, one
+  SQLite file, no dependencies — run with `npm run account-service` and configured per
+  [docs/ACCOUNT-SERVICE.md](docs/ACCOUNT-SERVICE.md). `tests/account-service.test.ts` drives it over a
+  socket with the same client the host uses and compares its answers with the local store's, field for
+  field.
+- **The link is also a licence.** `GET /api/beta/license` reports whether this installation is still
+  linked to an approved account (`active`, `pending`, `unlinked`, `revoked`, `unknown`, `offline`). The
+  launcher asks every 15 minutes, keeps the last verified answer for a seven-day grace window, and only
+  refuses to draw the overlay on an explicit refusal *and* with enforcement switched on. The broadcast
+  itself — panel, output, GSI, recording — is never gated.
+- **Releases are an operator's job, not a rebuild.** The panel's **Operations** tab publishes the
+  installer an approved account is handed (a file served by this host, or an external URL), retires it
+  again in one click, and shows host health: uptime, the CS2 feed, output connections, beta accounts,
+  the licence state and the requests that failed in the last 15 minutes. `ci/release.yml` — the
+  GitHub Actions workflow, kept in [`ci/`](ci/README.md) because the token that pushed this branch
+  cannot create workflow files — builds `SCOUT-Setup-<version>.exe` on a tag;
+  [docs/RELEASE.md](docs/RELEASE.md) covers the rest.
 
 ### CS2 connection
 
@@ -329,15 +346,16 @@ For Bitfocus Companion or other HTTP button controllers, use a dedicated Produce
 
 ### Windows overlay shell (Tauri v2, optional)
 
-`src-tauri/` is a small Windows app that shows `/game` in a transparent, click-through, always-on-top window laid exactly over the CS2 window — an alternative to the OBS Browser Source for when the overlay should appear on the observer's own screen.
+`src-tauri/` is a small Windows app with two windows: the **overlay** — `/game` in a transparent, click-through, always-on-top window laid exactly over the CS2 window, an alternative to the OBS Browser Source for when the overlay should appear on the observer's own screen — and the **operator panel**, the host's own control surface in an ordinary window, so the launcher is the whole product rather than a spare monitor for the overlay.
 
 - It polls (250 ms) for the window titled exactly `Counter-Strike 2` with class `SDL_app`, and for its client area, foreground and minimised state. Nothing else: no memory reading, no injection, no hooks.
 - The overlay is visible only while CS2 is in the foreground (it hides about 400 ms after CS2 leaves, so a passing notification does not make it blink), follows a moved or resized window, and is built not to take keyboard focus (non-focusable window). Mouse input passes through to the game.
-- **F8** switches the overlay on and off; **Ctrl+Shift+F8** quits it (a hidden, click-through window has no other way out). Both are configurable.
+- **F8** switches the overlay on and off; **F9** shows and hides the operator window; **Ctrl+Shift+F8** quits (a hidden, click-through window has no other way out). All three are configurable, and the panel's address follows `--url` unless `--panel-url` says otherwise.
+- With `--require-link` (`SCOUT_SHELL_REQUIRE_LINK=1`) it asks the host once a minute whether this installation may run and stays hidden while the answer is a refusal; `active`, `unknown` and `offline` all keep it drawing, and the shell's own licence parser is unit-tested in `src-tauri/core/src/licence.rs`.
 - CS2 must run in *Fullscreen Windowed* (borderless): a window cannot be drawn over exclusive fullscreen.
 - It loads the overlay once the SCOUT host answers, so a host that is not running yet draws nothing over the game.
 - Build and run: install Rust and `cargo install tauri-cli --version "^2"`, then `npm run shell:build` (or `npm run shell:dev`). Options, environment variables and limits are in [`src-tauri/README.md`](src-tauri/README.md).
-- **Verification**: the shell's decisions (`src-tauri/core`) have unit tests, and the Win32 layer is executed against a fake `user32` (`npm run shell:test:win32`). The Tauri glue was type-checked against the documented Tauri 2.12 API. The shell has **not** been compiled against Tauri or run on Windows hardware — that has to happen on the observer machine.
+- **Verification**: the shell's decisions and its licence parser (`src-tauri/core`) have unit tests, and the Win32 layer is executed against a fake `user32` (`npm run shell:test:win32`). The Tauri glue was type-checked against the documented Tauri 2.12 API. The shell has **not** been compiled against Tauri or run on Windows hardware — that has to happen on the observer machine.
 
 ### Operator controls, archives and handoff
 
@@ -357,7 +375,9 @@ The preview uses the real renderer on a 1920 × 1080 canvas. The Browser Source 
 
 All ten requested operator improvements are implemented and integrated: on-air preflight, an isolated local replay studio, searchable match archives, producer-selected recap and player-stat scenes, reusable broadcast themes, authenticated Companion actions/feedback, owner-managed operator roles and lease/audit, versioned secret-free event packages, and the touch-first remote console. The complete editable overlay layer stack (add/edit/remove/reorder/scene-route), custom graphics and theme system are documented under [Overlay Studio and reusable themes](#overlay-studio-and-reusable-themes). `/game` remains a plain browser renderer; the optional shell is what makes it a native click-through window.
 
-**Code and test verification completed in this checkout:** `npx tsc --noEmit`, `npm test` (223 passing tests, including live-host RBAC/Companion/lease checks, event-pack restore, and the closed-beta account/launcher-flow suite in `tests/beta.test.ts`), and `npm run build` all pass. Vite emits existing `framer-motion` module-directive and >500 kB chunk-size warnings; the production build still completes successfully. An HTTP smoke check returned 200 for the operator, `/obs`, `/game`, touch remote, `/welcome`, `/login`, `/apply`, `/dashboard` and required APIs, and checked that the role-authenticated remote feedback responds. The closed-beta flow was also driven end to end over HTTP against a running host — apply, approve, invite, activate, sign in, launcher link, token collection, unlink — with the store inspected to confirm no secret is written in the clear. That confirms routing/API startup, not visual rendering: this environment had no browser binary and the Chromium download for Playwright failed, so the editor, theme appearance and `/obs` alpha have **not** had a screenshot/manual-browser check. The Agent Mode preview is available for review.
+**Code and test verification completed in this checkout:** `npx tsc --noEmit`, `npm test` (244 passing tests, including live-host RBAC/Companion/lease checks, event-pack restore, the closed-beta account/launcher-flow suite in `tests/beta.test.ts`, the licence-state and release-registry suite in `tests/licensing.test.ts`, and the hosted account service driven over a socket in `tests/account-service.test.ts`), and `npm run build` all pass. Vite emits existing `framer-motion` module-directive and >500 kB chunk-size warnings; the production build still completes successfully. An HTTP smoke check returned 200 for the operator, `/obs`, `/game`, touch remote, `/welcome`, `/login`, `/apply`, `/dashboard` and required APIs, and checked that the role-authenticated remote feedback responds. The closed-beta flow was also driven end to end over HTTP against a running host — apply, approve, invite, activate, sign in, launcher link, token collection, unlink — with the store inspected to confirm no secret is written in the clear. The same flow runs against the hosted account service in its own test file, over a real socket.
+
+**Not verified in this checkout:** the launcher's new window, its licence gate and the Tauri glue could not be compiled here — there is no Rust toolchain in this environment — so `src-tauri` changes are unproven until `npm run shell:test` and `npm run shell:test:win32` (or a Windows machine) run them. The release workflow (`ci/release.yml`) has not been executed here either: it is a workflow, and GitHub runs it on a tag. That confirms routing/API startup, not visual rendering: this environment had no browser binary and the Chromium download for Playwright failed, so the editor, theme appearance and `/obs` alpha have **not** had a screenshot/manual-browser check. The Agent Mode preview is available for review.
 
 **Still requires the actual tournament machine:** a real CS2 observer/GOTV feed and 20 Hz behavior, real OBS Browser Source alpha-compositing after theme changes, real `obs-websocket` interaction, and (if selected) the Tauri shell on Windows hardware. The HTTP endpoint and bridge tests use local/in-process fixtures; they cannot prove venue-network reliability or a complete real-match production rehearsal. Do an on-site preflight and confirm the transparent `/obs` source before going on air.
 

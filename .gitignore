@@ -22,3 +22,6 @@ src-tauri/gen/
 build/
 dist-stage/
 dist-installer/
+public/download/*
+!public/download/README.txt
+config/account-service/

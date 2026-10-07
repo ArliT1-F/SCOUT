@@ -83,9 +83,14 @@ export interface SiteBetaService {
  signOut(cookieId:string|undefined):Promise<void>;
  activate(input:{invite:string;password:string},context:BetaContext):Promise<BetaResult<{cookieId:string;account:AccountView}>>;
 }
+export interface LicenceCheck {status:'active'|'revoked'|'unknown';email?:string;displayName?:string}
 export interface LauncherBetaService {
  deviceStart(input:{label:string;platform:string},context:BetaContext):Promise<BetaResult<DeviceGrantView>>;
  devicePoll(input:{deviceCode:string}):Promise<BetaResult<DevicePollView>>;
+ // What a running installation asks about itself: is this launcher still linked to an approved
+ // account? In local mode the answer is the device list next door; in hosted mode it is the
+ // account service's own record, which is the only place a revocation can be known.
+ installationStatus(input:{deviceId:string;installationId:string;token:string}):Promise<BetaResult<LicenceCheck>>;
  // The panel's own two operations, so a hosted deployment can still review applications from the
  // observer machine: in local mode they are the store, in hosted mode they carry the service key.
  applications():Promise<AccountView[]>;
@@ -315,6 +320,22 @@ export class LocalBetaService implements BetaService {
   }
   return {ok:true,value:{status:'approved',deviceId:grant.deviceId||undefined,account:view}};
  }
+ async installationStatus(input:{deviceId:string;installationId:string;token:string}):Promise<BetaResult<LicenceCheck>>{
+  this.reap();
+  for(const account of this.store.accounts){
+   const device=account.devices.find(entry=>entry.id===input.deviceId);
+   if(!device) continue;
+   if(device.revokedAt) return {ok:true,value:{status:'revoked',email:account.email,displayName:account.displayName}};
+   // The token proves the caller is the installation the device id names, so a leaked device id
+   // alone cannot be used to read the account behind it.
+   if(hashToken(input.token)!==device.tokenDigest) return {ok:true,value:{status:'revoked',email:account.email,displayName:account.displayName}};
+   device.lastSeenAt=this.now();
+   await this.save();
+   if(account.status!=='approved') return {ok:true,value:{status:'revoked',email:account.email,displayName:account.displayName}};
+   return {ok:true,value:{status:'active',email:account.email,displayName:account.displayName}};
+  }
+  return {ok:true,value:{status:'unknown'}};
+ }
  async deviceDecide(cookieId:string|undefined,userCode:string,approve:boolean):Promise<BetaResult<{account:AccountView}>>{
   this.reap();
   const current=this.sessionAccount(cookieId);
@@ -370,6 +391,7 @@ export class HostedBetaService implements LauncherBetaService {
  // only be a copy that drifts. What the host itself needs is the launcher half below.
  async decide(id:string,decision:'approve'|'reject',decidedBy:string){return this.call<{account:AccountView;invite:string|null}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy})}
  async applications(){const result=await this.call<{applications:AccountView[]}>('/applications','GET');return result.ok?result.value.applications:[]}
+ async installationStatus(input:{deviceId:string;installationId:string;token:string}){return this.call<LicenceCheck>('/license/check','POST',input)}
  async deviceStart(input:{label:string;platform:string},context:BetaContext){return this.call<DeviceGrantView>('/device/start','POST',{...input,origin:context.origin})}
  async devicePoll(input:{deviceCode:string}){return this.call<DevicePollView>('/device/poll','POST',input)}
 }
@@ -410,6 +432,9 @@ export class Installation {
   await writeFile(this.file+'.tmp',JSON.stringify(this.state,null,2),{mode:0o600});
   await rename(this.file+'.tmp',this.file);
  }
+ // The host's own copy of what it presents to the account service. Never part of `view()`: the
+ // panel only ever needs to know *that* this installation is linked, not what it holds.
+ credentials(){return {installationId:this.state.installationId,deviceId:this.state.deviceId,token:this.state.installationToken}}
  view():InstallationView {
   const pending=this.state.pending&&this.state.pending.expiresAt>this.now()?this.state.pending:null;
   return {linked:!!(this.state.installationToken&&this.state.account),deviceId:this.state.deviceId,email:this.state.account?.email??null,displayName:this.state.account?.displayName??null,linkedAt:this.state.linkedAt,lastCheckedAt:this.state.lastCheckedAt,pending:pending?{userCode:pending.userCode,deviceCode:pending.deviceCode,expiresAt:pending.expiresAt}:null,installationId:this.state.installationId};

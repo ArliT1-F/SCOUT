@@ -2,6 +2,7 @@ import React,{useEffect,useState} from 'react';
 import {ArrowRight,ArrowUpRight,Check,ChevronRight,CircleCheck,Copy,Download,Gamepad2,KeyRound,Layers,LayoutDashboard,Link2,Loader2,LogIn,Monitor,Palette,Radio,RefreshCw,ShieldCheck,Swords,Unplug,Users,Wifi,Zap} from 'lucide-react';
 import {apiFetch,rememberToken} from './session';
 import type {AccountView,BetaStatusView,InstallationView} from '../server/beta';
+import type {LicenceView} from '../server/licensing';
 import type {PanelSessionView} from '../server/auth';
 // The public half of SCOUT: the landing page a tournament organiser finds, the application form for
 // the closed beta, the sign-in page, and the dashboard where an approved account downloads the
@@ -56,6 +57,7 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
   <nav className="site-nav-links">
    <a href="/welcome#product">Product</a>
    <a href="/welcome#scenes">Scenes</a>
+   <a href="/welcome#maps">Maps</a>
    <a href="/welcome#beta">Closed beta</a>
    <a href="/welcome#faq">FAQ</a>
   </nav>
@@ -90,7 +92,7 @@ function HudMock(){
    <span className="site-hud-clock"><b>1:24</b><small>ROUND 21 · MR12</small></span>
    <span className="site-hud-team t"><em>9</em><b>VITALITY</b><i/></span>
   </div>
-  <div className="site-hud-radar"><span className="site-hud-radar-label">MIRAGE</span><i className="dot-a"/><i className="dot-b"/><i className="dot-c"/></div>
+  <div className="site-hud-radar"><img src="/thumbs/site/radar-mirage.jpg" alt="" loading="eager"/><span className="site-hud-radar-label">MIRAGE</span><i className="dot-a"/><i className="dot-b"/><i className="dot-c"/></div>
   <div className="site-hud-kills">
    <span><b>s1mple</b> AWP <em>ZywOo</em></span>
    <span><b>apEX</b> AK-47 <em>Perfecto</em></span>
@@ -108,6 +110,19 @@ const FEATURES=[
  {icon:Users,title:'Several operators, one broadcast',body:'Owner, producer, designer and viewer roles, per-operator tokens, a 45-second control lease, and an audit trail of who switched what.'},
  {icon:Gamepad2,title:'Built for the observer PC',body:'The Windows launcher installs the host with its own runtime, writes the GSI config into the detected CS2 folder, and keeps match data separate from program files.'},
  {icon:Radio,title:'Replay, archives and OBS control',body:'GSI recording, round-by-round archives, replay previews, and optional two-way scene sync with OBS Studio over obs-websocket.'},
+];
+// Whatever is in public/thumbs/site/ is what the page shows: the same nine active-duty maps the
+// broadcast scenes use, resized once for the web (see public/thumbs/README.txt).
+const MAP_POOL=[
+ {file:'de_ancient',label:'Ancient',role:'Active duty'},
+ {file:'de_anubis',label:'Anubis',role:'Active duty'},
+ {file:'de_dust2',label:'Dust II',role:'Active duty'},
+ {file:'de_inferno',label:'Inferno',role:'Active duty'},
+ {file:'de_mirage',label:'Mirage',role:'Active duty'},
+ {file:'de_nuke',label:'Nuke',role:'Active duty'},
+ {file:'de_overpass',label:'Overpass',role:'Active duty'},
+ {file:'de_train',label:'Train',role:'Active duty'},
+ {file:'de_vertigo',label:'Vertigo',role:'Active duty'},
 ];
 const STEPS=[
  {title:'Apply',body:'Tell us who you are and what you broadcast. The application takes about a minute.'},
@@ -156,6 +171,14 @@ export function LandingPage(){
    <section className="site-section" id="product">
     <div className="site-section-head"><span className="site-section-eyebrow">WHAT IT DOES</span><h2>Everything between the game and the stream</h2><p>One process on the observer machine, one transparent browser source in OBS, and an operator panel that never gets in the way of the round.</p></div>
     <div className="site-grid">{FEATURES.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
+   </section>
+   <section className="site-section site-maps" id="maps">
+    <div className="site-section-head"><span className="site-section-eyebrow">THE MAP POOL</span><h2>Every active-duty map, ready on day one</h2><p>The matchup, veto and map-series scenes use the same pictures the panel does. Replace any of them with your own artwork in the admin — the filename is the contract, so a custom map is a drop-in file, not a code change.</p></div>
+    <div className="site-map-grid">{MAP_POOL.map(map=><figure className="site-map" key={map.file}>
+     <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} loading="lazy" decoding="async"/>
+     <figcaption><b>{map.label}</b><small>{map.role}</small></figcaption>
+    </figure>)}</div>
+    <p className="site-map-note">Pictures ship from the <code>cs2-map-icons</code> pack (see <code>public/thumbs/README.txt</code>); radar calibration for the live HUD is per map and is measured once in <b>Map radars</b>.</p>
    </section>
    <section className="site-section site-scenes" id="scenes">
     <div className="site-section-head"><span className="site-section-eyebrow">BROADCAST SCENES</span><h2>One click. On air.</h2><p>The panel switches the output between the live HUD and the full-canvas graphics a tournament actually needs.</p></div>
@@ -477,8 +500,16 @@ export function DownloadCard({account,download}:{account:AccountView;download:Be
 // the linked account without anyone refreshing anything.
 export function LauncherLinkCard(){
  const [state,setState]=useState<{mode:string;link:InstallationView}|null>(null);
+ const [licence,setLicence]=useState<LicenceView|null>(null);
  const [busy,setBusy]=useState(false);const [error,setError]=useState('');
- const load=React.useCallback(async()=>{try{const res=await apiFetch('/api/beta/link');if(res.ok)setState(await res.json())}catch{}},[]);
+ const load=React.useCallback(async()=>{
+  try{
+   const res=await apiFetch('/api/beta/link');if(res.ok)setState(await res.json());
+   // The licence answer rides along: this card is where an operator looks when a launcher will not
+   // start, so "not entitled" has to be visible here and not only in the Operations tab.
+   const licenceRes=await apiFetch('/api/beta/license');if(licenceRes.ok)setLicence(await licenceRes.json());
+  }catch{}
+ },[]);
  useEffect(()=>{void load();const timer=setInterval(()=>void load(),8000);return()=>clearInterval(timer)},[load]);
  async function start(){
   setBusy(true);setError('');
@@ -502,6 +533,7 @@ export function LauncherLinkCard(){
   <b>{link.email}</b>
   <small>{link.displayName||'SCOUT account'} · {"device "}{link.deviceId?.slice(0,6)||'—'}</small>
   <button className="mini-button" onClick={()=>void unlink()} disabled={busy}>Unlink</button>
+  <LicenceLine licence={licence}/>
   {error&&<span className="launcher-link-error">{error}</span>}
  </div>;
  if(link.pending) return <div className="launcher-link pending">
@@ -509,14 +541,26 @@ export function LauncherLinkCard(){
   <b className="launcher-code">{link.pending.userCode}</b>
   <small>Sign in at <b>/dashboard</b> and approve this code. It expires {new Date(link.pending.expiresAt).toLocaleTimeString()}.</small>
   <button className="mini-button" onClick={()=>navigator.clipboard?.writeText(link.pending!.userCode).catch(()=>{})}><Copy size={11}/>Copy code</button>
+  <LicenceLine licence={licence}/>
   {error&&<span className="launcher-link-error">{error}</span>}
  </div>;
  return <div className="launcher-link">
   <span className="launcher-link-head"><Link2 size={13}/>LAUNCHER NOT LINKED</span>
   <small>Link this installation to your SCOUT account so the website knows which launcher is yours.</small>
   <button className="mini-button" onClick={()=>void start()} disabled={busy}>{busy?<Loader2 className="spin" size={11}/>:<Link2 size={11}/>}Link this installation</button>
+  <LicenceLine licence={licence}/>
   {error&&<span className="launcher-link-error">{error}</span>}
  </div>;
+}
+// One line about entitlement, in the card an operator already looks at. `active`/`unknown`/`offline`
+// may run, so they are stated quietly; anything else is a refusal to start the launcher and is
+// coloured like one.
+function LicenceLine({licence}:{licence:LicenceView|null}){
+ if(!licence) return null;
+ const runnable=['active','unknown','offline'].includes(licence.state);
+ return <span className={'launcher-licence '+(runnable?'ok':'bad')} title={licence.message}>
+  {runnable?<Check size={11}/>:<ShieldCheck size={11}/>}LICENCE {licence.state.toUpperCase()}{licence.enforced?' · ENFORCED':' · REPORTED'}
+ </span>;
 }
 // ------------------------------------------------------------------ the owner's review desk
 // Applications arrive from the landing page. This is where an owner decides: approve mints the

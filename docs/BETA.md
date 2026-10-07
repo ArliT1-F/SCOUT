@@ -26,7 +26,7 @@ and moving to a hosted service later changes no page and no route.
 | `/apply` | The whitelist application | no |
 | `/login` | Account sign-in, invite activation, launcher-code approval, panel-token unlock | no |
 | `/dashboard` | Beta status, launcher download (approved only), launcher link, linked devices | yes |
-| `/`, `/admin` | Operator panel | panel token / local machine |
+| `/`, `/admin` | Operator panel — including **Beta applications** and **Operations** (health, releases, requests), both owner-only | panel token / local machine |
 | `/obs`, `/game` | Public broadcast output | no |
 
 The pages never talk to a cloud host directly: every call is same-origin `/api/beta/*`, and the host
@@ -54,6 +54,13 @@ CORS configuration anywhere.
    yet). The launcher polls, receives its installation token **once**, and writes
    `config/beta/installation.json` (mode 0600) next to the operator data.
 6. **Revoke** — `/dashboard` lists linked launchers with a last-seen time and an **Unlink** button.
+   Revoking takes effect on the launcher's next licence check (within 15 minutes; immediately on a
+   restart), and the launcher says so rather than dying quietly.
+7. **Run** — the launcher asks about itself every 15 minutes and caches the answer. The states it can
+   report are `active`, `pending`, `unlinked`, `revoked`, `unknown` (the service does not know this
+   installation — link it again) and `offline` (nobody answered; the last verified answer stays in
+   force for a seven-day grace window). Only an explicit refusal stops the overlay, and only when
+   enforcement is switched on.
 
 ### Why a device code and not an email code
 
@@ -102,6 +109,19 @@ value. The host proxies `GET|POST /api/beta/<path>` to `${SCOUT_BETA_API_URL}/<p
 | POST | `/device/poll` | `{deviceCode}` | `DevicePollView` |
 | POST | `/device/approve` \| `/device/deny` | `{userCode}` + cookie | `{account}` |
 | POST | `/devices/revoke` | `{deviceId}` + cookie | `{account}` |
+| POST | `/license/check` | `{deviceId, installationId, token}` | `{status: active\|revoked\|unknown, email?, displayName?}` |
+| GET | `/healthz` | — | `{ok, accounts, pending, devices}` |
+
+`/license/check` is what the launcher's licence check asks (`server/licensing.ts`, and the shell's own
+parser in `src-tauri/core/src/licence.rs`). It answers `200` with `unknown` for a device the service
+has never heard of and `revoked` for a wrong token, a revoked device or a non-approved account —
+never an error status, because the launcher has to be able to tell *"you are not entitled"* from
+*"nobody answered"*: the first hides the overlay when enforcement is on, the second must not.
+
+**A reference implementation ships in this repository.** `server/account-service.ts` is the whole
+contract behind one HTTP listener and one SQLite file, with no dependencies beyond Node's own. Run it
+with `npm run account-service`; `docs/ACCOUNT-SERVICE.md` covers deployment, backups, the CLI and what
+it deliberately leaves out.
 
 Types are exported from [`server/beta.ts`](../server/beta.ts) (`BetaStatusView`, `AccountView`,
 `ApplicationInput`, `DeviceGrantView`, `DevicePollView`, `InstallationView`) and are imported by the
@@ -117,16 +137,22 @@ are never proxied: they are about *this* installation.
 - **Email.** Invite links and password resets. The beta hands the link to the operator because a host
   with no mail server must still work; a real deployment sends it.
 - **Password reset.** The local flow deliberately has none beyond "ask for a new invite".
-- **Enforcement in the launcher.** Today the link is identity, not a licence: the panel keeps running
-  offline, as a broadcast tool must. Gating features on a valid, unrevoked token is the next step
-  (`installation.json` already holds the token, and `tokenDigest` on the account side makes
-  verification a digest comparison).
+- **Enforcement in the launcher.** The link is now also a licence — `GET /api/beta/license` on the
+  host, `/license/check` on the account service, and the shell refuses to draw the overlay when the
+  answer is an explicit refusal *and* the deployment asked for enforcement
+  (`SCOUT_REQUIRE_LICENCE=1` on the host, `SCOUT_SHELL_REQUIRE_LINK=1` on the launcher). It is off by
+  default on purpose: a broadcast tool that stops working because a licence server is unreachable
+  would be a worse failure than a licence that is not enforced. The broadcast itself — panel, output,
+  GSI, recording — is never gated, in any mode.
 - **Terms, privacy and a deletion path.** The application form collects a name, an address and a use
   case; a public deployment needs the paperwork and a `DELETE /account` behind it.
 
 ## Verified here
 
-`tests/beta.test.ts` pins the behaviour rather than the prose: a stranger can apply and nothing else,
+`tests/beta.test.ts` pins the behaviour rather than the prose — and so does
+`tests/licensing.test.ts` for the licence states, the grace window and the release registry, and
+`tests/account-service.test.ts` for the hosted service (driven over a socket by the same client the
+host uses, with the local store's answers compared field for field): a stranger can apply and nothing else,
 applications are rate limited, only an approval mints an invite, an invite works once, sign-in is
 throttled, a launcher code needs the account session, the installation token is handed over exactly
 once, an expired code stops working, the store survives a restart with sessions intact, the on-disk

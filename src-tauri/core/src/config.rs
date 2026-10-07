@@ -10,6 +10,14 @@ pub const DEFAULT_TITLE: &str = "Counter-Strike 2";
 /// Explorer (class `CabinetWClass`) cannot be mistaken for the game either. An empty class matches any.
 pub const DEFAULT_CLASS: &str = "SDL_app";
 pub const DEFAULT_HOTKEY: &str = "F8";
+/// The operator window is the panel of the host the shell is pointed at: the whole SCOUT control
+/// surface, in a normal window of the launcher rather than a browser tab. On by default — that is the
+/// point of a launcher — and `--no-panel` (or SCOUT_SHELL_PANEL=0) turns it off for overlay-only use.
+pub const DEFAULT_PANEL_URL: &str = "http://127.0.0.1:8080/";
+pub const DEFAULT_SHOW_PANEL: bool = true;
+/// Shows and hides the operator window. Distinct from the overlay's toggle: the panel is a window to
+/// work in, not something that follows the game.
+pub const DEFAULT_PANEL_HOTKEY: &str = "F9";
 /// A window that is hidden, click-through and has no taskbar button needs another way to be closed.
 pub const DEFAULT_QUIT_HOTKEY: &str = "Ctrl+Shift+F8";
 pub const DEFAULT_POLL_MS: u64 = 250;
@@ -31,6 +39,14 @@ pub struct ShellConfig {
     pub hide_ms: u64,
     /// Development mode: cover `rect` permanently instead of following CS2.
     pub always: bool,
+    /// Whether the shell opens the host's operator panel in a window of its own.
+    pub panel: bool,
+    /// The operator panel's address: the host root, derived from `url` unless it is set explicitly.
+    pub panel_url: String,
+    pub panel_hotkey: String,
+    /// Refuse to draw the overlay unless the host reports a licence that may run
+    /// (`SCOUT_REQUIRE_LICENSE=1` style enforcement; off by default, see src-tauri/README.md).
+    pub require_link: bool,
     /// The rectangle covered in `always` mode.
     pub rect: Rect,
     /// Things that were wrong with the configuration and were replaced by defaults.
@@ -48,6 +64,10 @@ impl Default for ShellConfig {
             poll_ms: DEFAULT_POLL_MS,
             hide_ms: DEFAULT_HIDE_MS,
             always: false,
+            panel: DEFAULT_SHOW_PANEL,
+            panel_url: panel_url(DEFAULT_URL),
+            panel_hotkey: DEFAULT_PANEL_HOTKEY.into(),
+            require_link: false,
             rect: DEFAULT_RECT,
             warnings: Vec::new(),
         }
@@ -65,6 +85,10 @@ struct Raw {
     hide: Option<String>,
     always: Option<String>,
     rect: Option<String>,
+    panel: Option<String>,
+    panel_url: Option<String>,
+    panel_hotkey: Option<String>,
+    require_link: Option<String>,
 }
 
 impl ShellConfig {
@@ -91,6 +115,10 @@ impl ShellConfig {
             hide: env("SCOUT_SHELL_HIDE_MS"),
             always: env("SCOUT_SHELL_ALWAYS"),
             rect: env("SCOUT_SHELL_RECT"),
+            panel: env("SCOUT_SHELL_PANEL"),
+            panel_url: env("SCOUT_SHELL_PANEL_URL"),
+            panel_hotkey: env("SCOUT_SHELL_PANEL_HOTKEY"),
+            require_link: env("SCOUT_SHELL_REQUIRE_LINK"),
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -102,6 +130,24 @@ impl ShellConfig {
                 raw.always = Some(inline.unwrap_or_else(|| "1".into()));
                 continue;
             }
+            // Boolean switches: `--panel` / `--no-panel`, `--require-link` / `--no-require-link`.
+            // `--flag=0` and `--flag=no` work too, through the same `parse_bool` the environment uses.
+            if let Some(value) = name.strip_prefix("--no-") {
+                let slot = match value {
+                    "panel" => Some(&mut raw.panel),
+                    "require-link" => Some(&mut raw.require_link),
+                    _ => None,
+                };
+                if let Some(slot) = slot {
+                    *slot = Some(inline.unwrap_or_else(|| "0".into()));
+                    continue;
+                }
+            }
+            if name == "--panel" || name == "--require-link" {
+                let slot = if name == "--panel" { &mut raw.panel } else { &mut raw.require_link };
+                *slot = Some(inline.unwrap_or_else(|| "1".into()));
+                continue;
+            }
             let slot = match name.as_str() {
                 "--url" => &mut raw.url,
                 "--title" => &mut raw.title,
@@ -111,6 +157,8 @@ impl ShellConfig {
                 "--poll" => &mut raw.poll,
                 "--hide" => &mut raw.hide,
                 "--rect" => &mut raw.rect,
+                "--panel-url" => &mut raw.panel_url,
+                "--panel-hotkey" => &mut raw.panel_hotkey,
                 _ => {
                     warnings.push(format!("ignored unknown argument `{arg}`"));
                     continue;
@@ -177,6 +225,48 @@ impl ShellConfig {
                 Some(always) => cfg.always = always,
                 None => warnings.push(format!("always `{}` is not a yes/no value; leaving it off", shorten(&value))),
             }
+        }
+        if let Some(value) = raw.panel {
+            match parse_bool(&value) {
+                Some(panel) => cfg.panel = panel,
+                None => warnings.push(format!("panel `{}` is not a yes/no value; leaving it on", shorten(&value))),
+            }
+        }
+        // Read before the value is moved: the default panel address is derived from the overlay
+        // address at the end of this function, and only when nothing set it explicitly.
+        let explicit_panel_url = raw.panel_url.is_some();
+        if let Some(value) = raw.panel_url {
+            match validate_url(&value) {
+                Ok(url) => cfg.panel_url = url,
+                Err(why) => warnings.push(format!("panel url `{}` ignored: {why}; using {}", shorten(&value), cfg.panel_url)),
+            }
+        }
+        if let Some(value) = raw.panel_hotkey {
+            if value.trim().is_empty() {
+                cfg.panel_hotkey.clear();
+            } else {
+                match validate_hotkey(&value) {
+                    Some(hotkey) => cfg.panel_hotkey = hotkey,
+                    None => warnings.push(format!("panel hotkey `{}` ignored; using {DEFAULT_PANEL_HOTKEY}", shorten(&value))),
+                }
+            }
+        }
+        // One chord cannot do two things: the overlay toggle and the quit chord win over the panel
+        // toggle, because losing the overlay (or the only way to quit) is worse than losing the panel.
+        if !cfg.panel_hotkey.is_empty() && (cfg.panel_hotkey.eq_ignore_ascii_case(&cfg.hotkey) || cfg.panel_hotkey.eq_ignore_ascii_case(&cfg.quit_hotkey)) {
+            warnings.push(format!("the panel hotkey `{}` is already used; the operator window opens on {DEFAULT_PANEL_HOTKEY} instead", cfg.panel_hotkey));
+            cfg.panel_hotkey.clear();
+        }
+        if let Some(value) = raw.require_link {
+            match parse_bool(&value) {
+                Some(require) => cfg.require_link = require,
+                None => warnings.push(format!("require-link `{}` is not a yes/no value; leaving it off", shorten(&value))),
+            }
+        }
+        // The default panel address follows the overlay address, unless it was set explicitly: an
+        // operator pointing the shell at a host on another machine gets that machine's panel too.
+        if !explicit_panel_url {
+            cfg.panel_url = panel_url(&cfg.url);
         }
         if let Some(value) = raw.rect {
             match parse_rect(&value) {
@@ -287,6 +377,24 @@ pub fn host_port(url: &str) -> Option<(String, u16)> {
         None => (authority, default_port),
     };
     (!host.is_empty()).then(|| (host.to_string(), port))
+}
+
+/// The host's operator panel address, derived from the overlay address: same scheme, same host, same
+/// port, root path. `http://127.0.0.1:8080/game` → `http://127.0.0.1:8080/`, and a host behind a path
+/// prefix keeps it. Query and fragment are dropped: the panel route is the root of the host.
+pub fn panel_url(overlay_url: &str) -> String {
+    let url = overlay_url.trim();
+    let Some(scheme_end) = url.find("://") else { return DEFAULT_PANEL_URL.into() };
+    let after_scheme = &url[scheme_end + 3..];
+    let end = after_scheme.find(['/', '?', '#']).unwrap_or(after_scheme.len());
+    if after_scheme.is_empty() {
+        return DEFAULT_PANEL_URL.into();
+    }
+    let authority = &after_scheme[..end];
+    if authority.is_empty() {
+        return DEFAULT_PANEL_URL.into();
+    }
+    format!("{}://{}/", &url[..scheme_end], authority)
 }
 
 /// Exact, case-insensitive title match.
@@ -457,6 +565,61 @@ mod tests {
         assert_eq!(cfg(100, 400).hide_after_polls(), 4);
         assert_eq!(cfg(2000, 5000).hide_after_polls(), 3);
         assert_eq!(cfg(0, u64::MAX).hide_after_polls(), u32::MAX, "no overflow even with nonsense");
+    }
+
+    #[test]
+    fn the_operator_window_is_on_by_default_and_can_be_turned_off() {
+        let cfg = parse(&[], &[]);
+        assert!(cfg.panel, "a launcher shows the panel; that is what it is for");
+        assert_eq!(cfg.panel_hotkey, "F9");
+        assert_eq!(cfg.panel_url, "http://127.0.0.1:8080/");
+        assert!(!parse(&["--no-panel"], &[]).panel);
+        assert!(!parse(&["--panel=0"], &[]).panel);
+        assert!(!parse(&[], &[("SCOUT_SHELL_PANEL", "off")]).panel);
+        assert!(parse(&["--panel"], &[("SCOUT_SHELL_PANEL", "0")]).panel, "the command line wins over the environment");
+        assert!(parse(&["--panel=maybe"], &[]).panel, "a value that is not a yes/no leaves it on");
+        assert!(parse(&["--panel=maybe"], &[]).warnings.iter().any(|w| w.contains("panel")));
+    }
+
+    #[test]
+    fn the_panel_address_follows_the_overlay_address_and_can_be_overridden() {
+        assert_eq!(parse(&["--url", "http://10.0.0.7:9000/game"], &[]).panel_url, "http://10.0.0.7:9000/");
+        assert_eq!(parse(&["--url", "https://scout.example.com/game"], &[]).panel_url, "https://scout.example.com/");
+        assert_eq!(parse(&["--url", "http://[::1]:8080/game?x=1"], &[]).panel_url, "http://[::1]:8080/");
+        assert_eq!(parse(&["--url", "http://host:8080/obs"], &[("SCOUT_SHELL_PANEL_URL", "http://host:8080/")]).panel_url, "http://host:8080/");
+        assert_eq!(parse(&["--panel-url", "http://192.168.1.5:8080/"], &[]).panel_url, "http://192.168.1.5:8080/");
+        let bad = parse(&["--panel-url", "javascript:alert(1)"], &[]);
+        assert_eq!(bad.panel_url, "http://127.0.0.1:8080/");
+        assert!(bad.warnings.iter().any(|w| w.contains("panel url")), "{:?}", bad.warnings);
+        for (url, expected) in [
+            ("http://127.0.0.1:8080/game", "http://127.0.0.1:8080/"),
+            ("https://host/game", "https://host/"),
+            ("http://host", "http://host/"),
+            ("http://host:8080/", "http://host:8080/"),
+            ("http://user:pw@host:8080/game", "http://user:pw@host:8080/"),
+        ] {
+            assert_eq!(panel_url(url), expected, "{url}");
+        }
+        for broken in ["", "not a url", "http://", "http:///game", "host:8080/game"] {
+            assert_eq!(panel_url(broken), DEFAULT_PANEL_URL, "{broken:?}");
+        }
+    }
+
+    #[test]
+    fn the_link_requirement_is_opt_in_and_never_steals_another_hotkey() {
+        assert!(!parse(&[], &[]).require_link, "the broadcast is never gated by default");
+        assert!(parse(&["--require-link"], &[]).require_link);
+        assert!(parse(&[], &[("SCOUT_SHELL_REQUIRE_LINK", "1")]).require_link);
+        assert!(!parse(&["--no-require-link"], &[("SCOUT_SHELL_REQUIRE_LINK", "yes")]).require_link);
+        assert!(!parse(&["--require-link=maybe"], &[]).require_link);
+        let clash = parse(&["--panel-hotkey", "F8"], &[]);
+        assert_eq!(clash.panel_hotkey, "", "the overlay toggle keeps F8");
+        assert!(clash.warnings.iter().any(|w| w.contains("panel hotkey")), "{:?}", clash.warnings);
+        let quit_clash = parse(&["--panel-hotkey", "Ctrl+Shift+F8"], &[]);
+        assert_eq!(quit_clash.panel_hotkey, "");
+        assert_eq!(parse(&["--panel-hotkey", "Ctrl+Alt+P"], &[]).panel_hotkey, "Ctrl+Alt+P");
+        assert_eq!(parse(&["--panel-hotkey="], &[]).panel_hotkey, "", "an empty value turns the hotkey off");
+        assert_eq!(parse(&[], &[]).panel_hotkey, DEFAULT_PANEL_HOTKEY);
     }
 
     #[test]

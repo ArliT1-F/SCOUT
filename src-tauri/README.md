@@ -1,8 +1,14 @@
 # SCOUT Shell — Windows overlay
 
-A small [Tauri v2](https://v2.tauri.app/) app that shows the SCOUT host's `/game` page in a **transparent, click-through,
-always-on-top window laid exactly over the CS2 window**, and hides it whenever CS2 is not in front. It is an alternative to
-the OBS Browser Source for when the overlay should appear on the observer's own screen.
+A small [Tauri v2](https://v2.tauri.app/) app with two windows and one job each:
+
+* the **overlay** — the SCOUT host's `/game` page in a **transparent, click-through, always-on-top window laid exactly over
+  the CS2 window**, hidden whenever CS2 is not in front. An alternative to the OBS Browser Source for when the overlay should
+  appear on the observer's own screen;
+* the **operator panel** — the host's own control surface (`/`) in an ordinary window of the launcher: teams, players, maps,
+  scenes, the OBS source address, the layout editor, the beta applications and the launcher link. It opens as soon as the host
+  answers and is toggled with **F9**, which is what makes the launcher the whole product rather than a spare monitor for the
+  overlay. `--no-panel` turns it off for overlay-only use.
 
 Like the rest of SCOUT it is strictly external. It never opens, reads or modifies the CS2 process and injects nothing; it
 enumerates top-level windows the way any task switcher does and draws its own window on top. As with any third-party
@@ -17,7 +23,10 @@ software near a game, follow your event's rules.
 | **Foreground visibility** | Visible only while CS2 is the foreground window. It shows the moment CS2 comes to the front and hides after ~400 ms of CS2 being out of front (debounced, so a notification or the Alt-Tab switcher opening does not make it blink). No game, minimised, or a zero-sized window all hide it. |
 | **Click-through** | Mouse input passes through to the game (`set_ignore_cursor_events`). The window is created unfocused and non-focusable (`focused(false)`, `focusable(false)`) and has no taskbar button, so showing it should never take the keyboard from CS2 — one of the things to confirm on Windows, see below. |
 | **F8** | Toggles the overlay on and off (global hotkey). Off means hidden whatever CS2 does, and takes effect immediately. |
+| **F9** | Shows and hides the operator window (`--panel-hotkey`). Never the same chord as F8 or the quit hotkey. |
 | **Ctrl+Shift+F8** | Quits the shell. A hidden, click-through window with no taskbar button has no other way out short of Task Manager. |
+| **The operator panel** | A normal window on the host root, derived from `--url` (`http://10.0.0.7:9000/game` → `http://10.0.0.7:9000/`) unless `--panel-url` says otherwise. It loads the blank page the app ships, shows itself the first time the host answers, and after that it is the operator's window. |
+| **The licence check** | With `--require-link` (or `SCOUT_SHELL_REQUIRE_LINK=1`) the shell asks the host `GET /api/beta/license` every minute and draws nothing while the answer is an explicit refusal. Off by default: a licence server outage must never be able to take a broadcast off air. `active`, `unknown` and `offline` all run; `revoked`, `unlinked` and `pending` hide the overlay. |
 | **Waits for the host** | The window starts on a blank transparent page shipped in the app. The overlay is only loaded once the SCOUT host answers on its address, so a host that is not running yet draws nothing over the game — never a browser error page. |
 
 CS2 must run in **Fullscreen Windowed** (borderless). A window cannot be drawn over exclusive fullscreen.
@@ -62,6 +71,10 @@ the default and prints a warning.
 | `--hide` | `SCOUT_SHELL_HIDE_MS` | `400` | How long CS2 must be out of front before the overlay hides, 0–5000 ms. |
 | `--always` | `SCOUT_SHELL_ALWAYS` | off | Ignore CS2 and cover `--rect` permanently (development). |
 | `--rect x,y,w,h` | `SCOUT_SHELL_RECT` | `0,0,1920,1080` | Rectangle for `--always`, physical pixels, at least 200 × 200. |
+| `--panel` / `--no-panel` | `SCOUT_SHELL_PANEL` | on | Open the host's operator panel in a window of its own. |
+| `--panel-url` | `SCOUT_SHELL_PANEL_URL` | derived from `--url` | The panel address. Same scheme/host/port as the overlay address, root path, unless set. |
+| `--panel-hotkey` | `SCOUT_SHELL_PANEL_HOTKEY` | `F9` | Show/hide the operator window. Empty disables the hotkey; a chord already used is refused with a warning. |
+| `--require-link` / `--no-require-link` | `SCOUT_SHELL_REQUIRE_LINK` | off | Hide the overlay unless the host reports that this installation may run. See the licence row above and `docs/BETA.md`. |
 
 A release build has no console. When you start it **from a terminal** it attaches to that terminal, so its diagnostics
 (what it is following, hotkey presses, load errors) are visible there.

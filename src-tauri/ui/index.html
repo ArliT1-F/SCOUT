@@ -2,9 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>SCOUT overlay</title>
-    <!-- Shown until the SCOUT host answers and the shell loads its /game page: blank and transparent on purpose,
-         so a host that is not up yet draws nothing over the game (never an error page). -->
+    <title>SCOUT</title>
+    <!-- Both of the shell's windows start here, on this blank page, and are navigated to the host once it
+         answers (the overlay to /game, the operator window to /). Blank and transparent on purpose: a host
+         that is not up yet must draw nothing over the game and show no error page in the panel. -->
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: transparent !important; }
     </style>

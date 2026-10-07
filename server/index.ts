@@ -25,6 +25,8 @@ import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,cleared
 import {appPath} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
+import {LicenceMonitor} from './licensing.js';
+import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // ---- Operator access from another machine (server/auth.ts). Reads stay open on purpose: the OBS
@@ -61,6 +63,19 @@ const beta:BetaRuntime=createBetaService({
 });
 if(beta.local) await beta.local.load();
 const installation=new Installation(path.join(betaDir,'installation.json'));await installation.load();
+// Is this installation entitled to run? Local installs are their own authority; a hosted account
+// service is asked at most every 15 minutes and its answer is cached (server/licensing.ts). The
+// broadcast is never gated on it — see docs/BETA.md.
+const licence=new LicenceMonitor({
+ mode:beta.mode,
+ source:beta.mode==='hosted'?beta.launcher:undefined,
+ enforced:process.env.SCOUT_REQUIRE_LICENCE==='1',
+});
+// Launcher distribution and health (server/operations.ts). Releases are published by an owner from
+// the Operations tab; the files themselves live in public/download/, which is gitignored.
+const releases=await new ReleaseRegistry('recordings/ops/releases.json','public/download').load();
+const requests=new RequestLog();
+const startedAt=Date.now();
 const betaContext=(req:express.Request):BetaContext=>({address:req.socket.remoteAddress||'unknown',userAgent:req.get('user-agent')||'',origin:betaOrigin(req),secure:requestIsSecure(req.headers)});
 // The origin an invite link or a launcher code points at: the address the operator actually used,
 // so the link works on the observer machine and on the phone that approves a launcher.
@@ -186,6 +201,15 @@ function privateRead(req:express.Request,res:express.Response,capability:PanelCa
  if(!decision.ok){res.status(decision.status).json({error:decision.message,code:decision.code});return false}
  res.locals.access=decision;return permit(res,capability);
 }
+// Every request, counted (server/operations.ts). Deliberately before the gate and before the
+// static routes, so the operations tab sees refusals and asset loads too — those are exactly the
+// rows an operator needs when something is wrong.
+app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
+ const at=Date.now();
+ res.on('finish',()=>requests.record({at,method:req.method,path:req.path,status:res.statusCode,ms:Date.now()-at,address:req.socket.remoteAddress||''}));
+ if(req.path.startsWith('/download/')&&req.method==='GET'&&res.statusCode<400) void releases.noteDownload(req.path.replace('/download/',''));
+ next();
+});
 app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
  if(!isProtected(req)) return next();
  if(!sameOrigin(req)){res.status(403).json({error:'Cross-site operator requests are refused. Open the panel itself.'});return}
@@ -276,6 +300,22 @@ app.use('/radars',express.static('public/radars'));
 // Scene thumbnails (public/thumbs/<map>.png) are replaced the same way — dropped in mid-event —
 // so they get a route of their own instead of relying on the build-time copy in dist/.
 app.use('/thumbs',express.static('public/thumbs'));
+// Installer drop folder: `npm run package:windows` writes SCOUT-Setup-<version>.exe, an operator
+// copies it here and publishes it from the Operations tab. Kept out of git like the recordings.
+app.use('/download',express.static('public/download',{fallthrough:false}));
+// A licence check needs no panel session: it is about a file this machine already holds, and the
+// launcher (src-tauri) asks for it before it draws anything over the game.
+app.get('/api/beta/license',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ const view=await licence.view(installation,req.query.refresh==='1');
+ res.json(view);
+});
+// Machine-readable liveness for a supervisor: no panel session, no match data, no secrets.
+app.get('/healthz',(_req,res)=>{
+ const gsi=feed.snapshot();
+ const age=gsi.lastPacketAt?Date.now()-gsi.lastPacketAt:null;
+ res.json({ok:true,uptimeMs:Date.now()-startedAt,version:'0.1.0',gsi:Boolean(gsi.accepted&&age!==null&&age<5000),outputs:wss.clients.size});
+});
 // Event packs include locally uploaded, validated artwork; only this route gets a larger parser.
 app.use('/api/pack/import',express.json({limit:'70mb'}));
 app.use(express.json({limit:'1mb'}));
@@ -388,6 +428,48 @@ app.post('/api/beta/applications/:id',async(req,res)=>{
   res.json({application:value.account,inviteUrl});
  });
 });
+// ---- Operations (server/operations.ts): the deployment's own desk. Owner-only, because publishing
+// an installer and reading traffic counters is running the beta, not broadcasting a match.
+app.get('/api/ops/health',(req,res)=>{
+ if(!privateRead(req,res,'view-audit'))return;
+ void (async()=>{
+  const [applications,licenceView]=await Promise.all([beta.launcher.applications(),licence.view(installation,false)]);
+  const gsi=feed.snapshot();
+  const list=releases.list();
+  const snapshot=healthSnapshot({
+   startedAt,version:'0.1.0',pid:process.pid,
+   beta:{mode:beta.mode,applications:{pending:applications.filter(entry=>entry.status==='pending').length,approved:applications.filter(entry=>entry.status==='approved').length,rejected:applications.filter(entry=>entry.status==='rejected').length},devices:applications.reduce((sum,entry)=>sum+entry.devices.length,0)},
+   licence:{state:licenceView.state,enforced:licenceView.enforced,email:licenceView.email},
+   releases:{published:list.length,latest:list[0]?.version??null,downloads:list.reduce((sum,entry)=>sum+entry.downloads,0)},
+   requests:requests.summary(),
+   output:{clients:wss.clients.size,gsiPackets:gsi.accepted,gsiAgeMs:gsi.lastPacketAt?Date.now()-gsi.lastPacketAt:null,gsiRejected:gsi.rejectedAuth+gsi.rejectedShape+gsi.rejectedLate,recording:recorder.status.enabled},
+  });
+  res.json({health:snapshot,releases:list,licence:licenceView,link:installation.view(),download:{folder:'public/download',defaultUrl:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,defaultVersion:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION}});
+ })();
+});
+const releaseSchema=z.object({version:z.string().trim().min(1).max(40),file:z.string().trim().max(160).optional(),url:z.string().trim().max(500).optional(),notes:z.string().max(400).optional()}).strip();
+app.post('/api/ops/releases',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ const parsed=releaseSchema.safeParse(req.body||{});
+ if(!parsed.success){res.status(400).json({error:'Give the release a version number.',code:'invalid-release'});return}
+ const decision=await releases.publish({...parsed.data,by:accessPrincipal(res).name});
+ if(!decision.ok){res.status(400).json({error:decision.message,code:'invalid-release'});return}
+ audit.record(accessPrincipal(res),'ops.release.publish',`${decision.release.version} · ${decision.release.file||decision.release.url}`);
+ console.log(`[ops] launcher ${decision.release.version} published (${decision.release.file||decision.release.url}) — approved dashboards now point at it`);
+ res.json({release:decision.release,releases:releases.list()});
+});
+app.delete('/api/ops/releases/:version',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ const removed=await releases.retire(String(req.params.version));
+ audit.record(accessPrincipal(res),'ops.release.retire',String(req.params.version));
+ res.json({removed,releases:releases.list()});
+});
+app.get('/api/ops/requests',(req,res)=>{
+ if(!privateRead(req,res,'view-audit'))return;
+ res.json(requests.summary());
+});
 if(beta.site){
  const site=beta.site,local=beta.local!;
  const applicationSchema=z.object({name:z.string().trim().min(2).max(80),email:z.string().trim().min(5).max(160),
@@ -401,7 +483,13 @@ if(beta.site){
   if(value.invite) console.log(`[beta] ${value.account.email} was approved on the spot (SCOUT_BETA_AUTO_APPROVE=1) — invite link:\n[beta]   ${betaOrigin(req)}/login?invite=${encodeURIComponent(value.invite)}`);
   else console.log(`[beta] application from ${value.account.email} (${value.account.organisation||'no organisation'}) is waiting for review — approve it in the panel, or with POST /api/beta/applications/:id`);
  };
- app.get('/api/beta/status',async(req,res)=>res.json(await site.status(accountCookieId(req))));
+ app.get('/api/beta/status',async(req,res)=>{
+  const view=await site.status(accountCookieId(req));
+  const latest=releases.latest();
+  // A published release wins over the configured default: it is the file this host actually holds.
+  if(view.download&&latest) view.download={url:latest.url,version:`SCOUT-Setup-${latest.version}.exe`,notes:latest.notes||`Published ${new Date(latest.publishedAt).toLocaleString()}`};
+  res.json(view);
+ });
  app.post('/api/beta/apply',async(req,res)=>{
   if(!sameOrigin(req)){res.sendStatus(403);return}
   const parsed=applicationSchema.safeParse(req.body);
@@ -490,9 +578,23 @@ if(beta.site){
     headers:{'Content-Type':'application/json',...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),...(process.env.SCOUT_BETA_API_KEY?{Authorization:`Bearer ${process.env.SCOUT_BETA_API_KEY}`}:{})},
     body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
    });
-   const text=await response.text();
+   let text=await response.text();
    const cookies=typeof response.headers.getSetCookie==='function'?response.headers.getSetCookie():[];
    if(cookies.length) res.setHeader('Set-Cookie',cookies);
+   // One exception to "upstream answers verbatim": when the operator has published a release here
+   // (Operations tab), the download the dashboard offers is that file rather than the service's
+   // default. Everything else — mode, sign-in, applications, the launcher flow — stays upstream's.
+   const route=req.originalUrl.replace(/^\/api\/beta/,'').split('?')[0];
+   if(req.method==='GET'&&route==='/status'&&response.ok){
+    const latest=releases.latest();
+    if(latest){
+     try{
+      const view=JSON.parse(text);
+      if(view.download) view.download={url:latest.url,version:`SCOUT-Setup-${latest.version}.exe`,notes:latest.notes||`Published ${new Date(latest.publishedAt).toLocaleString()}`};
+      text=JSON.stringify(view);
+     }catch{}
+    }
+   }
    res.status(response.status).type(response.headers.get('content-type')||'application/json').send(text);
   }catch(error:any){
    res.status(503).json({error:`The SCOUT account service could not be reached (${error?.message||'network error'}).`,code:'upstream-unreachable'});

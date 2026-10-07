@@ -40,7 +40,7 @@ AppName=SCOUT
 AppVersion={#AppVersion}
 AppVerName=SCOUT {#AppVersion}
 AppPublisher=SCOUT
-AppComments=Counter-Strike 2 broadcast overlay: host, control panel and overlay shell
+AppComments=Counter-Strike 2 broadcast overlay: host, control panel and launcher (overlay + operator panel)
 DefaultDirName={autopf}\SCOUT
 DefaultGroupName=SCOUT
 DisableProgramGroupPage=no
@@ -113,7 +113,7 @@ Name: "{#DataDir}\public\uploads\radars"; Flags: uninsneveruninstall
 [Icons]
 Name: "{group}\SCOUT host"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host (control panel, OBS pages, CS2 feed)"
 Name: "{group}\SCOUT control panel"; Filename: "http://127.0.0.1:{code:GetPort}/admin"; IconFilename: "{app}\host\scout.ico"; Comment: "Open the control panel in your browser"
-Name: "{group}\SCOUT overlay shell"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; Comment: "Transparent click-through overlay over CS2 (F8 toggles, Ctrl+Shift+F8 quits)"
+Name: "{group}\SCOUT launcher"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; Comment: "Overlay over CS2 (F8) and the operator panel (F9); Ctrl+Shift+F8 quits"
 Name: "{group}\Stop the SCOUT host"; Filename: "{#DataDir}\scout-stop.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Stop a host that is still running"
 Name: "{group}\{cm:UninstallProgram,SCOUT}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\SCOUT host"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Tasks: desktopicon
