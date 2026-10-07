@@ -172,11 +172,6 @@ export function LandingPage(){
      </div>
     </div>
    </section>
-   <section className="site-armory" aria-hidden="true">
-    <img className="armory-m4" src="/assets/m4a1-s.png" alt=""/>
-    <img className="armory-ak" src="/assets/ak-47.png" alt=""/>
-    <img className="armory-de" src="/assets/oceanic-deag.png" alt=""/>
-   </section>
    <section className="site-strip">
     <span><ShieldCheck size={15}/>No injection, no memory reading</span>
     <span><Monitor size={15}/>Runs beside the game, never inside it</span>
@@ -184,6 +179,7 @@ export function LandingPage(){
     <span><Wifi size={15}/>Your LAN, no cloud round-trip</span>
    </section>
    <section className="site-section" id="product">
+    <img className="site-scatter scatter-ak" src="/assets/ak-47.png" alt="" aria-hidden="true"/>
     <div className="site-section-head"><span className="site-section-eyebrow">WHAT IT DOES</span><h2>Everything between the game and the stream</h2><p>One process on the observer machine, one transparent browser source in OBS, and an operator panel that never gets in the way of the round.</p></div>
     <div className="site-layers">
      <b>On the live HUD</b>
@@ -193,6 +189,7 @@ export function LandingPage(){
     <div className="site-grid">{FEATURES.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
    </section>
    <section className="site-section site-tour" id="scenes">
+    <img className="site-scatter scatter-t" src="/assets/cs2-t.png" alt="" aria-hidden="true"/>
     <div className="site-section-head"><span className="site-section-eyebrow">BROADCAST SCENES</span><h2>One click. On air.</h2><p>Pick a scene and watch the real renderer change: this frame is the same component the panel previews and the output plays, driven by sample event data — not a screenshot that goes stale.</p></div>
     <div className="site-tour-grid">
      <div className="site-tour-frame">
@@ -212,6 +209,7 @@ export function LandingPage(){
     </div>
    </section>
    <section className="site-section site-maps" id="maps">
+    <img className="site-scatter scatter-m4" src="/assets/m4a1-s.png" alt="" aria-hidden="true"/>
     <div className="site-section-head"><span className="site-section-eyebrow">THE MAP POOL</span><h2>Every active-duty map, ready on day one</h2><p>The matchup and map-series scenes use the same pictures the panel does. Nine maps ship pre-filled, and replacing one is a file drop, not a code change.</p></div>
     <div className="site-map-strip">{MAP_POOL.map(map=><figure className="site-map-chip" key={map.file}>
      <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} loading="lazy" decoding="async"/>
@@ -227,6 +225,7 @@ export function LandingPage(){
     </div>
    </section>
    <section className="site-section site-how" id="how">
+    <img className="site-scatter scatter-ct" src="/assets/cs2-ct.png" alt="" aria-hidden="true"/>
     <div className="site-section-head"><span className="site-section-eyebrow">UNDER THE HOOD</span><h2>How the overlay actually works</h2><p>The detail a technical lead asks about before anything gets installed on a tournament machine.</p></div>
     <div className="site-how-grid">{UNDER_THE_HOOD.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
     <div className="site-panel-map">
@@ -243,8 +242,7 @@ export function LandingPage(){
     <div className="site-faq">{FAQ.map(([question,answer])=><details key={question}><summary>{question}<ChevronRight size={15}/></summary><p>{answer}</p></details>)}</div>
    </section>
    <section className="site-final">
-    <img className="site-agent agent-t" src="/assets/cs2-t.png" alt="" aria-hidden="true"/>
-    <img className="site-agent agent-ct" src="/assets/cs2-ct.png" alt="" aria-hidden="true"/>
+    <img className="site-scatter scatter-de" src="/assets/oceanic-deag.png" alt="" aria-hidden="true"/>
     <h2>Bring your next match to air</h2>
     <p>Apply for the closed beta, and we will send your invite link as soon as your account is approved.</p>
     <div className="site-cta center"><a className="button primary" href="/apply">Apply for the closed beta<ArrowRight size={14}/></a><a className="button" href="/login">I already have an account</a></div>
