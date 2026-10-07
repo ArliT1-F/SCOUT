@@ -74,6 +74,9 @@ export const SHOWCASE_FINISHED_CONFIG:any=normalizeConfig({
   {name:'Final',matches:[{id:'f1',a:{team:'vertex',label:''},b:{team:'parallax',label:''},aScore:2,bScore:0,winner:'a',status:'done'}]},
  ]},
 });
+// The map the sample match is live on, read from the same config the scenes print, so the picture
+// behind the transparent HUD is the same map the scoreboard names (de_inferno in this build).
+export const SHOWCASE_LIVE_MAP=String((SHOWCASE_CONFIG.maps??[]).find((map:any)=>map.status==='live')?.name??'de_inferno');
 export const SHOWCASE_RADARS=radarConfig as any;
 export const SHOWCASE_OVERLAY=defaultOverlay();
 export const showcaseEvents=(now:number,withRoundResult=false)=>{
@@ -107,14 +110,14 @@ function useLiveClock(){
  React.useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),1000);return()=>clearInterval(timer)},[]);
  return now;
 }
-export function HudStage({scene,className='',backdrop=true}:{scene:SceneId;className?:string;backdrop?:boolean}){
+export function HudStage({scene,className='',backdrop=true,map=SHOWCASE_LIVE_MAP}:{scene:SceneId;className?:string;backdrop?:boolean;map?:string}){
  // The panel's demo feed has no tournament behind it, so its preview shows stand-in sides; the page
  // passes the sample event described above instead. Everything else is the panel's own call.
  const [ref,scale]=useStageScale();
  const now=useLiveClock();
  const config=scene==='winner'?SHOWCASE_FINISHED_CONFIG:SHOWCASE_CONFIG;
  return <div className={('preview-stage '+className).trim()} ref={ref}>
-  {backdrop&&<div className="map-backdrop"><div className="building one"/><div className="building two"/><div className="archway"/><div className="pavement"/></div>}
+  {backdrop&&<div className="map-backdrop"><img className="map-backdrop-img" src={`/thumbs/site/${map}.jpg`} alt="" loading="lazy" decoding="async"/></div>}
   <div className="preview-hud" style={{['--preview-scale' as any]:scale}}>
    <Hud state={demo} controls={{...defaultControls,scene,breakEndsAt:scene==='break'?now+4*60*1000:null}}
     config={config} radars={SHOWCASE_RADARS} overlay={SHOWCASE_OVERLAY} lastSeen={now} now={now}
