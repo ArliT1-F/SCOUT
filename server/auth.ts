@@ -18,8 +18,8 @@ import {networkInterfaces} from 'node:os';
 // forwards would look local. And mutations get a same-origin check (`originTrusted`) as well, because
 // a browser reaches a local host through whatever name its page used — a rebound domain (evil.com
 // resolving to the host's address) sends a Host and Origin that agree with each other.
-// The token value only ever leaves this module through the cookie it builds and the comparison it
-// makes: it is never stored in a session record, an API response or a log line.
+// The token is never stored in a session record or returned by an API. The host deliberately prints
+// it once as part of the startup unlock link; after startup, request and audit logs omit its value.
 export const PANEL_COOKIE='scout_panel';
 export const PANEL_HEADER='x-scout-token';
 export const SESSION_TTL_MS=12*60*60*1000;
@@ -31,20 +31,34 @@ export const FAILURE_WINDOW_MS=10*60*1000;
 export const LOCKOUT_MS=10*60*1000;
 export const MAX_SESSIONS=32;
 export const TOKEN_BYTES=24;
+export const PANEL_ROLES=['owner','producer','designer','viewer'] as const;
+export type PanelRole=typeof PANEL_ROLES[number];
+export const PANEL_CAPABILITIES=['control','match-edit','design','manage-operators','view-audit'] as const;
+export type PanelCapability=typeof PANEL_CAPABILITIES[number];
+const ROLE_CAPABILITIES:Record<PanelRole,PanelCapability[]>={
+ owner:[...PANEL_CAPABILITIES],
+ producer:['control','match-edit'],
+ designer:['design'],
+ viewer:[],
+};
+export const capabilitiesFor=(role:PanelRole|undefined):PanelCapability[]=>role?[...ROLE_CAPABILITIES[role]]:[];
+export const hasCapability=(role:PanelRole|undefined,capability:PanelCapability)=>!!role&&ROLE_CAPABILITIES[role].includes(capability);
 export type TokenSource='env'|'generated';
 export type DenialCode='no-session'|'bad-session'|'remote-disabled'|'untrusted-host'|'throttled';
 export type AccessVia='local'|'cookie'|'header';
-export interface PanelSession {id:string;createdAt:number;lastSeenAt:number;address:string;host:string;userAgent:string}
-export interface AccessGranted {ok:true;local:boolean;via:AccessVia;session?:PanelSession}
+export interface Principal {id:string;name:string;role:PanelRole}
+export interface PanelSession {id:string;createdAt:number;lastSeenAt:number;address:string;host:string;userAgent:string;principal:Principal;credentialId:string}
+export interface OperatorTokenCredential {id:string;label:string;role:PanelRole;salt:string;digest:string}
+export interface AccessGranted {ok:true;local:boolean;via:AccessVia;session?:PanelSession;principal:Principal}
 export interface AccessDenied {ok:false;status:401|403|429;code:DenialCode;message:string;retryAfterMs?:number;attemptsLeft?:number}
 export type AccessDecision=AccessGranted|AccessDenied;
 // `allowedHosts` takes the raw comma-separated environment value as well, so the caller does not have
 // to pre-split it into the exact shape the policy wants.
-export interface PanelAuthOptions {token?:string;remoteEnabled?:boolean;requireLocalToken?:boolean;allowedHosts?:string[]|string;ttlMs?:number;now?:()=>number}
+export interface PanelAuthOptions {token?:string;operatorTokens?:OperatorTokenCredential[];remoteEnabled?:boolean;requireLocalToken?:boolean;allowedHosts?:string[]|string;ttlMs?:number;now?:()=>number}
 export interface PanelSessionView {
  authenticated:boolean;local:boolean;via:AccessVia|null;address:string;host:string;
  startedAt:number|null;expiresAt:number|null;remoteEnabled:boolean;tokenSource:TokenSource;
- allowedHosts:string[];sessions:number;
+ allowedHosts:string[];sessions:number;role:PanelRole|null;operator:string;principalId:string|null;sessionId:string|null;capabilities:PanelCapability[];
 }
 export interface PanelRequest {address?:string;host?:string;cookie?:string;headers?:Record<string,string|string[]|undefined>}
 // A generated token is shown once, on the host console; an environment token is the operator's own,
@@ -183,6 +197,7 @@ export class PanelAuth {
  private readonly now:()=>number;
  private sessions=new Map<string,PanelSession>();
  private failures=new Map<string,FailureRecord>();
+ private operatorTokens:OperatorTokenCredential[]=[];
  constructor(options:PanelAuthOptions={}){
   const configured=options.token?.trim()||'';
   this.token=configured||generateToken();
@@ -192,8 +207,24 @@ export class PanelAuth {
   this.allowedHosts=toAllowedSet(options.allowedHosts);
   this.ttlMs=options.ttlMs??SESSION_TTL_MS;
   this.now=options.now??Date.now;
+  this.setOperatorTokens(options.operatorTokens||[]);
  }
  get sessionCount(){return this.sessions.size}
+ setOperatorTokens(tokens:OperatorTokenCredential[]){
+  this.operatorTokens=tokens.map(token=>({...token}));
+  const active=new Set(this.operatorTokens.map(token=>token.id));
+  for(const [id,session] of this.sessions) if(session.credentialId!=='master'&&!active.has(session.credentialId))this.sessions.delete(id);
+ }
+ activeSessions(){this.reap();return [...this.sessions.values()].map(session=>({id:session.id,operator:session.principal.name,role:session.principal.role,address:session.address,host:session.host,createdAt:session.createdAt,lastSeenAt:session.lastSeenAt}))}
+ private principalForToken(candidate:string):{principal:Principal;credentialId:string}|undefined{
+  if(tokensMatch(candidate,this.token))return {principal:{id:'master',name:'Primary operator',role:'owner'},credentialId:'master'};
+  for(const entry of this.operatorTokens){
+   const actual=createHash('sha256').update(entry.salt,'hex').update(candidate).digest();
+   const expected=Buffer.from(entry.digest,'hex');
+   if(actual.length===expected.length&&timingSafeEqual(actual,expected))return {principal:{id:entry.id,name:entry.label,role:entry.role},credentialId:entry.id};
+  }
+  return undefined;
+ }
  // Run on every request, so expired sessions and stale failure records are dropped as traffic flows
  // instead of needing a timer of their own.
  reap(now=this.now()){
@@ -210,16 +241,17 @@ export class PanelAuth {
   const provided=bearerToken(request.headers||{});
   if(provided!==undefined){
    if(!this.remoteEnabled) return {ok:false,status:403,code:'remote-disabled',message:'Remote control is switched off on this host.'};
-   if(!tokensMatch(provided,this.token)) return {ok:false,status:401,code:'bad-session',message:'That panel token is not valid. Copy the token the host printed at startup.'};
-   return {ok:true,local:false,via:'header'};
+   const match=this.principalForToken(provided);
+   if(!match) return {ok:false,status:401,code:'bad-session',message:'That operator token is not valid or has been revoked. Ask an owner for a current access token.'};
+   return {ok:true,local:false,via:'header',principal:match.principal};
   }
   const id=cookieValue(request.cookie,PANEL_COOKIE);
   if(id){
    const session=this.sessions.get(id);
-   if(session){session.lastSeenAt=now;return {ok:true,local:false,via:'cookie',session}}
+   if(session){session.lastSeenAt=now;return {ok:true,local:false,via:'cookie',session,principal:session.principal}}
   }
   if(isLoopbackAddress(request.address)&&!this.requireLocalToken){
-   if(hostTrusted(host,this.allowedHosts)) return {ok:true,local:true,via:'local'};
+   if(hostTrusted(host,this.allowedHosts)) return {ok:true,local:true,via:'local',principal:{id:'local',name:'Local operator',role:'owner'}};
    // A request that reached this process from this machine but was addressed to a public name: a
    // proxy, a tunnel, or a rebound domain. Not the operator at the observer PC, whatever the socket
    // says — a hosted preview sandbox arrives exactly like this.
@@ -238,13 +270,14 @@ export class PanelAuth {
    return {ok:false,status:429,code:'throttled',message:`Too many wrong tokens from ${address}. Try again in ${Math.ceil(retryAfterMs/60000)} minute(s).`,retryAfterMs};
   }
   if(!this.remoteEnabled) return {ok:false,status:403,code:'remote-disabled',message:'Remote control is switched off on this host.'};
-  if(!tokensMatch(request.token||'',this.token)){
+  const match=this.principalForToken(request.token||'');
+  if(!match){
    const next=noteFailure(this.failures,address,now);
    const locked=next.count>=MAX_UNLOCK_FAILURES;
-   return {ok:false,status:locked?429:401,code:locked?'throttled':'bad-session',message:locked?`Too many wrong tokens from ${address}. Try again in ${Math.ceil(LOCKOUT_MS/60000)} minute(s).`:`That token does not match the one this host printed.${locked?'':` ${MAX_UNLOCK_FAILURES-next.count} attempt(s) left.`}`,attemptsLeft:Math.max(0,MAX_UNLOCK_FAILURES-next.count),retryAfterMs:locked?LOCKOUT_MS:undefined};
+   return {ok:false,status:locked?429:401,code:locked?'throttled':'bad-session',message:locked?`Too many wrong tokens from ${address}. Try again in ${Math.ceil(LOCKOUT_MS/60000)} minute(s).`:`That operator token is not valid. Ask the host owner for a current access token.${locked?'':` ${MAX_UNLOCK_FAILURES-next.count} attempt(s) left.`}`,attemptsLeft:Math.max(0,MAX_UNLOCK_FAILURES-next.count),retryAfterMs:locked?LOCKOUT_MS:undefined};
   }
   this.failures.delete(address);
-  const session:PanelSession={id:randomId(),createdAt:now,lastSeenAt:now,address,host:normalizeHost(request.host),userAgent:(request.userAgent||'').slice(0,120)};
+  const session:PanelSession={id:randomId(),createdAt:now,lastSeenAt:now,address,host:normalizeHost(request.host),userAgent:(request.userAgent||'').slice(0,120),principal:match.principal,credentialId:match.credentialId};
   this.sessions.set(session.id,session);
   // Oldest first: a venue keeps a handful of operator laptops, not fifty, and a cookie handed out
   // hours ago must not outlive the ones in use just because the table grew.
@@ -258,12 +291,15 @@ export class PanelAuth {
  view(request:PanelRequest={}):PanelSessionView {
   const decision=this.authorize(request);
   const session=decision.ok?decision.session:undefined;
+  const principal=decision.ok?decision.principal:undefined;
   return {
    authenticated:decision.ok,local:decision.ok&&decision.local,via:decision.ok?decision.via:null,
    address:request.address||'',host:normalizeHost(request.host),
    startedAt:session?.createdAt??null,expiresAt:session?session.createdAt+this.ttlMs:null,
    remoteEnabled:this.remoteEnabled,tokenSource:this.tokenSource,
    allowedHosts:[...this.allowedHosts],sessions:this.sessions.size,
+   role:principal?.role??null,operator:principal?.name||'',principalId:principal?.id??null,sessionId:session?.id??null,
+   capabilities:capabilitiesFor(principal?.role),
   };
  }
 }

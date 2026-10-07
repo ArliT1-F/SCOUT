@@ -2,10 +2,10 @@ import {z} from 'zod';
 // The operator's live switches (config/operator.json): which scene is on air, which HUD panels are shown,
 // the tactical-pause banner and the break countdown. Shared by the host (validation) and the panel
 // (types and the scene list), so a scene added here exists everywhere at once.
-export const SCENE_IDS=['live','matchup','lineups','veto','bracket','winner','break'] as const;
+export const SCENE_IDS=['live','matchup','lineups','veto','bracket','winner','break','recap','stats'] as const;
 export type SceneId=typeof SCENE_IDS[number];
 // Typed as a full record, so adding a scene id without a title is a compile error.
-export const SCENE_TITLES:Record<SceneId,string>={live:'Live game',matchup:'Matchup',lineups:'Lineups',veto:'Map series',bracket:'Tournament tree',winner:'Winner',break:'Break'};
+export const SCENE_TITLES:Record<SceneId,string>={live:'Live game',matchup:'Matchup',lineups:'Lineups',veto:'Map series',bracket:'Tournament tree',winner:'Winner',break:'Break',recap:'Round recap',stats:'Player stats'};
 export const controlsSchema=z.object({
  scene:z.enum(SCENE_IDS),
  radar:z.boolean(),

@@ -185,7 +185,7 @@ test('the break scene has default wording and a countdown that only counts down'
 });
 
 test('the controls schema knows every scene, defaults the timer, and still loads old operator files',()=>{
- assert.deepEqual([...SCENE_IDS],['live','matchup','lineups','veto','bracket','winner','break']);
+ assert.deepEqual([...SCENE_IDS],['live','matchup','lineups','veto','bracket','winner','break','recap','stats']);
  const {breakEndsAt:_omitted,...legacy}=defaultControls;
  assert.equal(controlsSchema.parse(legacy).breakEndsAt,null,'an operator.json written before the timer existed');
  assert.equal(controlsSchema.parse({...legacy,breakEndsAt:1_800_000_000_000}).breakEndsAt,1_800_000_000_000);

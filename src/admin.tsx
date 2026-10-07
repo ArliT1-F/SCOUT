@@ -12,7 +12,7 @@ import {breakClock,BREAK_TITLE} from './scenes';
 type DraftChange=(next:ScoutConfig)=>void;
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
 const MAP_NAMES=['de_ancient','de_anubis','de_dust2','de_inferno','de_mirage','de_nuke','de_overpass','de_train','de_vertigo'];
-export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'logo'|'map'|'radar'|'player';value?:string;onChange:(path:string)=>void;title?:string;compact?:boolean}){
+export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'logo'|'map'|'radar'|'player'|'overlay';value?:string;onChange:(path:string)=>void;title?:string;compact?:boolean}){
  const inputRef=useRef<HTMLInputElement>(null);
  const [busy,setBusy]=useState(false);
  const [error,setError]=useState('');

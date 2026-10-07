@@ -92,7 +92,7 @@ export function winnerOf(config:any,series?:SeriesLike&Partial<Pick<SeriesState,
 
 // The lineups scene. The operator's roster is the source; the live feed only stands in when the roster is
 // empty (the shipped default has no players) so the scene is never blank while CS2 is connected.
-export interface LiveLike {steamid?:string;name?:string;team?:string;observer_slot?:number}
+export interface LiveLike {steamid?:string;name?:string;team?:string;observer_slot?:number;match_stats?:{kills?:number;deaths?:number;assists?:number;mvp?:number;score?:number}}
 export function liveLineup(players:LiveLike[],side:'CT'|'T',nameOf:(player:LiveLike,side?:string)=>string,limit=5):PlayerCard[] {
  return players.filter(player=>player.team===side).sort((a,b)=>(a.observer_slot??99)-(b.observer_slot??99)).slice(0,limit)
   .map(player=>({name:nameOf(player,side),realName:'',role:'',photo:'',steamid:player.steamid||'',teamId:''}));

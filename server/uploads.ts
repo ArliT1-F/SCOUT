@@ -2,11 +2,11 @@ import type {ScoutConfig} from './config.js';
 // Operator uploads (team logos, map pictures, radar images, player portraits) are plain files under
 // public/uploads/<dir>/ referenced by path from config/teams.json or config/radars.json. Anything no
 // longer referenced is pruned so the folder cannot grow without bound across a long tournament.
-export const UPLOAD_DIRS=['logos','maps','radars','players'] as const;
+export const UPLOAD_DIRS=['logos','maps','radars','players','overlays'] as const;
 export type UploadDir=typeof UPLOAD_DIRS[number];
 
 // Every uploads/... path the saved configuration still points at.
-export function referencedUploads(config:Pick<ScoutConfig,'teams'|'maps'>,radars?:{maps?:Record<string,{image?:string}|undefined>}|null):Set<string> {
+export function referencedUploads(config:Pick<ScoutConfig,'teams'|'maps'>,radars?:{maps?:Record<string,{image?:string}|undefined>}|null,overlay?:{widgets?:Array<{asset?:string}>}|null):Set<string> {
  const referenced=new Set<string>();
  const keep=(value?:string)=>{if(value&&value.startsWith('uploads/')) referenced.add(value)};
  for(const team of config.teams){
@@ -15,6 +15,7 @@ export function referencedUploads(config:Pick<ScoutConfig,'teams'|'maps'>,radars
  }
  for(const map of config.maps) keep(map.image);
  for(const entry of Object.values(radars?.maps||{})) keep(entry?.image);
+ for(const widget of overlay?.widgets||[]) keep(widget.asset);
  return referenced;
 }
 
