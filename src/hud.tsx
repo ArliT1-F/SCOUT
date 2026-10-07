@@ -9,12 +9,13 @@ import {getWidget,overlayThemeStyle,widgetStyle,type OverlayConfig} from '../ser
 import {CustomOverlays,widgetVisible} from './custom-overlays';
 import {phaseView} from './phases';
 import {formatClock,interpolatedClock} from './clock';
-import {weaponInfo,activeWeapon,utilityOf,teamUtility,type Utility} from './weapons';
+import {weaponInfo,weaponLabel,activeWeapon,utilityOf,teamUtility,type Utility} from './weapons';
 import {WeaponIcon,UtilityIcon} from './icons';
 import {calibrationFor,radarPoints,type RadarConfig,type GrenadeKind} from './radar';
 import {buildRoster,identify,shownName,cardOf} from '../server/players';
 import {assetUrl} from './assets';
 import {SceneStage} from './stage';
+import {ScoutMark} from './logo';
 import type {Controls,SceneId} from '../server/controls';
 import {demo} from './demo';
 // The overlay renderer itself, shared by the two things that draw it: the operator panel's live
@@ -48,8 +49,6 @@ function Radar({state,sides,radars,pos,nameOf}:{state:MatchState;sides:ResolvedS
   <span className="radar-label">{state.map?.name?.replace('de_','').toUpperCase()||'—'}<small>{dots.length} TRACKED{grenades.length>0?` · ${grenades.length} NADE${grenades.length===1?'':'S'}`:''}</small></span>
  </div>;
 }
-const WEAPON_LABELS:Record<string,string>={weapon_ak47:'AK-47',weapon_m4a1:'M4A4',weapon_m4a1_silencer:'M4A1-S',weapon_awp:'AWP',weapon_deagle:'DEAGLE',weapon_usp_silencer:'USP-S',weapon_glock:'GLOCK',weapon_knife:'KNIFE',weapon_hegrenade:'HE',weapon_flashbang:'FLASH',weapon_smokegrenade:'SMOKE',weapon_molotov:'MOLLY',weapon_incgrenade:'INCENDIARY',weapon_decoy:'DECOY',weapon_ssg08:'SSG 08',weapon_aug:'AUG',weapon_sg556:'SG 553',weapon_famas:'FAMAS',weapon_galilar:'GALIL',weapon_mp9:'MP9',weapon_mp7:'MP7',weapon_mp5sd:'MP5-SD',weapon_ump45:'UMP-45',weapon_p90:'P90',weapon_mac10:'MAC-10',weapon_bizon:'BIZON',weapon_nova:'NOVA',weapon_xm1014:'XM1014',weapon_mag7:'MAG-7',weapon_sawedoff:'SAWED-OFF',weapon_m249:'M249',weapon_negev:'NEGEV',weapon_tec9:'TEC-9',weapon_fiveseven:'FIVE-SEVEN',weapon_cz75a:'CZ75',weapon_p250:'P250',weapon_elite:'DUALIES',weapon_revolver:'R8',weapon_taser:'ZEUS'};
-const weaponLabel=(name?:string)=>WEAPON_LABELS[name||'']||weaponInfo(name)?.label||'';
 // Killfeed: server-derived kills, newest first, faded out by age. Ages come from the host clock in
 // the snapshot, so the entries expire on the same schedule on every output surface.
 function Killfeed({events,sides,pos,nameOf}:{events?:{kills?:KillEvent[]};sides:ResolvedSides;pos?:React.CSSProperties;nameOf?:(player:{steamid?:string;name?:string},side?:string)=>string}){
@@ -101,7 +100,7 @@ const players=Object.values(state.allplayers||{});const sides=resolved||configSi
 const roster=React.useMemo(()=>buildRoster(config),[config]);const sideTeamId=(side?:string)=>sides[side==='CT'?'CT':'T']?.id;const nameOf=(who:{steamid?:string;name?:string},side?:string)=>shownName(roster,who,sideTeamId(side));const series=resolvedSeries||seriesState(state,config);const pips=(side:string)=><small className="pips">{series.pips[side==='CT'?'CT':'T'].map((won:boolean,index:number)=><i key={index} className={won?'on':''}/>)}</small>;const order=(controls.swapped?['T','CT']:['CT','T']) as ('CT'|'T')[];const rosterOrder=order;const team=(side:string)=>sides[side==='CT'?'CT':'T']||{name:side,color:side==='CT'?'#d970c2':'#e8c97e'};const color=(side:string)=>team(side).color||(side==='CT'?'#d970c2':'#e8c97e');const observed=players.find(p=>p.steamid===state.player?.steamid);const activeWeapon=Object.values(observed?.weapons||{}).find(w=>w.state==='active');const clock=interpolatedClock(state,demoMode?now:(lastSeen??0),now);const secs=clock.seconds;const score=(side:string)=>side==='CT'?state.map?.team_ct?.score:state.map?.team_t?.score;const view=demoMode?phaseView(demo):phaseView(state,controls);const lastRound=(events?.rounds||[]).filter(round=>round.map===state.map?.name).pop();const roundJustEnded=!!lastRound&&Date.now()-lastRound.endedAt<15000;
 return <div className={'hud '+(demoMode?'demo-hud':'')+(arranging?' arranging':'')} data-treatment={overlay?.theme.treatment||'broadcast'} data-density={overlay?.theme.density||'comfortable'} data-motion={overlay?.theme.motion||'cinematic'} data-grid={String(overlay?.theme.grid!==false)} data-glow={String(overlay?.theme.glow!==false)} style={overlayThemeStyle(overlay?.theme) as React.CSSProperties}>
   {sceneOn?<SceneStage scene={controls.scene} config={config} swapped={controls.swapped} series={series} sides={sides} players={players} nameOf={nameOf} events={events} breakEndsAt={controls.breakEndsAt??null} now={now+clockSkew}/>:<>
- {layerVisible('event')&&<div className="hud-event" style={styleOf('event')}>✳ <b>{config?.event?.name||'SCOUT'}</b><span>{[config?.event?.stage,(series.format||'bo3').toUpperCase()].filter(Boolean).join(' · ')}</span></div>}
+ {layerVisible('event')&&<div className="hud-event" style={styleOf('event')}><ScoutMark className="hud-event-mark" size={22}/><b>{config?.event?.name||'SCOUT'}</b><span>{[config?.event?.stage,(series.format||'bo3').toUpperCase()].filter(Boolean).join(' · ')}</span></div>}
  {layerVisible('scoreboard')&&<div className="scoreboard" style={styleOf('scoreboard')}><div className="score-team" style={{['--team']:color(order[0])} as any}><Mark logo={team(order[0]).logo} color={color(order[0])}/><div><b>{team(order[0]).name}</b>{pips(order[0])}</div><strong>{score(order[0])??'–'}</strong></div><div className="clock">{view.clock&&<small>{series.phase==='overtime'?`OVERTIME ${series.otPeriod??1} · ${series.roundsThisHalf}/${series.otPerHalf}`:`ROUND ${series.round} / ${series.regulationRounds}`}</small>}{view.clock&&<b className={clock.source==='bomb'?'bomb-clock':''}>{clock.source==='bomb'?'◉ ':''}{formatClock(secs,clock.source==='bomb'?1:0)}</b>}<span>{clock.defusing?'DEFUSING':state.map?.name?.replace('de_','').toUpperCase()||'WAITING'}</span></div><div className="score-team lime" style={{['--team']:color(order[1])} as any}><strong>{score(order[1])??'–'}</strong><div>{pips(order[1])}<b>{team(order[1]).name}</b></div><Mark other logo={team(order[1]).logo} color={color(order[1])}/></div></div>}
  {!signal&&!demoMode&&layerVisible('signal')&&<div className="signal-lost" style={widgetStyleOf('signal')}>SIGNAL LOST · Waiting for CS2 GSI</div>}
  {view.banner&&layerVisible('phaseBanner')&&<div className={'phase-banner phase-'+view.banner} style={widgetStyleOf('phaseBanner')}>{view.banner==='freezetime'?'FREEZE TIME':view.banner==='round-over'?'ROUND OVER':'TACTICAL PAUSE'}</div>}

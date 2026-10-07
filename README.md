@@ -79,6 +79,30 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 - `GET /api/remote/state` is an authenticated Producer/Owner feedback endpoint; `POST /api/remote/action` is role- and lease-protected. Private operator/audit and event-pack export routes enforce their own capabilities. Public match/output reads remain intentionally public.
 - **Verified here**: the host is driven over HTTP from a second address in `tests/panel-live.test.ts`; tests cover refusals, one-time link/cookie, role-scoped tokens, producer lease/action, designer denials, authenticated Companion feedback, revocation, lockout, rebound-host and WebSocket-origin cases. Real venue networking/proxy TLS remains an on-site check.
 
+### The mark, the favicon and phones
+
+The SCOUT mark is an inline SVG (`src/logo.tsx`, `public/logo/scout-mark.svg`, `public/favicon.svg`,
+`public/favicon.png`, `public/apple-touch-icon.png`): eight rounded spokes and a hub, two pinks, and
+the app icon's centre hole cut by a mask so the mark sits on any surface. It replaced the `✳`
+character that used to stand in for a logo in the panel sidebar, the unlock screen, the touch remote,
+the landing page, the HUD event header and every broadcast scene's header. Geometry is measured from
+`src-tauri/icons/128x128.png` and pinned by `tests/logo.test.ts`, which also fails if the glyph comes
+back. The tab icon, the phone home-screen icon and the desktop shortcut are now the same artwork.
+
+The web surfaces are phone-first where it counts. The panel is a desktop console that now *works* on a
+phone — the sidebar becomes a drawer behind a top bar (≤ 700px) with 44px tap targets, one-column
+content, 16px inputs (so iOS does not zoom the page on focus) and safe-area padding for notches. The
+public pages reflow at ≤ 760px (and 320px is checked): one-column hero with full-width calls to
+action, a 3-up/2-up map strip, a stacked footer, and short nav labels so the phone header stays one
+row. `/?remote=1` remains the screen built for a phone in an operator's hand.
+
+Worth knowing: the panel's chrome used to be written with bare element selectors (`footer{}`, `nav{}`,
+`main{}`, `header{}`), which also matched the landing page's own `<footer>`, `<nav>`, `<main>` and
+`<header>` — on a 390px phone the landing page's three footer blocks were forced into one 812px row.
+Those rules are scoped to `.app` (`.app footer{}`), and `tests/mobile-layout.test.ts` refuses a bare
+structural element selector, a fixed-floor `auto-fit` grid track (the FAQ overflowed 320px), and a
+drawer whose classes are not rendered.
+
 ### Landing page, sign-in and the closed beta
 
 The public half of SCOUT lives at `/welcome` (the product page), `/apply` (the whitelist application),
@@ -279,7 +303,7 @@ The host derives kills and round results by differencing successive snapshots (`
 - **Rounds**: `round.phase: over` (or a gameover/intermission map phase) closes the round once, with the winner from `round.win_team` (falling back to `map.round_wins`) and a reason taken from the bomb transition (`bomb`, `defuse`), a wiped roster (`elimination`) or the clock (`time`).
 - The >5 s heartbeat gap, a map change or a provider change clears the kill feed and the per-player watch state; finished rounds are kept because they are history rather than live state.
 
-The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: team colours from `config/teams.json`, the weapon's name, headshot marker, newest first, and each entry fades out after ~7 s and disappears at 9 s. The operator preview shows sample kills while it is on Demo feed.
+The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: team colours from `config/teams.json`, the weapon's name, headshot marker, newest first, and each entry fades out after ~7 s and disappears at 9 s. The operator preview shows sample kills — and one confirmed sample round, so the Round recap scene has a result to draw instead of its empty state — while it is on Demo feed.
 
 ### Teams, rosters, map series and tournament tree
 
@@ -317,7 +341,7 @@ Matchup, lineups, map series, tournament tree, winner, break, round recap and pl
 | Winner | the champion, final score, per-map results, the starting five | see below |
 | Break | your wording, a countdown, and the next map | `config.break`, `controls.breakEndsAt` |
 | Round recap | Most recent confirmed GSI round result, map/round, score, reason and up to five matching kills | Derived round and kill events; no inferred winner |
-| Player stats | Live K / D / A / MVP comparison grouped by resolved team side | GSI `allplayers[].match_stats` |
+| Player stats | Live K / D / A / MVP comparison per team — each column showing its own five players (the GSI side, else the roster's SteamIDs, else observer-slot order), sorted by kills and named through the operator's aliases | GSI `allplayers[].match_stats` |
 
 - **Series score**: the operator's recorded map results win; before any are entered the live GSI series score is used, credited through the resolved sides (a stand-in side has no team to credit).
 - **Winner**: the live GSI series winner, then recorded results, then the tree's final, then a finished map. With nothing decided it says so rather than guessing.

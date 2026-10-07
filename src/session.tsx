@@ -1,4 +1,5 @@
 import React,{useState} from 'react';
+import {ScoutMark} from './logo';
 import {KeyRound,LogOut,Monitor,ShieldCheck,Wifi} from 'lucide-react';
 import type {PanelSessionView} from '../server/auth';
 // The operator side of remote access. The host decides who may change the broadcast (server/auth.ts);
@@ -64,7 +65,7 @@ export function UnlockScreen({session,message,onUnlocked}:{session:PanelSessionV
  }
  return <div className="unlock-screen">
   <form className="unlock-card" onSubmit={submit}>
-   <div className="unlock-brand"><span className="brand-symbol">✳</span> scout<span className="brand-dot">®</span></div>
+   <div className="unlock-brand"><ScoutMark className="brand-symbol" size={40}/> scout<span className="brand-dot">®</span></div>
    <h1>Operator panel locked</h1>
    <p className="unlock-lead">
     {remoteEnabled?<>This panel is served from <b>{session?.host||location.host}</b>, which is not this browser&apos;s own machine, so the host asks for the panel token before it accepts any change.</>

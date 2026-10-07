@@ -24,17 +24,25 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .app{display:flex;min-height:100vh}
 .sidebar{width:226px;position:fixed;inset:0 auto 0 0;border-right:1px solid var(--line-soft);background:var(--bg-raise);padding:30px 18px 0;display:flex;flex-direction:column;z-index:5}
 .brand{display:flex;align-items:center;gap:10px;font-size:35px;font-weight:700;letter-spacing:-2px;padding-left:9px;line-height:40px}
-.brand-symbol{color:var(--accent);font-size:45px;letter-spacing:0}.brand-dot{font-size:11px;align-self:flex-start;margin-left:-6px;letter-spacing:0;color:var(--accent-deep)}
+.brand-symbol{width:40px;height:40px;color:var(--accent);--mark-bright:var(--accent-bright);flex-shrink:0;display:block}.brand-dot{font-size:11px;align-self:flex-start;margin-left:-6px;letter-spacing:0;color:var(--accent-deep)}
+/* The SCOUT mark (src/logo.tsx): an inline SVG, so it is crisp at any size and takes its colour from
+   the element around it. --mark-bright is the second pink of the icon; leaving it unset makes the
+   mark a single colour, which is what a monochrome context wants. */
+.scout-brand{display:inline-flex;align-items:center;gap:8px}
+.footer-mark{color:var(--accent);--mark-bright:var(--accent-bright);display:block;flex-shrink:0}
+.footer-brand{display:inline-flex;align-items:center;gap:7px}
 .workspace{display:flex;gap:10px;align-items:center;background:var(--bg-soft);border:1px solid var(--line);border-radius:7px;padding:11px 9px;margin:32px 0;font-size:11px}
 .workspace small{display:block;font-size:9px;color:var(--text-faint);margin-top:4px}
 .workspace-icon{background:var(--accent-deep);color:#fff;border-radius:5px;padding:8px 10px;font-weight:700}
 .workspace>svg{margin-left:auto;color:var(--text-faint)}
 .nav-label,.section-label{font-size:9px;letter-spacing:1.5px;color:var(--text-faint);font-weight:600}
 .nav-label{padding-left:14px;margin-bottom:13px}
-nav{display:grid;gap:7px}
-nav button{display:flex;align-items:center;gap:12px;text-align:left;font-size:12px;color:var(--text-dim);padding:12px 13px;border-radius:5px}
-nav button.active{background:linear-gradient(90deg,#2c1329,#241022);color:var(--accent-bright)}
-nav button.active svg{color:var(--accent)}
+/* The panel's own chrome. Scoped to .app on purpose: a bare `footer{}` also matched the landing
+   page's <footer class="site-footer"> and forced its blocks into one row (a phone-width bug). */
+.app nav{display:grid;gap:7px}
+.app nav button{display:flex;align-items:center;gap:12px;text-align:left;font-size:12px;color:var(--text-dim);padding:12px 13px;border-radius:5px}
+.app nav button.active{background:linear-gradient(90deg,#2c1329,#241022);color:var(--accent-bright)}
+.app nav button.active svg{color:var(--accent)}
 .nav-active-dot{height:5px;width:5px;background:var(--accent);border-radius:50%;margin-left:auto}
 .sidebar-bottom{margin-top:auto;padding-top:60px}
 .host-card{border:1px solid var(--line);background:#151019;border-radius:6px;padding:13px 11px;font-size:10px}
@@ -49,8 +57,8 @@ nav button.active svg{color:var(--accent)}
 .operator>span{background:#2c1b2c;border:1px solid var(--accent-deep);color:var(--accent-bright);border-radius:50%;padding:9px;font-size:10px}
 .operator small{display:block;color:var(--text-faint);font-size:9px;margin-top:4px}
 .operator>svg{margin-left:auto;color:var(--text-faint)}
-main{margin-left:226px;width:calc(100% - 226px)}
-header{height:69px;display:flex;align-items:center;justify-content:space-between;padding:0 34px;border-bottom:1px solid var(--line-soft)}
+.app main{margin-left:226px;width:calc(100% - 226px)}
+.app header{height:69px;display:flex;align-items:center;justify-content:space-between;padding:0 34px;border-bottom:1px solid var(--line-soft)}
 .breadcrumb{display:flex;gap:13px;align-items:center;color:var(--text-faint);font-size:11px}
 .breadcrumb span{color:var(--text)}
 .header-right{display:flex;align-items:center;gap:20px}
@@ -205,7 +213,7 @@ header{height:69px;display:flex;align-items:center;justify-content:space-between
 .editor-head h2{margin:0 0 6px;font-size:15px}
 .editor-head p{margin:0 0 12px;color:var(--text-dim);font-size:11px;line-height:1.7;max-width:720px}
 /* Admin editors */
-.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:13px;padding:8px 22px 20px}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr));gap:13px;padding:8px 22px 20px}
 .form-grid .field-wide{grid-column:span 2}
 /* Break screen editor */
 .break-timer{padding:0 22px 6px}
@@ -317,15 +325,16 @@ header{height:69px;display:flex;align-items:center;justify-content:space-between
 .team-mark.other i{height:16px}
 .team-mark.has-logo img{width:34px;height:34px;object-fit:contain;display:block}
 /* Footer & toast */
-footer{display:flex;justify-content:space-between;align-items:center;padding:26px 34px 30px;color:var(--text-faint);font-size:10px}
-footer i{margin:0 10px;font-style:normal;opacity:.5}
+.app footer{display:flex;justify-content:space-between;align-items:center;padding:26px 34px 30px;color:var(--text-faint);font-size:10px}
+.app footer i{margin:0 10px;font-style:normal;opacity:.5}
 .footer-brand{color:var(--accent);font-weight:700;margin-right:10px;letter-spacing:.5px}
-footer .status-dot{margin-right:7px}
+.app footer .status-dot{margin-right:7px}
 .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:9px;background:var(--accent-deep);color:#fff;border-radius:6px;padding:12px 18px;font-size:11px;z-index:50;box-shadow:0 10px 30px #00000066}
 /* ============================ HUD overlay (transparent output) ============================ */
 .hud{position:absolute;inset:0;font-family:'Barlow Condensed','DM Sans',sans-serif;color:#f2eef5;pointer-events:none;overflow:hidden}
 .hud-event{position:absolute;top:24px;left:28px;display:flex;align-items:baseline;gap:12px;font-size:19px;letter-spacing:2px;color:#d9cfe2}
 .hud-event b{font-size:26px;letter-spacing:1px;color:#fff;text-transform:uppercase}
+.hud-event-mark{color:var(--accent);--mark-bright:var(--accent-bright);align-self:center;flex-shrink:0}
 .hud-event span{font-size:13px;letter-spacing:3px;color:var(--accent-bright)}
 .scoreboard{position:absolute;top:62px;left:28px;right:28px;height:84px;display:flex;align-items:center;background:#120e18e8;border-bottom:2px solid var(--accent-deep)}
 .score-team{display:flex;align-items:center;gap:14px;flex:1;padding:0 16px}
@@ -350,7 +359,13 @@ footer .status-dot{margin-right:7px}
 .phase-card{position:absolute;left:50%;transform:translateX(-50%);top:210px;text-align:center;background:#120e18f6;padding:26px 64px;border-top:3px solid var(--accent);border-bottom:3px solid var(--accent);animation:kill-in .18s ease-out}
 .phase-card h3{margin:0;font-size:52px;letter-spacing:9px}
 .phase-card p{margin:10px 0 0;color:#b8a9c3;letter-spacing:3px;font-size:17px}
-.killfeed{position:absolute;right:28px;top:166px;width:430px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;pointer-events:none}
+/* The live HUD reads in bands. The event header and the scoreboard ribbon own the top of the canvas
+   (the ribbon is 62–146px at the comfortable density), and everything the cast follows in a round starts
+   below it: the radar and the killfeed share the band at 176px — 30px of air under the ribbon, so the
+   radar can never sit on top of the match/round bar — and the rosters open the next one at 496px,
+   clear of the 300px radar above the left column. These are the shipped defaults; a saved
+   config/layout.json still overrides any of them, and the panel's Arrange mode drags from here. */
+.killfeed{position:absolute;right:28px;top:176px;width:430px;display:flex;flex-direction:column;gap:6px;align-items:flex-end;pointer-events:none}
 .kill{display:flex;align-items:center;gap:11px;background:#120e18f2;padding:9px 13px;font-size:22px;animation:kill-in .18s ease-out}
 .kill b{font-weight:600;text-transform:uppercase;letter-spacing:.5px}
 .kill-weapon{display:flex;align-items:center;gap:7px;font-size:13px;letter-spacing:1px;color:#c0b2cc;background:#241a2c;padding:4px 8px}
@@ -376,7 +391,7 @@ footer .status-dot{margin-right:7px}
 .player-weapon{display:inline-flex;align-items:center;gap:5px;color:#ddd2e6}
 .player-weapon .equipment-icon{opacity:.9}
 .health{position:absolute;left:0;bottom:0;height:2px}
-.roster{position:absolute;top:352px;width:262px}
+.roster{position:absolute;top:496px;width:262px}
 .roster-0{left:28px}.roster-1{right:28px}
 .roster-label{font-size:13px;letter-spacing:3px;color:var(--accent-bright);text-transform:uppercase;display:flex;justify-content:space-between;margin-bottom:4px}
 .roster-label span{color:#8f7f9e}
@@ -401,7 +416,7 @@ footer .status-dot{margin-right:7px}
 .hud-banner .utility{color:#e2d5ec}
 .hud-banner .utility .equipment-icon{opacity:.85}
 .hud-banner>i{font-style:normal;color:#7e6c90;margin:0 4px}
-.radar{position:absolute;left:28px;top:28px;width:300px;height:300px;background:#100b16e8;border:2px solid var(--line)}
+.radar{position:absolute;left:28px;top:176px;width:300px;height:300px;background:#100b16e8;border:2px solid var(--line)}
 .radar img,.radar-grid{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .radar-grid{background:repeating-linear-gradient(0deg,#2a1e33 0 1px,transparent 1px 25px),repeating-linear-gradient(90deg,#2a1e33 0 1px,transparent 1px 25px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:#6d5b7e;letter-spacing:2px;font-size:13px}
 .radar-grid small{font-size:11px;color:#544368;letter-spacing:1px}
@@ -434,6 +449,7 @@ footer .status-dot{margin-right:7px}
 .stage-grid{position:absolute;inset:0;pointer-events:none;background-image:linear-gradient(#ffffff0a 1px,transparent 1px),linear-gradient(90deg,#ffffff0a 1px,transparent 1px);background-size:72px 72px;-webkit-mask-image:radial-gradient(ellipse at 50% 45%,#000 0,transparent 72%);mask-image:radial-gradient(ellipse at 50% 45%,#000 0,transparent 72%)}
 .st-head{position:absolute;top:34px;left:64px;right:64px;display:flex;justify-content:space-between;align-items:center;gap:32px;z-index:3}
 .st-event{display:flex;align-items:baseline;gap:14px;flex:1 1 auto;min-width:0;white-space:nowrap;font-size:22px;letter-spacing:2px;color:#d9cfe2}
+.st-event-mark{color:var(--accent);--mark-bright:var(--accent-bright);align-self:center;flex-shrink:0}
 .st-event b{min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:34px;letter-spacing:1px;color:#fff;text-transform:uppercase}
 .st-event span{flex-shrink:100;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:16px;letter-spacing:4px;color:var(--accent-bright);text-transform:uppercase}
 .st-chip{flex-shrink:0;white-space:nowrap;font-size:16px;letter-spacing:4px;color:var(--accent-bright);border:1px solid #f0a9e260;background:#f0a9e214;padding:9px 18px;text-transform:uppercase}
@@ -573,6 +589,56 @@ footer .status-dot{margin-right:7px}
 .st-next small,.st-next i,.st-next .st-crest-wrap{flex-shrink:0}
 .st-next i{font-style:normal;font-size:20px;letter-spacing:3px;color:#7e6c90;text-transform:uppercase}
 .st-next-map{min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:20px;border-left:1px solid #ffffff26;font-size:20px;letter-spacing:4px;color:#c6b7d2}
+/* Round recap — the round's story: who won it, how, the score, then the credited eliminations.
+   These sizes are tuned for 1920 × 1080 viewed as a broadcast frame (a 55" TV at three metres):
+   the round kicker and the elimination table must be legible from the sofa, which is ~34px on
+   screen and never the panel's own 13px default. Nothing here inherits a size from the panel. */
+.st-recap{position:absolute;left:64px;right:64px;top:124px;bottom:92px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px}
+.st-recap-kicker{font-size:26px;letter-spacing:10px;color:var(--accent-bright);text-transform:uppercase;text-align:center;padding-left:10px}
+.st-recap-winner{display:flex;align-items:center;gap:44px;max-width:100%;padding:24px 48px;background:#ffffff0d;border:1px solid #ffffff1c;border-left:6px solid var(--team)}
+.st-recap-winner>div{min-width:0}
+.st-recap-winner small{display:block;font-size:24px;letter-spacing:8px;color:#c6b7d2;text-transform:uppercase;padding-left:8px}
+.st-recap-winner h1{margin:10px 0 0;font-size:112px;line-height:.94;letter-spacing:2px;text-transform:uppercase;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-recap-winner span{display:inline-block;margin-top:12px;font-size:24px;letter-spacing:5px;color:var(--team);text-transform:uppercase;padding-left:5px}
+.st-recap-score{flex-shrink:0;display:flex;align-items:baseline;gap:22px;font-size:104px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.st-recap-score i{font-style:normal;color:#7e6c90}
+.st-recap-kills{width:100%;max-width:1240px;display:flex;flex-direction:column;gap:10px}
+.st-recap-kills>small{font-size:22px;letter-spacing:8px;color:#c6b7d2;text-transform:uppercase;padding-left:27px}
+.st-recap-kills p{margin:0;padding:26px 0;text-align:center;font-size:30px;color:#c9bad5}
+.st-recap-kill{display:grid;grid-template-columns:minmax(0,1fr) 470px minmax(0,1fr) 76px;align-items:center;gap:24px;padding:15px 26px;background:#ffffff0d;border:1px solid #ffffff1a;font-size:40px;font-weight:600;text-transform:uppercase}
+.st-recap-kill>b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-recap-kill>b:last-of-type{text-align:right;color:#d9cfe2}
+.st-recap-kill span{justify-self:center;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:9px 18px;background:#241a2c;border:1px solid #ffffff14;font-size:24px;font-weight:500;letter-spacing:4px;color:#c0b2cc}
+.st-recap-kill i{justify-self:end;font-style:normal;font-size:24px;letter-spacing:2px;color:#7e6c90;font-variant-numeric:tabular-nums}
+.st-recap-empty{display:grid;justify-items:center;gap:20px;max-width:1400px;text-align:center}
+.st-recap-empty small{font-size:26px;letter-spacing:10px;color:var(--accent-bright);text-transform:uppercase;padding-left:10px}
+.st-recap-empty h1{margin:0;font-size:84px;line-height:1;letter-spacing:4px;text-transform:uppercase;font-weight:800}
+.st-recap-empty p{margin:0;font-size:28px;line-height:1.5;color:#c9bad5}
+/* Player statistics — two team columns of five live K/D/A/MVP rows. Sized like the recap: the
+   header and the numbers are broadcast-readable, the labels stay secondary. */
+.st-stats{position:absolute;left:64px;right:64px;top:120px;bottom:88px;display:flex;flex-direction:column;gap:30px}
+.st-stats-title{display:grid;justify-items:center;gap:12px;text-align:center}
+.st-stats-title small{font-size:24px;letter-spacing:12px;color:var(--accent-bright);text-transform:uppercase;padding-left:12px}
+.st-stats-title h1{margin:0;font-size:88px;line-height:1;letter-spacing:8px;text-transform:uppercase;font-weight:800}
+.st-stats-title span{font-size:22px;letter-spacing:6px;color:#c6b7d2;text-transform:uppercase}
+.st-stats-columns{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:34px}
+.st-stats-team{display:flex;flex-direction:column;min-height:0;padding:20px 26px 22px;background:#ffffff0a;border-top:5px solid var(--team)}
+.st-stats-team header{flex-shrink:0;display:flex;align-items:center;gap:20px;padding-bottom:16px;border-bottom:1px solid #ffffff1c}
+.st-stats-team header>div{flex:1;min-width:0}
+.st-stats-team h2{margin:0;font-size:52px;line-height:1.02;letter-spacing:2px;text-transform:uppercase;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-stats-team header small{display:block;margin-top:6px;font-size:20px;letter-spacing:6px;color:var(--team);text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-stats-team header>span{flex-shrink:0;padding:6px 14px;background:var(--accent-deep);color:#fff;font-size:16px;letter-spacing:5px;text-transform:uppercase}
+.st-stat-head,.st-stat-row{display:grid;grid-template-columns:minmax(0,1fr) 92px 92px 92px 122px;align-items:center;gap:12px}
+.st-stat-head{flex-shrink:0;margin-top:14px;font-size:19px;letter-spacing:4px;color:#c6b7d2;text-transform:uppercase}
+.st-stat-head b{font-weight:600}
+.st-stat-head span,.st-stat-row span{text-align:right;font-variant-numeric:tabular-nums}
+.st-stat-row{flex:1;min-height:0;padding:8px 0;border-bottom:1px solid #ffffff14;font-size:46px;font-weight:700;line-height:1}
+.st-stat-row:last-child{border-bottom:0}
+.st-stat-row b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:38px;font-weight:600;letter-spacing:1px;text-transform:uppercase}
+.st-stat-row span:first-of-type{color:var(--team)}
+.st-stats-empty{flex:1;display:grid;place-items:center;padding:0 34px;text-align:center;font-size:26px;letter-spacing:3px;color:#ffffff66;text-transform:uppercase}
+.st-stats-foot{flex-shrink:0;text-align:center;font-size:19px;letter-spacing:4px;color:#c6b7d2;text-transform:uppercase}
+.st-stats-foot b{color:var(--accent-bright)}
 @keyframes st-blink{0%,100%{opacity:1}50%{opacity:.25}}
 @keyframes st-spin{to{transform:rotate(360deg)}}
 @keyframes st-ring{0%{transform:scale(.35);opacity:.5}100%{transform:scale(1.9);opacity:0}}
@@ -582,8 +648,8 @@ footer .status-dot{margin-right:7px}
 .output-canvas{position:absolute;top:50%;left:50%;width:1920px;height:1080px;transform-origin:center}
 .output-body{background:transparent!important;overflow:hidden}
 @media(min-width:1500px){.scene-art{height:125px}.controls-body{padding:23px}.toggle-row{margin-top:23px}.middle-grid{grid-template-columns:minmax(0,1fr) 305px}}
-@media(max-width:1200px){.sidebar{width:195px;padding-left:12px;padding-right:12px}main{margin-left:195px;width:calc(100% - 195px)}.content{padding:25px 22px 0}header{padding:0 22px}.middle-grid{grid-template-columns:minmax(0,1fr) 240px}.metric{padding:15px 12px;gap:9px}.metric b{font-size:12px}.metric-icon{width:32px;height:35px}.on-air,.metric-end{display:none}.series-content{flex-direction:column;align-items:stretch;gap:20px}.series-teams{justify-content:center}.scene-grid{grid-template-columns:repeat(3,1fr)}.scene-art{height:110px}.preview-bottom{font-size:7px}.player-meta{font-size:15px}.map-fields{grid-template-columns:1fr 1fr}.team-cards{grid-template-columns:1fr}}
-@media(max-width:850px){.sidebar{width:65px;padding:20px 8px}.brand{font-size:0;padding:0}.brand-symbol{font-size:38px}.brand-dot,.workspace,.nav-label,.sidebar-bottom{display:none}nav{margin-top:30px}nav button{font-size:0;padding:13px;gap:0}nav svg{min-width:18px}.nav-active-dot{display:none}main{margin-left:65px;width:calc(100% - 65px)}.middle-grid{grid-template-columns:1fr}.status-cards{gap:8px}.metric{padding:12px;min-height:95px}.metric-icon{display:none}.metric b{font-size:11px}.metric p{font-size:8px}.page-title h1{font-size:24px}.quick-controls .controls-body{display:grid;grid-template-columns:1fr 1fr;gap:14px}.quick-controls .section-label,.control-divider,.controls-note{display:none}.toggle-row{margin:0}footer>span:last-child{display:none}.team-card-head{flex-direction:column}.roster-row{flex-wrap:wrap}.map-row{flex-wrap:wrap}.title-actions{flex-wrap:wrap;justify-content:flex-end}}
+@media(max-width:1200px){.sidebar{width:195px;padding-left:12px;padding-right:12px}.app main{margin-left:195px;width:calc(100% - 195px)}.content{padding:25px 22px 0}.app header{padding:0 22px}.middle-grid{grid-template-columns:minmax(0,1fr) 240px}.metric{padding:15px 12px;gap:9px}.metric b{font-size:12px}.metric-icon{width:32px;height:35px}.on-air,.metric-end{display:none}.series-content{flex-direction:column;align-items:stretch;gap:20px}.series-teams{justify-content:center}.scene-grid{grid-template-columns:repeat(3,1fr)}.scene-art{height:110px}.preview-bottom{font-size:7px}.player-meta{font-size:15px}.map-fields{grid-template-columns:1fr 1fr}.team-cards{grid-template-columns:1fr}}
+@media(max-width:850px){.app .sidebar{width:65px;padding:20px 8px}.app .brand{font-size:0;padding:0}.brand-symbol{width:34px;height:34px}.brand-dot,.workspace,.nav-label,.sidebar-bottom{display:none}.app nav{margin-top:30px}.app nav button{font-size:0;padding:13px;gap:0}.app nav svg{min-width:18px}.nav-active-dot{display:none}.app main{margin-left:65px;width:calc(100% - 65px)}.middle-grid{grid-template-columns:1fr}.status-cards{gap:8px}.metric{padding:12px;min-height:95px}.metric-icon{display:none}.metric b{font-size:11px}.metric p{font-size:8px}.page-title h1{font-size:24px}.quick-controls .controls-body{display:grid;grid-template-columns:1fr 1fr;gap:14px}.quick-controls .section-label,.control-divider,.controls-note{display:none}.toggle-row{margin:0}.app footer>span:last-child{display:none}.team-card-head{flex-direction:column}.roster-row{flex-wrap:wrap}.map-row{flex-wrap:wrap}.title-actions{flex-wrap:wrap;justify-content:flex-end}}
 @media(max-width:550px){.content{padding:20px 12px}.page-title{align-items:flex-start;gap:10px}.page-title .button{font-size:9px;padding:9px}.eyebrow{font-size:6px}.page-title h1{font-size:20px}.page-title p{font-size:9px}.status-cards{grid-template-columns:1fr}.metric p{font-size:10px}.metric small{font-size:8px}.metric{min-height:0}.metric b{font-size:13px}.metric-icon{display:grid}.scene-grid{grid-template-columns:repeat(2,1fr)}.section-heading h2 span{display:none}.map-results{grid-template-columns:1fr}.map-result{padding:8px}.preview-bottom>span:last-child{display:none}.form-grid{grid-template-columns:1fr}.map-fields{grid-template-columns:1fr}}
 
 /* ============================ Custom radars editor ============================ */
@@ -780,7 +846,7 @@ footer .status-dot{margin-right:7px}
 
 /* Touch-first remote producer console */
 .touch-remote{min-height:100vh;background:radial-gradient(900px 500px at 50% -120px,#28162c 0,#100e13 70%);color:var(--text)}
-.touch-header{height:61px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 max(18px,calc((100vw - 980px)/2));border-bottom:1px solid var(--line);background:#100e13e8}.touch-header .brand{font-size:25px;line-height:1;padding:0}.touch-header .brand-symbol{font-size:29px}.touch-header .brand-dot{font-size:8px;margin-left:-6px}
+.touch-header{height:61px;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 max(18px,calc((100vw - 980px)/2));border-bottom:1px solid var(--line);background:#100e13e8}.touch-header .brand{font-size:25px;line-height:1;padding:0}.touch-header .brand-symbol{width:30px;height:30px}.touch-header .brand-dot{font-size:8px;margin-left:-6px}
 .touch-host{display:inline-flex;align-items:center;gap:7px;font-size:8px;letter-spacing:1px;color:#a9ddb1}.touch-host i{width:7px;height:7px;border-radius:50%;background:#75c984;box-shadow:0 0 12px #75c98466}.touch-host.offline{color:var(--bad)}.touch-host.offline i{background:var(--bad);box-shadow:none}
 .touch-exit{font-size:8px;letter-spacing:.8px;color:var(--text-dim);border:1px solid var(--line);border-radius:4px;padding:7px 9px}.touch-main{width:min(760px,100%);margin:0 auto;padding:28px 18px 34px}.touch-eyebrow{font-size:8px;letter-spacing:2px;color:var(--accent);font-weight:700}.touch-main h1{margin:7px 0 3px;font-size:30px;letter-spacing:-.5px}.touch-main>p{margin:0 0 19px;color:var(--text-dim);font-size:10px;line-height:1.5}
 .touch-lease{display:flex;align-items:center;gap:12px;margin-bottom:13px;padding:13px;border:1px solid #59472a;border-radius:8px;background:linear-gradient(105deg,#241c12,#17130f);color:var(--gold)}.touch-lease.held{border-color:#38543c;background:linear-gradient(105deg,#17231a,#121a15);color:#a6d8ab}.touch-lease>div{display:grid;gap:4px;min-width:0;flex:1}.touch-lease small{font-size:7px;letter-spacing:1.2px;color:var(--text-faint)}.touch-lease b{font-size:11px;color:var(--text)}.touch-lease span{font-size:8px;color:var(--text-dim)}.touch-lease button{min-width:95px;padding:9px 10px;border:1px solid #70592b;border-radius:5px;background:#332614;color:#ffdf93;font-size:9px;font-weight:700}.touch-lease.held button{border-color:#426b49;background:#1e3524;color:#b4e6b9}
@@ -821,7 +887,7 @@ footer .status-dot{margin-right:7px}
  radial-gradient(900px 520px at 6% 4%,#1b1226 0,transparent 62%),var(--bg)}
 .site-nav{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:24px;padding:14px 34px;border-bottom:1px solid var(--line-soft);background:rgba(11,10,13,.93);backdrop-filter:blur(16px)}
 .site-brand{display:flex;align-items:center;gap:7px;font-size:23px;font-weight:700;letter-spacing:-1.5px;line-height:1}
-.site-brand .brand-symbol{font-size:30px}
+.site-brand .brand-symbol{width:26px;height:26px}
 .site-nav-links{display:flex;gap:20px;font-size:11px;color:var(--text-dim)}
 .site-nav-links a:hover{color:var(--accent-bright)}
 .site-nav-actions{margin-left:auto;display:flex;align-items:center;gap:12px}
@@ -881,7 +947,7 @@ footer .status-dot{margin-right:7px}
 .site-panel-chips span{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text-dim);border:1px solid var(--line);background:var(--bg-soft);border-radius:4px;padding:7px 10px}
 .site-panel-chips span svg{color:var(--accent)}
 .site-panel-chips span em{font-style:normal;font-size:8px;letter-spacing:1.2px;color:var(--accent-bright)}
-.site-how-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:30px}
+.site-how-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:16px;margin-top:30px}
 /* The one line an organiser has to check before applying, on the hero's own call to action. */
 .site-requirements{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:18px 0 0;font-size:11.5px;color:var(--text-dim)}
 .site-requirements-label{font-size:8.5px;letter-spacing:1.8px;font-weight:700;color:var(--text-faint);text-transform:uppercase}
@@ -893,14 +959,14 @@ footer .status-dot{margin-right:7px}
 .site-section-head{max-width:660px}
 .site-section-head h2,.site-final h2{font-family:'Barlow Condensed','DM Sans',sans-serif;font-size:38px;letter-spacing:-1px;margin:0 0 12px;font-weight:700}
 .site-section-head p{margin:0;color:var(--text-dim);font-size:13px;line-height:1.8}
-.site-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(278px,1fr));gap:16px;margin-top:32px}
+.site-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(278px,100%),1fr));gap:16px;margin-top:32px}
 .site-card{border:1px solid var(--line);background:var(--bg-raise);border-radius:12px;padding:22px}
 .site-card h3{margin:12px 0 8px;font-size:14px;font-weight:650}
 .site-card p{margin:0;font-size:12px;line-height:1.78;color:var(--text-dim)}
 .site-card-lead{margin:6px 0 14px!important}
 .site-card-icon{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:8px;background:#2b142a;color:var(--accent);border:1px solid var(--line)}
 .site-card h3 svg{vertical-align:-2px;margin-right:6px;color:var(--accent)}
-.site-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;margin-top:32px}
+.site-steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(230px,100%),1fr));gap:16px;margin-top:32px}
 .site-step{border:1px solid var(--line);border-left:2px solid var(--accent-deep);border-radius:0 10px 10px 0;background:var(--bg-raise);padding:20px}
 .site-step-index{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--accent-deep);color:#fff;font-size:11px;font-weight:700;margin-bottom:12px}
 .site-step b{font-size:13px;display:block;margin-bottom:6px}
@@ -915,7 +981,7 @@ footer .status-dot{margin-right:7px}
 .site-host-card b{display:block;font-size:14px}
 .site-host-card p{margin:8px 0 0;font-size:11.5px;color:var(--text-dim);line-height:1.7}
 .site-host-actions{display:flex;gap:10px;flex-wrap:wrap}
-.site-faq{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px;margin-top:30px}
+.site-faq{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(330px,100%),1fr));gap:12px;margin-top:30px}
 .site-faq details{border:1px solid var(--line);border-radius:10px;background:var(--bg-raise);padding:16px 18px}
 .site-faq summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;font-size:12.5px;font-weight:600;list-style:none}
 .site-faq summary::-webkit-details-marker{display:none}
@@ -928,7 +994,7 @@ footer .status-dot{margin-right:7px}
 .site-footer-brand{max-width:420px}
 .site-footer-brand .site-brand{font-size:20px}
 .site-footer-brand p{margin:14px 0 0;font-size:11.5px;line-height:1.8;color:var(--text-faint)}
-.site-footer-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:20px;max-width:620px;margin:26px 0}
+.site-footer-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:20px;max-width:620px;margin:26px 0}
 .site-footer-cols div{display:flex;flex-direction:column;gap:9px;font-size:11px;color:var(--text-dim)}
 .site-footer-cols b{font-size:8.5px;letter-spacing:1.8px;color:var(--text-faint)}
 .site-footer-cols a:hover{color:var(--accent-bright)}
@@ -959,7 +1025,7 @@ footer .status-dot{margin-right:7px}
 .site-ol.compact,.site-ul{padding-left:16px}
 .site-ul{list-style:none;padding-left:0}
 .site-ul li{position:relative;padding-left:16px;margin-bottom:7px}
-.site-ul li::before{content:'✳';position:absolute;left:0;color:var(--accent);font-size:10px}
+.site-ul li::before{content:'';position:absolute;left:0;top:.42em;width:10px;height:10px;background:url(/logo/scout-mark.svg) center/contain no-repeat}
 .site-ol li{margin-bottom:7px}
 .site-ol code,.site-ul code,.site-card code{background:var(--bg-soft);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:10.5px;color:var(--accent-bright)}
 .site-reload{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text-faint);align-self:flex-start}
@@ -980,7 +1046,7 @@ footer .status-dot{margin-right:7px}
 .site-status.ok{border-color:#31523b;color:#a6d8ab;background:#142218}
 .site-status.warn{border-color:#574326;color:var(--warn);background:#241d13}
 .site-status.bad{border-color:#62303a;color:#ffc2c8;background:#31161d}
-.site-dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
+.site-dash-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));gap:16px}
 .site-download.locked{border-style:dashed}
 .site-download-meta{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 16px;font-size:8.5px;letter-spacing:1.4px;color:var(--text-faint)}
 .site-download-meta span{border:1px solid var(--line);border-radius:3px;padding:5px 7px}
@@ -1024,7 +1090,7 @@ footer .status-dot{margin-right:7px}
  .site-hero{grid-template-columns:1fr;gap:30px;padding-top:44px}
  .site-h1{font-size:46px}
  .site-tour-grid{grid-template-columns:1fr}
- .site-scene-picker{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+ .site-scene-picker{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr))}
  .site-map-strip{grid-template-columns:repeat(5,minmax(0,1fr))}
  .site-apply-grid,.site-login-grid{grid-template-columns:1fr}
 }
@@ -1036,9 +1102,7 @@ footer .status-dot{margin-right:7px}
  .site-section-head h2,.site-final h2{font-size:30px}
  .site-page-head h1{font-size:36px}
  .site-form-row{grid-template-columns:1fr}
- .site-map-strip{grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
  .site-map-chip b{font-size:12px}
- .site-map-chip small{display:none}
  .site-requirements{font-size:11px}
 }
 /* The owner's review desk: applications from the landing page (src/site.tsx). */
@@ -1065,12 +1129,12 @@ footer .status-dot{margin-right:7px}
 .ops-panel .info-note{margin:12px 20px 18px}
 .ops-error,.ops-notice{margin:0 20px 14px;padding:10px 13px;border-radius:6px;font-size:11.5px;background:#31161d;border:1px solid #62303a;color:#ffc2c8}
 .ops-notice{background:#142218;border-color:#31523b;color:#a6d8ab}
-.ops-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 20px 18px}
+.ops-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr));gap:10px;margin:0 20px 18px}
 .ops-metric{border:1px solid var(--line);border-radius:8px;background:var(--bg-raise);padding:12px 13px;display:flex;flex-direction:column;gap:5px}
 .ops-metric small{font-size:8px;letter-spacing:1.6px;color:var(--text-faint)}
 .ops-metric b{font-size:20px;font-family:'Barlow Condensed',sans-serif;letter-spacing:.4px}
 .ops-metric span{font-size:9.5px;color:var(--text-dim);line-height:1.5}
-.ops-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;margin:0 20px 24px;align-items:start}
+.ops-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(330px,100%),1fr));gap:14px;margin:0 20px 24px;align-items:start}
 .ops-block{border:1px solid var(--line);border-radius:10px;background:var(--bg-raise);padding:16px 17px}
 .ops-block h3{display:flex;align-items:center;gap:8px;margin:0 0 14px;font-size:12.5px;font-weight:650}
 .ops-block h3 svg{color:var(--accent)}
@@ -1123,3 +1187,125 @@ footer .status-dot{margin-right:7px}
 .site-map-chip figcaption{padding:8px 9px 9px;border-top:1px solid var(--line-soft)}
 .site-map-chip b{display:block;font-family:'Barlow Condensed','DM Sans',sans-serif;font-size:14px;letter-spacing:.3px}
 .site-map-chip small{display:block;margin-top:2px;font-size:8px;letter-spacing:1.2px;color:var(--text-faint);text-transform:uppercase}
+
+/* ============================ Small screens ============================
+   Three widths matter and each one has its own rule:
+
+     ≤ 850px  the panel's sidebar becomes an icon rail (rules above);
+     ≤ 700px  a phone: the rail becomes a drawer behind a top bar, every tap target grows to ~44px,
+              inputs go to 16px so iOS does not zoom the page when one is focused, and the content
+              column takes the full width;
+     ≤ 760px  the public pages (landing, apply, sign-in, dashboard) reflow: one column, a compact
+              header, a 3-up map strip and a stacked footer.
+
+   Nothing here changes a desktop rule and nothing is hidden that a phone can do without: the panel on
+   a phone is a read-mostly view of the broadcast with the same controls, and the touch remote
+   (/?remote=1) stays the screen built for a phone in an operator's hand. */
+
+/* The phone top bar is the drawer's handle: hidden until the drawer breakpoint turns it on. */
+.mobile-bar{display:none}
+.nav-backdrop{display:none}
+@media(max-width:700px){
+ .app{display:block}
+ .app .sidebar{position:fixed;z-index:30;width:min(86vw,310px);padding:calc(20px + env(safe-area-inset-top)) 16px calc(20px + env(safe-area-inset-bottom));transform:translateX(-102%);transition:transform .22s ease-out;box-shadow:24px 0 60px #000000a6;overflow-y:auto}
+ .app .sidebar.open{transform:none}
+ /* Undo the icon rail: in the drawer the wordmark, the workspace card and the footer blocks return. */
+ .app .sidebar .brand{font-size:31px;padding-left:6px;line-height:38px}
+ .app .sidebar .brand-symbol{width:34px;height:34px}
+ .app .sidebar .brand-dot,.app .sidebar .workspace,.app .sidebar .nav-label{display:revert}
+ .app .sidebar .workspace{display:flex}
+ .app .sidebar .nav-label{display:block}
+ .app .sidebar .sidebar-bottom{display:block;padding-top:34px}
+ .app .sidebar nav{margin-top:22px}
+ .app .sidebar nav button{font-size:14px;padding:15px 13px;gap:13px;min-height:48px}
+ .app .sidebar nav svg{min-width:20px}
+ .app .sidebar .nav-active-dot{display:block}
+ .app main{margin-left:0;width:100%}
+ .mobile-bar{display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:20;height:calc(56px + env(safe-area-inset-top));padding:env(safe-area-inset-top) 14px 0;border-bottom:1px solid var(--line-soft);background:rgba(11,10,13,.96);backdrop-filter:blur(14px)}
+ .mobile-bar .brand{font-size:26px;padding:0;line-height:1;gap:8px}
+ .mobile-bar .brand-symbol{width:26px;height:26px}
+ .mobile-bar-button{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;margin-left:-6px;border:1px solid var(--line);border-radius:9px;color:var(--text-dim);background:var(--bg-soft)}
+ .mobile-bar-spacer{margin-left:auto}
+ .nav-backdrop{display:block;position:fixed;inset:0;z-index:25;border:0;padding:0;background:#05040acc;backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .22s ease-out}
+ .nav-backdrop.open{opacity:1;pointer-events:auto}
+ .app header{height:auto;min-height:58px;padding:10px 14px;gap:10px;flex-wrap:wrap}
+ .breadcrumb{font-size:10px}
+ .header-right{width:100%;justify-content:space-between}
+ .content{padding:16px 14px calc(26px + env(safe-area-inset-bottom))}
+ .page-title{gap:12px;flex-direction:column;align-items:flex-start}
+ .page-title h1{font-size:26px}
+ .page-title .title-actions{width:100%;justify-content:flex-start}
+ .status-cards{grid-template-columns:1fr}
+ .middle-grid{grid-template-columns:1fr}
+ .panel-heading{padding:14px 15px 10px;flex-wrap:wrap;gap:8px}
+ .preview-bottom{font-size:8px}
+ .arrange-bar{flex-wrap:wrap;gap:8px}
+ /* Tap targets. 44px is the size a thumb needs; the desktop sizes stay as they are. */
+ .button,.control-button{min-height:44px}
+ .mini-button{padding:10px 12px;font-size:10px}
+ .icon-button{width:40px;height:40px}
+ .text-button{font-size:10px;padding:8px 0}
+ .toggle{width:48px;height:28px}
+ .toggle i{width:22px;height:22px}
+ .toggle.enabled i{left:22px}
+ input,select{font-size:16px;padding:12px 12px}
+ input[type=number]{max-width:none}
+ .field>span,.form-grid .field>span{font-size:9px}
+ .toast{left:14px;right:14px;bottom:calc(16px + env(safe-area-inset-bottom));transform:none;justify-content:center;text-align:center}
+ /* Tables and long rows scroll rather than squeeze. */
+ .audit-table,.map-results,.feed-counters{overflow-x:auto;min-width:0}
+ .feed-counters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+ .studio-layer-workspace,.theme-editor-grid{grid-template-columns:1fr}
+}
+@media(max-width:430px){
+ .feed-counters{grid-template-columns:1fr}
+ .content{padding:14px 11px calc(26px + env(safe-area-inset-bottom))}
+ .app .sidebar{width:92vw}
+ .scene-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .metric{padding:13px}
+ .brand{letter-spacing:-2px}
+}
+
+/* Public pages: the landing page, the application form, sign-in and the dashboard. */
+@media(max-width:760px){
+ .site-nav{padding:11px 16px calc(11px * .9);gap:10px;padding-top:calc(11px + env(safe-area-inset-top));flex-wrap:wrap}
+ .site-brand{font-size:20px}
+ .site-brand .brand-symbol{width:22px;height:22px}
+ .site-nav-actions{gap:8px;flex-wrap:wrap}
+ .site-nav-actions .button{padding:11px 13px;min-height:44px;font-size:10px}
+ .site-nav-actions .site-ghost-link{min-height:44px;display:inline-flex;align-items:center}
+ .site-section,.site-narrow,.site-hero{padding-left:16px;padding-right:16px}
+ .site-hero{padding-bottom:34px}
+ .site-hero-bg{width:100%;height:100%;left:0;right:0;object-fit:cover;object-position:70% top}
+ .site-h1{font-size:38px;letter-spacing:-1px}
+ .site-hero-actions{flex-direction:column;align-items:stretch;gap:10px}
+ .site-hero-actions .button{width:100%;justify-content:center;min-height:48px}
+ .site-cta-row{flex-direction:column;align-items:stretch}
+ .site-map-strip{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+ .site-map-chip b{font-size:13px}
+ .site-map-chip small{display:block}
+ .site-footer{padding:30px 16px calc(22px + env(safe-area-inset-bottom))}
+ .site-footer-brand,.site-footer-cols{max-width:none}
+ .site-footer-cols{grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr));gap:16px}
+ .site-footer-legal{flex-direction:column;align-items:flex-start;gap:9px}
+ .site-footer-legal>span:last-child{flex-wrap:wrap;gap:8px}
+ .site-tour-frame,.site-stage{width:100%}
+ .site-form-row,.site-apply-grid,.site-login-grid{grid-template-columns:1fr}
+ .site-card{padding:16px}
+ .site-toc{display:none}
+}
+/* Short nav labels: the phone-width header is one row that fits. */
+.site-label-short{display:none}
+@media(max-width:560px){
+ .site-label-long{display:none}
+ .site-label-short{display:inline}
+ .site-nav-actions .button{padding:11px 12px}
+}
+@media(max-width:430px){
+ .site-h1{font-size:31px}
+ .site-section-head h2,.site-final h2{font-size:26px}
+ .site-page-head h1{font-size:29px}
+ .site-map-strip{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .site-map-chip small{display:none}
+ .site-footer-cols{grid-template-columns:1fr}
+}
