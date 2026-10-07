@@ -22,8 +22,11 @@
 
 mod win32;
 
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::cell::RefCell;
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -38,6 +41,13 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 const LABEL: &str = "overlay";
 /// A second label, not a second process: the operator window lives in the same webview host.
 const PANEL_LABEL: &str = "panel";
+thread_local! {
+    /// The host this launcher started, if it started one, so leaving SCOUT can put the machine back
+    /// the way it found it — a host the launcher did not start is never touched. Thread-local rather
+    /// than a `static` on purpose: the setup hook and the event loop both run on the main thread, and
+    /// this way the child never has to cross a thread boundary (or satisfy `Send`) at all.
+    static STARTED_HOST: RefCell<Option<Child>> = const { RefCell::new(None) };
+}
 /// How long between licence re-checks while the shell is running. A revocation therefore reaches a
 /// launcher within a minute, without asking the account service on every poll.
 const LICENCE_POLL: Duration = Duration::from_secs(60);
@@ -195,6 +205,14 @@ fn main() {
                 None
             };
 
+            // The installed launcher is the whole of SCOUT as far as an observer is concerned, so it
+            // brings the host up itself when one ships next to it. Without this, pressing the icon on a
+            // fresh install shows a blank window and nothing else - which is exactly the sort of thing
+            // that makes a broadcast tool feel broken.
+            if config.start_host {
+                start_host_if_needed(&config);
+            }
+
             let poller = window.clone();
             let config = config.clone();
             std::thread::Builder::new().name("scout-shell-poll".into()).spawn(move || {
@@ -202,12 +220,22 @@ fn main() {
             })?;
             Ok(())
         })
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(error) = result {
-        log(&format!("stopped with an error: {error}"));
-        std::process::exit(1);
-    }
+    let app = match result {
+        Ok(app) => app,
+        Err(error) => {
+            log(&format!("stopped with an error: {error}"));
+            std::process::exit(1);
+        }
+    };
+    // `Builder::run` is build + `App::run(|_, _| {})`; taking the two steps separately is what makes
+    // the exit arm below possible at all.
+    app.run(|_handle, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            stop_host_started_here();
+        }
+    });
 }
 
 /// Once per poll: make sure the pages are loaded, ask Windows about the game, let the core decide, apply it.
@@ -293,6 +321,146 @@ fn place(window: &WebviewWindow, rect: Rect) {
     if let Err(error) = window.set_position(PhysicalPosition::new(rect.x, rect.y)) {
         log(&format!("set_position failed: {error}"));
     }
+}
+
+/// Where the installer puts an operator's data, and the files the installed shortcuts read. Kept in
+/// step with `installer/launcher/scout-host.cmd` and `installer/scout.iss` (`{#DataDir}`): the shell
+/// reads the same small text files rather than inventing a second convention.
+fn data_dir() -> Option<std::path::PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    let dir = std::path::Path::new(&appdata).join("SCOUT");
+    dir.is_dir().then_some(dir)
+}
+
+fn read_trimmed(file: &std::path::Path) -> Option<String> {
+    let value = fs::read_to_string(file).ok()?.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+/// The program files root: `app-root.txt` in the data directory (written by the installer, and what
+/// the shortcuts use), or this executable's own parent directory as a fallback, so a launcher that
+/// still sits inside `{app}\host` finds `{app}\runtime\node.exe` either way.
+fn program_root(data: &std::path::Path) -> Option<std::path::PathBuf> {
+    if let Some(root) = read_trimmed(&data.join("app-root.txt")) {
+        let path = std::path::PathBuf::from(root);
+        if path.join("host").join("server").join("index.js").is_file() {
+            return Some(path);
+        }
+    }
+    let exe = std::env::current_exe().ok()?;
+    let host_dir = exe.parent()?;
+    // {app}\host\scout-shell.exe -> {app}
+    let root = host_dir.parent()?.to_path_buf();
+    root.join("host").join("server").join("index.js").is_file().then_some(root)
+}
+
+/// Start the host that ships next to the launcher, unless one is already answering where the overlay
+/// is pointed. Nothing here reaches the network beyond a single connection attempt: the point is to
+/// make the icon work, not to supervise the host.
+fn start_host_if_needed(config: &ShellConfig) -> Option<()> {
+    let Some((host, port)) = host_port(&config.url) else { return None };
+    // A launcher pointed at a host on another machine must not start a second one here.
+    let local = matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1" | "[::1]");
+    if !local {
+        log(&format!("the host is {host}: the launcher only starts a host that runs on this machine"));
+        return None;
+    }
+    if reachable(&host, port) {
+        log(&format!("a SCOUT host is already answering on port {port}; using it"));
+        return None;
+    }
+    let data = data_dir()?;
+    let root = program_root(&data)?;
+    let url_port = port;
+    let port = read_trimmed(&data.join("port.txt")).unwrap_or_else(|| port.to_string());
+    if let Ok(installed) = port.parse::<u16>() {
+        // The installer picks the port and bakes it into the shortcuts; somebody starting the
+        // executable by hand with the default URL would otherwise watch a blank window.
+        if installed != url_port {
+            log(&format!(
+                "the installed host listens on port {installed}, but this launcher is pointed at port {url_port}; start SCOUT from its shortcut, or pass --url http://127.0.0.1:{installed}/game"
+            ));
+        }
+    }
+    let node = root.join("runtime").join("node.exe");
+    let entry = root.join("host").join("server").join("index.js");
+    if !node.is_file() || !entry.is_file() {
+        log("no bundled host next to this launcher; not starting one");
+        return None;
+    }
+    // The host log: the console an operator would have had, in a file they can attach to a message.
+    // Trimmed at 1 MB so a long event cannot fill a disk with routing lines.
+    let log_path = data.join("scout-host.log");
+    if fs::metadata(&log_path).map(|meta| meta.len() > 1_000_000).unwrap_or(false) {
+        let _ = fs::write(&log_path, b"");
+    }
+    let log_file = fs::OpenOptions::new().create(true).append(true).open(&log_path).ok();
+    let mut command = Command::new(&node);
+    command
+        .arg(&entry)
+        // The host keeps config/, public/uploads/ and recordings/ in the working directory.
+        .current_dir(&data)
+        .env("NODE_ENV", "production")
+        .env("PORT", &port)
+        .env("SCOUT_APP_ROOT", &root)
+        .env("SCOUT_PID_FILE", data.join("scout.pid"))
+        .stdin(Stdio::null());
+    for (file, variable) in [
+        ("gsi_token.txt", "GSI_TOKEN"),
+        ("panel_token.txt", "SCOUT_PANEL_TOKEN"),
+        ("remote.txt", "SCOUT_REMOTE"),
+    ] {
+        if let Some(value) = read_trimmed(&data.join(file)) {
+            command.env(variable, value);
+        }
+    }
+    match log_file {
+        Some(file) => {
+            let clone = file.try_clone();
+            command.stdout(Stdio::from(file));
+            if let Ok(clone) = clone {
+                command.stderr(Stdio::from(clone));
+            } else {
+                command.stderr(Stdio::null());
+            }
+        }
+        None => {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
+    // A console window for a program nobody watches is the thing an observer is least comfortable
+    // with, so the child is created detached from one (CreateProcess's CREATE_NO_WINDOW).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    match command.spawn() {
+        Ok(child) => {
+            log(&format!(
+                "started the SCOUT host on port {port} (log: {})",
+                log_path.display()
+            ));
+            STARTED_HOST.with(|slot| *slot.borrow_mut() = Some(child));
+            Some(())
+        }
+        Err(error) => {
+            log(&format!("could not start the SCOUT host ({}): {error}", node.display()));
+            None
+        }
+    }
+}
+
+/// Stop the host only if this launcher started it. Called as the app exits, so closing SCOUT from
+/// the panel, F8/F9 or Ctrl+Shift+F8 leaves no stray node.exe behind.
+fn stop_host_started_here() {
+    STARTED_HOST.with(|slot| {
+        if let Some(mut child) = slot.borrow_mut().take() {
+            log("stopping the SCOUT host this launcher started");
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    });
 }
 
 /// Navigates a window to its page once something is listening at the address. Returns true when it has.

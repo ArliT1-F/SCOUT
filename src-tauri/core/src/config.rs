@@ -10,6 +10,12 @@ pub const DEFAULT_TITLE: &str = "Counter-Strike 2";
 /// Explorer (class `CabinetWClass`) cannot be mistaken for the game either. An empty class matches any.
 pub const DEFAULT_CLASS: &str = "SDL_app";
 pub const DEFAULT_HOTKEY: &str = "F8";
+/// Start the host that ships next to the launcher, when it is there and nothing is listening yet.
+/// On by default: the installed launcher is the one icon an observer presses, and it should bring up
+/// the whole of SCOUT rather than waiting for a console the observer was never told about. A dev
+/// checkout has no host next to the executable, so nothing happens there; `--no-start-host` turns it
+/// off for anyone who starts the host themselves.
+pub const DEFAULT_START_HOST: bool = true;
 /// The operator window is the panel of the host the shell is pointed at: the whole SCOUT control
 /// surface, in a normal window of the launcher rather than a browser tab. On by default — that is the
 /// point of a launcher — and `--no-panel` (or SCOUT_SHELL_PANEL=0) turns it off for overlay-only use.
@@ -44,6 +50,8 @@ pub struct ShellConfig {
     /// The operator panel's address: the host root, derived from `url` unless it is set explicitly.
     pub panel_url: String,
     pub panel_hotkey: String,
+    /// Start the host that ships next to the launcher (see `DEFAULT_START_HOST`).
+    pub start_host: bool,
     /// Refuse to draw the overlay unless the host reports a licence that may run
     /// (`SCOUT_REQUIRE_LICENSE=1` style enforcement; off by default, see src-tauri/README.md).
     pub require_link: bool,
@@ -67,6 +75,7 @@ impl Default for ShellConfig {
             panel: DEFAULT_SHOW_PANEL,
             panel_url: panel_url(DEFAULT_URL),
             panel_hotkey: DEFAULT_PANEL_HOTKEY.into(),
+            start_host: DEFAULT_START_HOST,
             require_link: false,
             rect: DEFAULT_RECT,
             warnings: Vec::new(),
@@ -89,6 +98,7 @@ struct Raw {
     panel_url: Option<String>,
     panel_hotkey: Option<String>,
     require_link: Option<String>,
+    start_host: Option<String>,
 }
 
 impl ShellConfig {
@@ -119,6 +129,7 @@ impl ShellConfig {
             panel_url: env("SCOUT_SHELL_PANEL_URL"),
             panel_hotkey: env("SCOUT_SHELL_PANEL_HOTKEY"),
             require_link: env("SCOUT_SHELL_REQUIRE_LINK"),
+            start_host: env("SCOUT_SHELL_START_HOST"),
         };
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
@@ -136,6 +147,7 @@ impl ShellConfig {
                 let slot = match value {
                     "panel" => Some(&mut raw.panel),
                     "require-link" => Some(&mut raw.require_link),
+                    "start-host" => Some(&mut raw.start_host),
                     _ => None,
                 };
                 if let Some(slot) = slot {
@@ -143,8 +155,12 @@ impl ShellConfig {
                     continue;
                 }
             }
-            if name == "--panel" || name == "--require-link" {
-                let slot = if name == "--panel" { &mut raw.panel } else { &mut raw.require_link };
+            if name == "--panel" || name == "--require-link" || name == "--start-host" {
+                let slot = match name {
+                    "--panel" => &mut raw.panel,
+                    "--start-host" => &mut raw.start_host,
+                    _ => &mut raw.require_link,
+                };
                 *slot = Some(inline.unwrap_or_else(|| "1".into()));
                 continue;
             }
@@ -261,6 +277,12 @@ impl ShellConfig {
             match parse_bool(&value) {
                 Some(require) => cfg.require_link = require,
                 None => warnings.push(format!("require-link `{}` is not a yes/no value; leaving it off", shorten(&value))),
+            }
+        }
+        if let Some(value) = raw.start_host {
+            match parse_bool(&value) {
+                Some(start) => cfg.start_host = start,
+                None => warnings.push(format!("start-host `{}` is not a yes/no value; leaving it on", shorten(&value))),
             }
         }
         // The default panel address follows the overlay address, unless it was set explicitly: an
@@ -603,6 +625,21 @@ mod tests {
         for broken in ["", "not a url", "http://", "http:///game", "host:8080/game"] {
             assert_eq!(panel_url(broken), DEFAULT_PANEL_URL, "{broken:?}");
         }
+    }
+
+    #[test]
+    fn the_launcher_starts_the_host_next_to_it_unless_told_not_to() {
+        // The installed launcher is the one icon an observer presses, so this defaults on and is
+        // quietly irrelevant in a checkout (no host sits next to the executable there - main.rs
+        // checks that before it spawns anything).
+        assert!(parse(&[], &[]).start_host);
+        assert!(!parse(&["--no-start-host"], &[]).start_host);
+        assert!(!parse(&["--start-host=off"], &[]).start_host);
+        assert!(!parse(&[], &[("SCOUT_SHELL_START_HOST", "0")]).start_host);
+        assert!(parse(&["--start-host"], &[("SCOUT_SHELL_START_HOST", "no")]).start_host, "the command line wins over the environment");
+        let unclear = parse(&["--start-host=perhaps"], &[]);
+        assert!(unclear.start_host);
+        assert!(unclear.warnings.iter().any(|w| w.contains("start-host")), "{:?}", unclear.warnings);
     }
 
     #[test]

@@ -55,6 +55,16 @@ $env:SCOUT_SHELL_ALWAYS = 1; cargo tauri dev
 scout-shell.exe --always --rect 0,0,1280,720
 ```
 
+## What the installed icon does
+
+`SCOUT-Setup.exe` puts the launcher at `{app}\host\scout-shell.exe` with the host next to it
+(`{app}\host\server\index.js`, `{app}\runtime\node.exe`) and one Start-menu/desktop entry called
+**SCOUT**. Pressing it runs the launcher, which reads the same small text files the installed
+shortcuts use (`%APPDATA%\SCOUT\app-root.txt`, `port.txt`, `gsi_token.txt`, `panel_token.txt`,
+`remote.txt` — see `installer/launcher/scout-host.cmd`), starts the host if it is not already
+answering, opens the panel window and puts the overlay over CS2. `docs/INSTALL.md` is the version of
+this written for the observer rather than for a developer.
+
 ## Options
 
 Environment variables configure it; command-line arguments override them. A bad value never stops the shell — it falls back to
@@ -75,6 +85,7 @@ the default and prints a warning.
 | `--panel-url` | `SCOUT_SHELL_PANEL_URL` | derived from `--url` | The panel address. Same scheme/host/port as the overlay address, root path, unless set. |
 | `--panel-hotkey` | `SCOUT_SHELL_PANEL_HOTKEY` | `F9` | Show/hide the operator window. Empty disables the hotkey; a chord already used is refused with a warning. |
 | `--require-link` / `--no-require-link` | `SCOUT_SHELL_REQUIRE_LINK` | off | Hide the overlay unless the host reports that this installation may run. See the licence row above and `docs/BETA.md`. |
+| `--start-host` / `--no-start-host` | `SCOUT_SHELL_START_HOST` | on | Start the host that ships next to the launcher, when there is one and nothing is already answering. This is what makes the installed **SCOUT** icon the only thing an operator presses: the launcher brings up the host (without a console window — its output goes to `%APPDATA%\SCOUT\scout-host.log`), the panel window and the overlay, and stops that host again on exit. A checkout has no bundled host, and a launcher pointed at another machine does not start one. |
 
 A release build has no console. When you start it **from a terminal** it attaches to that terminal, so its diagnostics
 (what it is following, hotkey presses, load errors) are visible there.

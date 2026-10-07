@@ -17,6 +17,11 @@ npm run shell:test          # Rust: the overlay shell's decision logic (needs on
 
 ### Install on a Windows observer machine
 
+If you are the person who will *use* SCOUT rather than build it: **[docs/INSTALL.md](docs/INSTALL.md)**
+is the whole story in plain language — download, install (including the SmartScreen prompt), the one
+**SCOUT** icon that starts everything, where your data lives, and what to send when something is
+wrong. The rest of this section is for whoever builds the installer.
+
 `npm run package:windows` builds **`SCOUT-Setup-<version>.exe`**: one wizard that installs the host
 with its own bundled Node runtime (no Node.js or npm on the observer's machine), the built panel and
 overlay pages, the CS2 Game State Integration config — detected Steam library, chosen port and
