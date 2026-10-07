@@ -60,6 +60,10 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 | `SCOUT_REMOTE=off` | Rejects remote panel sessions and tokens; local host operation still works, and public overlay output is unaffected. |
 | `SCOUT_REQUIRE_TOKEN=1` | Even the host machine has to unlock the panel. |
 | `SCOUT_ALLOWED_HOSTS` | Comma-separated names accepted for a reverse proxy/tunnel that rewrites `Host`. |
+| `SCOUT_BETA_API_URL` | Serves accounts from a hosted account service instead of this machine; the host proxies `/api/beta/*` to it unchanged. See [docs/BETA.md](docs/BETA.md). |
+| `SCOUT_BETA_DIR` | Where the local account store lives when no hosted service is configured (default `config/beta/`, gitignored). |
+| `SCOUT_BETA_AUTO_APPROVE=1` | Development only: approves applications the moment they arrive instead of waiting for an owner. |
+| `SCOUT_DOWNLOAD_URL`, `SCOUT_DOWNLOAD_VERSION`, `SCOUT_DOWNLOAD_NOTES` | What the dashboard's download card points at (default: this repository's GitHub releases). |
 
 - A cookie session lasts 12 hours of use and lives in memory; restarting signs everyone out. There are at most 32 concurrent sessions. Header tokens are checked on every request, so Companion/native clients do not depend on a process-local cookie.
 - Five wrong tokens from one address lock that address for ten minutes. The host does not log the candidate token.
@@ -67,6 +71,38 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 - No TLS is added. On a plain-HTTP LAN the token is only as private as the network it crosses. Keep the panel on a trusted LAN/VPN or use a TLS reverse proxy; do not expose port 8080 to the public internet.
 - `GET /api/remote/state` is an authenticated Producer/Owner feedback endpoint; `POST /api/remote/action` is role- and lease-protected. Private operator/audit and event-pack export routes enforce their own capabilities. Public match/output reads remain intentionally public.
 - **Verified here**: the host is driven over HTTP from a second address in `tests/panel-live.test.ts`; tests cover refusals, one-time link/cookie, role-scoped tokens, producer lease/action, designer denials, authenticated Companion feedback, revocation, lockout, rebound-host and WebSocket-origin cases. Real venue networking/proxy TLS remains an on-site check.
+
+### Landing page, sign-in and the closed beta
+
+The public half of SCOUT lives at `/welcome` (the product page), `/apply` (the whitelist application),
+`/login` (sign-in) and `/dashboard` (an approved account's download and launcher link). They are
+ordinary pages of the same SPA and need no token: an applicant has no authority by definition, and a
+hosted deployment of the marketing site has no operator panel at all. `/`, `/admin`, `/obs` and
+`/game` are untouched, so the printed startup link and every OBS source keep working exactly as before.
+
+- **Applications.** `POST /api/beta/apply` stores the application (rate limited per address) and the host
+  prints it. An owner reviews them on the panel's **Beta applications** tab and approving mints a
+  one-time invite link, which the host also prints — the same "the console is where a secret appears
+  once" rule the panel token follows. There is no mail server in the beta: the operator sends the link.
+- **The invite sets the password.** `POST /api/beta/activate` turns the invite into an account with a
+  scrypt-hashed password and an HttpOnly session cookie. Nothing is sent by email, and no password ever
+  passes through the operator.
+- **The launcher download is behind the account.** It appears on `/dashboard` only once the account is
+  approved; a pending applicant sees what they are waiting for instead of the button.
+- **The launcher link is a device code.** The panel sidebar's *Launcher link* card starts a link
+  (`POST /api/beta/link/start`) and shows an 8-character code such as `6TYK-RZNW`, with no
+  look-alike letters. The operator approves it while signed in — `/dashboard?link=6TYK-RZNW` — and the
+  launcher polls, receives its installation token exactly once and stores it in
+  `config/beta/installation.json` (0600). Approving requires the account session, never just the code,
+  and unlinking a device in the dashboard invalidates its token immediately.
+- **Secrets are stored as digests.** Passwords use scrypt; session ids, invite tokens, device codes and
+  installation tokens are stored as SHA-256 digests. `tests/beta.test.ts` asserts this against the file
+  on disk, and that the store and the installation file are mode 0600.
+- **Hosted accounts are one variable away.** With `SCOUT_BETA_API_URL` set, the host stops owning the
+  accounts and proxies `/api/beta/*` to that service instead — same paths, same cookies, no CORS — while
+  the launcher keeps using the device flow against it. [docs/BETA.md](docs/BETA.md) documents the REST
+  contract that service has to implement and what is deliberately still missing (email delivery, license
+  enforcement at runtime, payments).
 
 ### CS2 connection
 
@@ -321,7 +357,7 @@ The preview uses the real renderer on a 1920 × 1080 canvas. The Browser Source 
 
 All ten requested operator improvements are implemented and integrated: on-air preflight, an isolated local replay studio, searchable match archives, producer-selected recap and player-stat scenes, reusable broadcast themes, authenticated Companion actions/feedback, owner-managed operator roles and lease/audit, versioned secret-free event packages, and the touch-first remote console. The complete editable overlay layer stack (add/edit/remove/reorder/scene-route), custom graphics and theme system are documented under [Overlay Studio and reusable themes](#overlay-studio-and-reusable-themes). `/game` remains a plain browser renderer; the optional shell is what makes it a native click-through window.
 
-**Code and test verification completed in this checkout:** `npx tsc --noEmit`, `npm test` (204 passing tests, including live-host RBAC/Companion/lease checks and event-pack restore), and `npm run build` all pass. Vite emits existing `framer-motion` module-directive and >500 kB chunk-size warnings; the production build still completes successfully. An HTTP smoke check returned 200 for the operator, `/obs`, `/game`, touch remote and required APIs, and checked that the role-authenticated remote feedback responds. That confirms routing/API startup, not visual rendering: this environment had no browser binary and the Chromium download for Playwright failed, so the editor, theme appearance and `/obs` alpha have **not** had a screenshot/manual-browser check. The Agent Mode preview is available for review.
+**Code and test verification completed in this checkout:** `npx tsc --noEmit`, `npm test` (223 passing tests, including live-host RBAC/Companion/lease checks, event-pack restore, and the closed-beta account/launcher-flow suite in `tests/beta.test.ts`), and `npm run build` all pass. Vite emits existing `framer-motion` module-directive and >500 kB chunk-size warnings; the production build still completes successfully. An HTTP smoke check returned 200 for the operator, `/obs`, `/game`, touch remote, `/welcome`, `/login`, `/apply`, `/dashboard` and required APIs, and checked that the role-authenticated remote feedback responds. The closed-beta flow was also driven end to end over HTTP against a running host — apply, approve, invite, activate, sign in, launcher link, token collection, unlink — with the store inspected to confirm no secret is written in the clear. That confirms routing/API startup, not visual rendering: this environment had no browser binary and the Chromium download for Playwright failed, so the editor, theme appearance and `/obs` alpha have **not** had a screenshot/manual-browser check. The Agent Mode preview is available for review.
 
 **Still requires the actual tournament machine:** a real CS2 observer/GOTV feed and 20 Hz behavior, real OBS Browser Source alpha-compositing after theme changes, real `obs-websocket` interaction, and (if selected) the Tauri shell on Windows hardware. The HTTP endpoint and bridge tests use local/in-process fixtures; they cannot prove venue-network reliability or a complete real-match production rehearsal. Do an on-site preflight and confirm the transparent `/obs` source before going on air.
 

@@ -8,6 +8,8 @@ config/layout.json
 config/obs.json
 config/operators.json
 config/overlay.json
+# Closed-beta accounts and this installation's launcher link (server/beta.ts)
+config/beta/
 public/uploads/*
 !public/uploads/.gitkeep
 # Windows overlay shell (src-tauri): build output and Tauri's generated schemas

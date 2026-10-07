@@ -23,6 +23,8 @@ import {ObsBridge} from './obs.js';
 import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './obs-config.js';
 import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
 import {appPath} from './runtime.js';
+import {hostname} from 'node:os';
+import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // ---- Operator access from another machine (server/auth.ts). Reads stay open on purpose: the OBS
@@ -43,6 +45,67 @@ const lease=new ControlLease();
 const audit=new AuditTrail('recordings');await audit.load();
 const recorder=new GsiRecorder('recordings');await recorder.initialize(process.env.LOG_GSI==='1');
 const archives=new MatchArchiveStore('recordings/matches.json');await archives.load();
+// ---- Closed beta (server/beta.ts): who may download the launcher, and which installation belongs
+// to which website account. Local by default — the host *is* the beta, and applications, invites
+// and launcher links live in config/beta/ next to the operator data. Point SCOUT_BETA_API_URL at a
+// hosted account service to move all of that off the machine; the /api/beta/* paths stay the same,
+// so the panel, the landing page and the launcher need no changes.
+const betaDir=process.env.SCOUT_BETA_DIR||'config/beta';
+const beta:BetaRuntime=createBetaService({
+ dir:betaDir,
+ apiUrl:process.env.SCOUT_BETA_API_URL,
+ apiKey:process.env.SCOUT_BETA_API_KEY,
+ autoApprove:process.env.SCOUT_BETA_AUTO_APPROVE==='1',
+ host:hostname(),
+ download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION,notes:process.env.SCOUT_DOWNLOAD_NOTES||''},
+});
+if(beta.local) await beta.local.load();
+const installation=new Installation(path.join(betaDir,'installation.json'));await installation.load();
+const betaContext=(req:express.Request):BetaContext=>({address:req.socket.remoteAddress||'unknown',userAgent:req.get('user-agent')||'',origin:betaOrigin(req),secure:requestIsSecure(req.headers)});
+// The origin an invite link or a launcher code points at: the address the operator actually used,
+// so the link works on the observer machine and on the phone that approves a launcher.
+function betaOrigin(req:express.Request){
+ const forwarded=(req.get('x-forwarded-proto')||'').split(',')[0].trim();
+ const scheme=forwarded||(requestIsSecure(req.headers)?'https':'http');
+ return `${scheme}://${req.get('host')||'localhost:'+port}`;
+}
+function sendBetaResult<T>(res:express.Response,result:BetaResult<T>,onOk?:(value:T)=>void){
+ if(!result.ok){res.status(result.status).json({error:result.message,code:result.code});return}
+ (onOk||((value:T)=>res.json(value)))(result.value);
+}
+const accountCookieId=(req:express.Request)=>cookieValue(req.get('cookie'),ACCOUNT_COOKIE);
+// The launcher polls its own code in the background once a link is started, so the panel card flips
+// to "linked" without anybody refreshing it. Only one timer runs, and it stops itself on a decision,
+// on expiry, or when the pending code is replaced.
+let linkPoll:ReturnType<typeof setInterval>|null=null;
+function watchInstallationLink(){
+ if(linkPoll) return;
+ const pending=installation.view().pending;
+ if(!pending) return;
+ const deviceCode=pending.deviceCode;
+ linkPoll=setInterval(()=>{
+  void (async()=>{
+   const current=installation.view().pending;
+   if(!current||current.deviceCode!==deviceCode){if(linkPoll)clearInterval(linkPoll);linkPoll=null;return}
+   const poll=await beta.launcher.devicePoll({deviceCode});
+   if(!poll.ok) return;
+   const state=poll.value.status;
+   if(state==='pending') return;
+   if(linkPoll)clearInterval(linkPoll);
+   linkPoll=null;
+   if(state==='approved'&&installation.completeLink(poll.value)){
+    await installation.save();
+    console.log(`[beta] this installation is now linked to ${installation.view().email}`);
+   }else{
+    installation.touch();
+    await installation.save();
+    console.log(`[beta] the launcher code was ${state} — start a new link from the panel when you are ready.`);
+   }
+   broadcast();
+  })();
+ },DEVICE_POLL_INTERVAL_MS);
+ linkPoll.unref?.();
+}
 if(panelToken&&panelToken.length<16) console.warn(`[panel] SCOUT_PANEL_TOKEN is only ${panelToken.length} characters — use a long random token when the network is not yours alone.`);
 if(panel.tokenSource==='generated') console.log('[panel] No SCOUT_PANEL_TOKEN set, so this run has its own token. Set the variable to keep one token across restarts.');
 if(panel.remoteEnabled){
@@ -97,10 +160,21 @@ for(const dir of UPLOAD_DIRS) await mkdir(path.join(UPLOAD_ROOT,dir),{recursive:
 // routes: a route added later is protected by construction, whichever operator feature it belongs to.
 // POST /gsi is CS2's own feed and authenticates with the GSI token inside its body, and POST/DELETE
 // /api/session is the way in and the way out.
+const PUBLIC_BETA_PATHS=new Set([
+ '/api/beta/apply','/api/beta/login','/api/beta/logout','/api/beta/activate',
+ '/api/beta/device/start','/api/beta/device/poll','/api/beta/device/approve','/api/beta/device/deny',
+ '/api/beta/devices/revoke',
+]);
 function isProtected(req:express.Request){
  if(!req.path.startsWith('/api/')) return false;
  if(req.method==='GET'||req.method==='HEAD'||req.method==='OPTIONS') return false;
- return req.path!=='/api/session';
+ if(req.path==='/api/session') return false;
+ // The closed beta's public doors (server/beta.ts). An applicant has no panel authority by
+ // definition, and an account session is its own credential — on a hosted deployment there is no
+ // panel session at all. These routes carry their own same-origin check and their own throttles.
+ // Everything else under /api/beta (the owner's application list, the launcher link) stays behind
+ // the panel gate like every other mutation.
+ return !PUBLIC_BETA_PATHS.has(req.path);
 }
 // Same-origin as well as token: a browser page on another site must not be able to drive the panel,
 // and a name the operator listed (a proxy that rewrites Host) is treated as the operator's own.
@@ -257,6 +331,175 @@ app.delete('/api/session',(req,res)=>{
  res.setHeader('Set-Cookie',clearedCookie(requestIsSecure(req.headers)));
  res.json(panel.view({...panelRequest(req),headers:{},cookie:''}));
 });
+// ---- Closed beta (server/beta.ts): accounts, applications and the launcher link. The launcher
+// half is always this host's own concern; the site half is served here in local mode and proxied to
+// SCOUT_BETA_API_URL in hosted mode (the proxy sits at the end of this file), so every path the
+// landing page, the login page and the dashboard use is identical in both.
+const linkStartSchema=z.object({label:z.string().trim().max(60).optional().default('')}).strip();
+app.post('/api/beta/link/start',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ const current=installation.view();
+ if(current.linked){res.status(409).json({error:`This installation is already linked to ${current.email}. Unlink it first to move it to another account.`,code:'already-linked'});return}
+ const parsed=linkStartSchema.safeParse(req.body||{});
+ const started=await beta.launcher.deviceStart({label:parsed.success&&parsed.data.label?parsed.data.label:hostname(),platform:process.platform},betaContext(req));
+ sendBetaResult(res,started,async value=>{
+  installation.beginLink(value);
+  await installation.save();
+  watchInstallationLink();
+  console.log(`[beta] launcher link started — approve ${value.userCode} while signed in at ${value.verificationUrl}`);
+  res.json({link:installation.view(),code:value.userCode,expiresAt:value.expiresAt,verificationUrl:value.verificationUrl,interval:value.interval});
+ });
+});
+app.post('/api/beta/link/unlink',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ const view=installation.view();
+ installation.unlink();
+ await installation.save();
+ if(linkPoll){clearInterval(linkPoll);linkPoll=null}
+ audit.record(accessPrincipal(res),'beta.installation.unlink',view.email||view.installationId);
+ res.json({link:installation.view()});
+});
+// What the panel card and an installer script read. This is the machine's own link state, so it
+// needs a panel session — but no particular capability: a producer may look, only an owner links.
+app.get('/api/beta/link',(req,res)=>{
+ const decision=panel.authorize(panelRequest(req));
+ if(!decision.ok){res.status(decision.status).json({error:decision.message,code:decision.code});return}
+ res.json({mode:beta.mode,link:installation.view()});
+});
+// The owner's side of the applications. Approving mints the one-time invite link, which is printed
+// here exactly like the panel token is: this host may have no mail server, so the console (and the
+// response) is how the operator hands it over. The invite value is never written to the audit trail.
+app.get('/api/beta/applications',(req,res)=>{
+ if(!privateRead(req,res,'view-audit'))return;
+ void beta.launcher.applications().then(applications=>res.json({mode:beta.mode,applications,link:installation.view(),download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION}}));
+});
+app.post('/api/beta/applications/:id',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ const decision=req.body?.decision==='approve'?'approve':req.body?.decision==='reject'?'reject':null;
+ if(!decision){res.status(400).json({error:'Choose approve or reject.',code:'invalid-decision'});return}
+ const result=await beta.launcher.decide(String(req.params.id),decision,accessPrincipal(res).name);
+ sendBetaResult(res,result,value=>{
+  const inviteUrl=value.invite?`${betaOrigin(req)}/login?invite=${encodeURIComponent(value.invite)}`:null;
+  audit.record(accessPrincipal(res),`beta.application.${decision}`,value.account.email);
+  if(inviteUrl) console.log(`[beta] approved ${value.account.email} — send them this one-time invite link:\n[beta]   ${inviteUrl}`);
+  res.json({application:value.account,inviteUrl});
+ });
+});
+if(beta.site){
+ const site=beta.site,local=beta.local!;
+ const applicationSchema=z.object({name:z.string().trim().min(2).max(80),email:z.string().trim().min(5).max(160),
+  organisation:z.string().trim().max(120).optional().default(''),country:z.string().trim().max(60).optional().default(''),
+  useCase:z.string().trim().max(600).optional().default(''),events:z.string().trim().max(80).optional().default('')});
+ const credentialsSchema=z.object({email:z.string().trim().min(5).max(160),password:z.string().min(1).max(200)}).strip();
+ const activateSchema=z.object({invite:z.string().trim().min(10).max(200),password:z.string().min(1).max(200)}).strip();
+ const raiseSchema=z.object({userCode:z.string().trim().min(4).max(16)}).strip();
+ const deviceStartSchema=z.object({deviceCode:z.string().trim().min(10).max(200)}).strip();
+ const notify=(req:express.Request,value:{account:{email:string;organisation:string};invite:string|null})=>{
+  if(value.invite) console.log(`[beta] ${value.account.email} was approved on the spot (SCOUT_BETA_AUTO_APPROVE=1) — invite link:\n[beta]   ${betaOrigin(req)}/login?invite=${encodeURIComponent(value.invite)}`);
+  else console.log(`[beta] application from ${value.account.email} (${value.account.organisation||'no organisation'}) is waiting for review — approve it in the panel, or with POST /api/beta/applications/:id`);
+ };
+ app.get('/api/beta/status',async(req,res)=>res.json(await site.status(accountCookieId(req))));
+ app.post('/api/beta/apply',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=applicationSchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Tell us your name and an email address we can reach you at.',code:'invalid-application'});return}
+  const result=await site.apply(parsed.data,betaContext(req));
+  sendBetaResult(res,result,value=>{
+   notify(req,value);
+   res.json({application:value.account,inviteUrl:value.invite?`${betaOrigin(req)}/login?invite=${encodeURIComponent(value.invite)}`:null});
+  });
+ });
+ app.post('/api/beta/login',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=credentialsSchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Enter the email address and password of your SCOUT account.',code:'invalid-credentials'});return}
+  const result=await site.signIn(parsed.data,betaContext(req));
+  sendBetaResult(res,result,value=>{
+   res.setHeader('Set-Cookie',accountCookie(value.cookieId,ACCOUNT_TTL_MS,requestIsSecure(req.headers)));
+   res.json({account:value.account});
+  });
+ });
+ app.post('/api/beta/logout',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  await site.signOut(accountCookieId(req));
+  res.setHeader('Set-Cookie',clearedAccountCookie(requestIsSecure(req.headers)));
+  res.json({ok:true});
+ });
+ // An invite link is the only way a password is ever set, so the applicant chooses it in their own
+ // browser — the operator never sees it, and the invite stops working the moment it is used.
+ app.post('/api/beta/activate',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=activateSchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:`Choose a password of at least 10 characters.`,code:'invalid-invite'});return}
+  const result=await site.activate(parsed.data,betaContext(req));
+  sendBetaResult(res,result,value=>{
+   console.log(`[beta] ${value.account.email} activated their account and set a password`);
+   res.setHeader('Set-Cookie',accountCookie(value.cookieId,ACCOUNT_TTL_MS,requestIsSecure(req.headers)));
+   res.json({account:value.account});
+  });
+ });
+ // Launcher side of the device flow: the installer shows a code (start), then waits (poll) until the
+ // account owner approves it in a browser. Both are rate limited in server/beta.ts.
+ app.post('/api/beta/device/start',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=linkStartSchema.safeParse(req.body||{});
+  sendBetaResult(res,await beta.launcher.deviceStart({label:parsed.success&&parsed.data.label?parsed.data.label:hostname(),platform:parsed.success?String((req.body||{}).platform||process.platform):process.platform},betaContext(req)));
+ });
+ app.post('/api/beta/device/poll',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=deviceStartSchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Send the device code the launcher was given.',code:'invalid-code'});return}
+  sendBetaResult(res,await beta.launcher.devicePoll(parsed.data));
+ });
+ app.post('/api/beta/device/approve',async(req,res)=>deviceDecision(req,res,true));
+ app.post('/api/beta/device/deny',async(req,res)=>deviceDecision(req,res,false));
+ async function deviceDecision(req:express.Request,res:express.Response,approve:boolean){
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=raiseSchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Enter the code shown in the launcher window.',code:'invalid-code'});return}
+  const result=await local.deviceDecide(accountCookieId(req),parsed.data.userCode,approve);
+  sendBetaResult(res,result,value=>{
+   if(approve) console.log(`[beta] ${value.account.email} linked a launcher`);
+   res.json({account:value.account});
+  });
+ }
+ app.post('/api/beta/devices/revoke',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const deviceId=typeof req.body?.deviceId==='string'?req.body.deviceId.trim():'';
+  if(!deviceId){res.status(400).json({error:'Choose the launcher to unlink.',code:'invalid-device'});return}
+  const result=await local.revokeDevice(accountCookieId(req),deviceId);
+  sendBetaResult(res,result,value=>{
+   console.log(`[beta] ${value.account.email} unlinked a launcher`);
+   res.json({account:value.account});
+  });
+ });
+ console.log(`[beta] Closed beta accounts are stored in ${betaDir}/store.json (local mode). Approve an application in the panel, or set SCOUT_BETA_API_URL to use a hosted account service.`);
+}else{
+ // Hosted accounts: the browser's requests go upstream unchanged — same path, same cookie, same
+ // body — so the landing page, the panel and the launcher all see one account service. Nothing is
+ // cached or rewritten on the way; an unreachable service is reported as exactly that.
+ const upstream=(process.env.SCOUT_BETA_API_URL||'').replace(/\/$/,'');
+ app.use('/api/beta',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  try{
+   const response=await fetch(upstream+req.originalUrl.replace(/^\/api\/beta/,''),{
+    method:req.method,
+    headers:{'Content-Type':'application/json',...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),...(process.env.SCOUT_BETA_API_KEY?{Authorization:`Bearer ${process.env.SCOUT_BETA_API_KEY}`}:{})},
+    body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
+   });
+   const text=await response.text();
+   const cookies=typeof response.headers.getSetCookie==='function'?response.headers.getSetCookie():[];
+   if(cookies.length) res.setHeader('Set-Cookie',cookies);
+   res.status(response.status).type(response.headers.get('content-type')||'application/json').send(text);
+  }catch(error:any){
+   res.status(503).json({error:`The SCOUT account service could not be reached (${error?.message||'network error'}).`,code:'upstream-unreachable'});
+  }
+ });
+ console.log(`[beta] Closed beta accounts are served by ${upstream||'(no SCOUT_BETA_API_URL set)'} — the host proxies /api/beta to it.`);
+}
 const operatorInput=z.object({label:z.string().trim().min(1).max(64),role:z.enum(['producer','designer','viewer'])}).strip();
 app.get('/api/operators',(req,res)=>{
  if(!privateRead(req,res,'manage-operators'))return;
