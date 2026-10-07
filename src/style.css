@@ -22,7 +22,8 @@ html{color-scheme:dark}
 body{margin:0}button,a,input,select{font:inherit}button,a{-webkit-tap-highlight-color:transparent}button{color:inherit;cursor:pointer;border:0;background:none}a{color:inherit;text-decoration:none}button:disabled{cursor:not-allowed;opacity:.45}button:hover:not(:disabled){filter:brightness(1.18)}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 input,select{background:var(--bg-soft);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:9px 11px;font-size:12px;width:100%}input::placeholder{color:var(--text-faint)}input:disabled{opacity:.4}input[type=number]{max-width:90px}input[type=color]{padding:2px;width:38px;height:32px;cursor:pointer}
 .app{display:flex;min-height:100vh}
-.sidebar{width:226px;position:fixed;inset:0 auto 0 0;border-right:1px solid var(--line-soft);background:var(--bg-raise);padding:30px 18px 0;display:flex;flex-direction:column;z-index:5}
+/* Keep navigation scroll independent from the main panel when the viewport is short. */
+.sidebar{width:226px;position:fixed;inset:0 auto 0 0;border-right:1px solid var(--line-soft);background:var(--bg-raise);padding:30px 18px 0;display:flex;flex-direction:column;z-index:5;overflow-y:auto;overscroll-behavior-y:contain}
 .brand{display:flex;align-items:center;gap:10px;font-size:35px;font-weight:700;letter-spacing:-2px;padding-left:9px;line-height:40px}
 .brand-symbol{width:40px;height:40px;color:var(--accent);--mark-bright:var(--accent-bright);flex-shrink:0;display:block}.brand-dot{font-size:11px;align-self:flex-start;margin-left:-6px;letter-spacing:0;color:var(--accent-deep)}
 /* The SCOUT mark (src/logo.tsx): an inline SVG, so it is crisp at any size and takes its colour from
