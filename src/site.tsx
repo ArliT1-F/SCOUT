@@ -62,7 +62,7 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
   <div className="site-nav-actions">
    {onHost&&<a className="site-ghost-link" href="/" title="The operator panel served by this machine">Operator panel<ArrowUpRight size={13}/></a>}
    {account?<a className="button primary" href="/dashboard"><LayoutDashboard size={14}/>Dashboard</a>:<a className="site-ghost-link" href="/login"><LogIn size={13}/>Sign in</a>}
-   {!account&&<a className="button primary" href="/apply">Apply for access<ArrowRight/></a>}
+   {!account&&<a className="button primary" href="/apply">Apply for access<ArrowRight size={14}/></a>}
   </div>
   {section&&<span className="site-nav-section">{section}</span>}
  </header>;
@@ -168,7 +168,7 @@ export function LandingPage(){
     <div className="site-steps">{STEPS.map((step,index)=><div className="site-step" key={step.title}><span className="site-step-index">{index+1}</span><b>{step.title}</b><p>{step.body}</p></div>)}</div>
     <div className="site-beta-cta">
      <div><b>Applications are open</b><p>Windows 10/11 (x64), Counter-Strike 2, and OBS Studio if you are streaming. The installer bundles its own runtime — no Node.js, no build tools.</p></div>
-     <a className="button primary" href="/apply">Start your application<ArrowRight/></a>
+     <a className="button primary" href="/apply">Start your application<ArrowRight size={14}/></a>
     </div>
    </section>
    {onHost&&<section className="site-section site-host-card">
@@ -182,7 +182,7 @@ export function LandingPage(){
    <section className="site-final">
     <h2>Bring your next match to air</h2>
     <p>Apply for the closed beta, and we will send your invite link as soon as your account is approved.</p>
-    <div className="site-cta center"><a className="button primary" href="/apply">Apply for the closed beta<ArrowRight/></a><a className="button" href="/login">I already have an account</a></div>
+    <div className="site-cta center"><a className="button primary" href="/apply">Apply for the closed beta<ArrowRight size={14}/></a><a className="button" href="/login">I already have an account</a></div>
    </section>
   </main>
   <SiteFooter/>
@@ -220,11 +220,11 @@ export function ApplyPage(){
     <h2>Application received</h2>
     <p>We have <b>{done.email}</b> on the list. When it is approved you will get an invite link at that address; opening it lets you set a password. Until then, nothing else is needed from you.</p>
     {done.inviteUrl&&<p className="site-inline-invite">This host is in development mode, so your account was approved immediately: <a href={done.inviteUrl}>open your invite link</a>.</p>}
-    <div className="site-cta"><a className="button" href="/welcome">Back to the overview</a><a className="button primary" href="/login">Go to sign in<ArrowRight/></a></div>
+    <div className="site-cta"><a className="button" href="/welcome">Back to the overview</a><a className="button primary" href="/login">Go to sign in<ArrowRight size={14}/></a></div>
    </section>:account?<section className="site-card site-done">
     <h2>You already have an account</h2>
     <p>Signed in as <b>{account.email}</b> — {statusLabel(account.status).toLowerCase()}.</p>
-    <div className="site-cta"><a className="button primary" href="/dashboard">Open your dashboard<ArrowRight/></a></div>
+    <div className="site-cta"><a className="button primary" href="/dashboard">Open your dashboard<ArrowRight size={14}/></a></div>
    </section>:<div className="site-apply-grid">
     <form className="site-card site-form" onSubmit={submit}>
      <label className="field"><span>YOUR NAME</span><input value={form.name} onChange={set('name')} placeholder="Who should we talk to?" autoComplete="name"/></label>
@@ -235,7 +235,7 @@ export function ApplyPage(){
      </div>
      <label className="field"><span>HOW OFTEN DO YOU BROADCAST?</span><select value={form.events} onChange={set('events')}>{EVENT_OPTIONS.map(option=><option key={option} value={option}>{option}</option>)}</select></label>
      <label className="field"><span>WHAT WILL YOU BROADCAST?</span><textarea rows={4} value={form.useCase} onChange={set('useCase')} placeholder="Leagues, qualifiers, community cups, LANs…"/></label>
-     <button className="button primary wide" type="submit" disabled={busy||offline}>{busy?<><Loader2 className="spin" size={15}/>Sending…</>:<>Send application<ArrowRight/></>}</button>
+     <button className="button primary wide" type="submit" disabled={busy||offline}>{busy?<><Loader2 className="spin" size={15}/>Sending…</>:<>Send application<ArrowRight size={14}/></>}</button>
      {error&&<Notice>{error}</Notice>}
      <p className="site-fineprint">We only use this to review your application and to reach you about the beta. No newsletter, no resale.</p>
     </form>
@@ -320,7 +320,7 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
      {invite?<form onSubmit={activate}>
       <label className="field"><span>NEW PASSWORD</span><input type="password" value={invitePassword} onChange={event=>setInvitePassword(event.target.value)} autoFocus autoComplete="new-password" placeholder="at least 10 characters"/></label>
       <label className="field"><span>REPEAT PASSWORD</span><input type="password" value={inviteConfirm} onChange={event=>setInviteConfirm(event.target.value)} autoComplete="new-password"/></label>
-      <button className="button primary wide" type="submit" disabled={busy==='invite'}>{busy==='invite'?<><Loader2 className="spin" size={15}/>Saving…</>:<>Set password<ArrowRight/></>}</button>
+      <button className="button primary wide" type="submit" disabled={busy==='invite'}>{busy==='invite'?<><Loader2 className="spin" size={15}/>Saving…</>:<>Set password<ArrowRight size={14}/></>}</button>
      </form>:account?<div className="site-signed-in">
       <span className="site-done-mark"><CircleCheck size={20}/></span>
       <h3>Already signed in</h3>
@@ -328,7 +328,7 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
       {code?<div className="site-device">
        <label className="field"><span>LAUNCHER CODE</span><input value={code} onChange={event=>setCode(event.target.value.toUpperCase())} placeholder="ABCD-EFGH"/></label>
        <div className="site-cta"><button className="button primary" onClick={()=>void approveLauncher(true)} disabled={busy==='device'}><Link2 size={14}/>Link this launcher</button><button className="button" onClick={()=>void approveLauncher(false)} disabled={busy==='device'}><Unplug size={14}/>Refuse</button></div>
-      </div>:<div className="site-cta"><a className="button primary" href="/dashboard">Your dashboard<ArrowRight/></a></div>}
+      </div>:<div className="site-cta"><a className="button primary" href="/dashboard">Your dashboard<ArrowRight size={14}/></a></div>}
      </div>:<form onSubmit={signIn}>
       {code&&<div className="site-device-code"><small>LAUNCHER WAITING</small><b>{code}</b><span>Sign in to approve it.</span></div>}
       <label className="field"><span>EMAIL</span><input type="email" value={email} onChange={event=>setEmail(event.target.value)} autoFocus autoComplete="username" placeholder="you@organisation.gg"/></label>
@@ -395,7 +395,7 @@ export function DashboardPage({linkCode}:{linkCode?:string}){
    {!account?<section className="site-card site-done">
     <h2>Sign in to see your dashboard</h2>
     <p>The dashboard holds your beta status, the launcher download and the code that links a launcher to your account.</p>
-    <div className="site-cta"><a className="button primary" href="/login">Sign in<ArrowRight/></a><a className="button" href="/apply">Apply for access</a></div>
+    <div className="site-cta"><a className="button primary" href="/login">Sign in<ArrowRight size={14}/></a><a className="button" href="/apply">Apply for access</a></div>
    </section>:<>
     <div className="site-dash-head">
      <div>
