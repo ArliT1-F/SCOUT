@@ -4,6 +4,7 @@ import {demo,demoEvents} from './demo';
 import {defaultControls,type SceneId} from '../server/controls';
 import {defaultOverlay} from '../server/overlay';
 import {normalizeConfig} from '../server/config';
+import {configSides} from '../server/sides';
 // The radar calibration this build ships, imported rather than retyped, so the dots on the page sit
 // where the dots on the broadcast sit (it is the file the host reads and the panel edits).
 import radarConfig from '../config/radars.json';
@@ -19,12 +20,12 @@ import radarConfig from '../config/radars.json';
 // What is here beyond the panel's demo feed, and why:
 //   - a config (event, teams, rosters, series, bracket) — the panel's demo feed has none, so its
 //     preview shows placeholder sides; a product page needs a tournament to look at;
-//   - one confirmed round result, because the round-recap scene exists for exactly that state and
-//     would otherwise render its "waiting for a result" empty state;
+//   - the demo feed's confirmed round result, which the round-recap scene needs so it is not stuck on
+//     its "waiting for a result" empty state (src/demo.ts owns that round, so the panel preview and
+//     this page show the same one);
 //   - a completed series for the winner scene, because that scene is only ever on air after a
 //     final (the header of the tour says so, so nobody is being told the match is over).
 // Every string the scenes print still comes from the operator data or the shipped defaults.
-const showcaseRound={id:14,map:'de_inferno',round:14,winner:'CT' as const,reason:'elimination' as const,ctScore:8,tScore:6};
 export const SHOWCASE_CONFIG:any=normalizeConfig({
  event:{name:'SCOUT Demo Series',stage:'Grand final'},
  format:'bo3',mr:12,otMr:3,
@@ -79,11 +80,11 @@ export const SHOWCASE_FINISHED_CONFIG:any=normalizeConfig({
 export const SHOWCASE_LIVE_MAP=String((SHOWCASE_CONFIG.maps??[]).find((map:any)=>map.status==='live')?.name??'de_inferno');
 export const SHOWCASE_RADARS=radarConfig as any;
 export const SHOWCASE_OVERLAY=defaultOverlay();
-export const showcaseEvents=(now:number,withRoundResult=false)=>{
+export const showcaseEvents=(now:number)=>{
  const events=demoEvents as unknown as {kills:any[];rounds:any[]};
  return {
   kills:events.kills.map((kill,index)=>({...kill,at:now-index*2400})),
-  rounds:withRoundResult?[{...showcaseRound,endedAt:now}]:events.rounds,
+  rounds:events.rounds,
  };
 };
 // A stage frame is the panel's own preview frame: the same .preview-stage/.preview-hud classes that
@@ -120,8 +121,8 @@ export function HudStage({scene,className='',backdrop=true,map=SHOWCASE_LIVE_MAP
   {backdrop&&<div className="map-backdrop"><img className="map-backdrop-img" src={`/thumbs/site/${map}.jpg`} alt="" loading="lazy" decoding="async"/></div>}
   <div className="preview-hud" style={{['--preview-scale' as any]:scale}}>
    <Hud state={demo} controls={{...defaultControls,scene,breakEndsAt:scene==='break'?now+4*60*1000:null}}
-    config={config} radars={SHOWCASE_RADARS} overlay={SHOWCASE_OVERLAY} lastSeen={now} now={now}
-    signal events={showcaseEvents(now,scene==='recap')} demoMode/>
+    config={config} sides={configSides(config)} radars={SHOWCASE_RADARS} overlay={SHOWCASE_OVERLAY} lastSeen={now} now={now}
+    signal events={showcaseEvents(now)} demoMode/>
   </div>
  </div>;
 }

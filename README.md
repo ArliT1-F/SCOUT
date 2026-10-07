@@ -279,7 +279,7 @@ The host derives kills and round results by differencing successive snapshots (`
 - **Rounds**: `round.phase: over` (or a gameover/intermission map phase) closes the round once, with the winner from `round.win_team` (falling back to `map.round_wins`) and a reason taken from the bomb transition (`bomb`, `defuse`), a wiped roster (`elimination`) or the clock (`time`).
 - The >5 s heartbeat gap, a map change or a provider change clears the kill feed and the per-player watch state; finished rounds are kept because they are history rather than live state.
 
-The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: team colours from `config/teams.json`, the weapon's name, headshot marker, newest first, and each entry fades out after ~7 s and disappears at 9 s. The operator preview shows sample kills while it is on Demo feed.
+The killfeed renders on `/obs` and `/game` when the **Killfeed** switch is on: team colours from `config/teams.json`, the weapon's name, headshot marker, newest first, and each entry fades out after ~7 s and disappears at 9 s. The operator preview shows sample kills — and one confirmed sample round, so the Round recap scene has a result to draw instead of its empty state — while it is on Demo feed.
 
 ### Teams, rosters, map series and tournament tree
 
@@ -317,7 +317,7 @@ Matchup, lineups, map series, tournament tree, winner, break, round recap and pl
 | Winner | the champion, final score, per-map results, the starting five | see below |
 | Break | your wording, a countdown, and the next map | `config.break`, `controls.breakEndsAt` |
 | Round recap | Most recent confirmed GSI round result, map/round, score, reason and up to five matching kills | Derived round and kill events; no inferred winner |
-| Player stats | Live K / D / A / MVP comparison grouped by resolved team side | GSI `allplayers[].match_stats` |
+| Player stats | Live K / D / A / MVP comparison per team — each column showing its own five players (the GSI side, else the roster's SteamIDs, else observer-slot order), sorted by kills and named through the operator's aliases | GSI `allplayers[].match_stats` |
 
 - **Series score**: the operator's recorded map results win; before any are entered the live GSI series score is used, credited through the resolved sides (a stand-in side has no team to credit).
 - **Winner**: the live GSI series winner, then recorded results, then the tree's final, then a finished map. With nothing decided it says so rather than guessing.

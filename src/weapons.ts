@@ -11,6 +11,10 @@ export function weaponInfo(name?:string,type?:string):WeaponInfo|undefined {
  const kind=GSI_TYPE[type||'']||(name.includes('grenade')||name==='weapon_molotov'?'grenade':'other');
  return {name,kind,label:CODES[name]||name.replace('weapon_','').replace(/_/g,' ').toUpperCase()};
 }
+// What a weapon is called on air. GSI reports weapon_ak47; a broadcast says AK-47. The killfeed, the
+// roster strip and the round recap all read this one list, so a kill never has two spellings.
+const ON_AIR:Record<string,string>={weapon_ak47:'AK-47',weapon_m4a1:'M4A4',weapon_m4a1_silencer:'M4A1-S',weapon_awp:'AWP',weapon_deagle:'DEAGLE',weapon_usp_silencer:'USP-S',weapon_glock:'GLOCK',weapon_knife:'KNIFE',weapon_hegrenade:'HE',weapon_flashbang:'FLASH',weapon_smokegrenade:'SMOKE',weapon_molotov:'MOLLY',weapon_incgrenade:'INCENDIARY',weapon_decoy:'DECOY',weapon_ssg08:'SSG 08',weapon_aug:'AUG',weapon_sg556:'SG 553',weapon_famas:'FAMAS',weapon_galilar:'GALIL',weapon_mp9:'MP9',weapon_mp7:'MP7',weapon_mp5sd:'MP5-SD',weapon_ump45:'UMP-45',weapon_p90:'P90',weapon_mac10:'MAC-10',weapon_bizon:'BIZON',weapon_nova:'NOVA',weapon_xm1014:'XM1014',weapon_mag7:'MAG-7',weapon_sawedoff:'SAWED-OFF',weapon_m249:'M249',weapon_negev:'NEGEV',weapon_tec9:'TEC-9',weapon_fiveseven:'FIVE-SEVEN',weapon_cz75a:'CZ75',weapon_p250:'P250',weapon_elite:'DUALIES',weapon_revolver:'R8',weapon_taser:'ZEUS'};
+export const weaponLabel=(name?:string)=>ON_AIR[name||'']||weaponInfo(name)?.label||'';
 // `state:'active'` is authoritative; `state:'reloading'` still means it is in the player's hands.
 export function activeWeapon(player?:PlayerState):WeaponInfo|undefined {
  const weapons=Object.values(player?.weapons||{});

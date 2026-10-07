@@ -9,7 +9,7 @@ import {getWidget,overlayThemeStyle,widgetStyle,type OverlayConfig} from '../ser
 import {CustomOverlays,widgetVisible} from './custom-overlays';
 import {phaseView} from './phases';
 import {formatClock,interpolatedClock} from './clock';
-import {weaponInfo,activeWeapon,utilityOf,teamUtility,type Utility} from './weapons';
+import {weaponInfo,weaponLabel,activeWeapon,utilityOf,teamUtility,type Utility} from './weapons';
 import {WeaponIcon,UtilityIcon} from './icons';
 import {calibrationFor,radarPoints,type RadarConfig,type GrenadeKind} from './radar';
 import {buildRoster,identify,shownName,cardOf} from '../server/players';
@@ -48,8 +48,6 @@ function Radar({state,sides,radars,pos,nameOf}:{state:MatchState;sides:ResolvedS
   <span className="radar-label">{state.map?.name?.replace('de_','').toUpperCase()||'—'}<small>{dots.length} TRACKED{grenades.length>0?` · ${grenades.length} NADE${grenades.length===1?'':'S'}`:''}</small></span>
  </div>;
 }
-const WEAPON_LABELS:Record<string,string>={weapon_ak47:'AK-47',weapon_m4a1:'M4A4',weapon_m4a1_silencer:'M4A1-S',weapon_awp:'AWP',weapon_deagle:'DEAGLE',weapon_usp_silencer:'USP-S',weapon_glock:'GLOCK',weapon_knife:'KNIFE',weapon_hegrenade:'HE',weapon_flashbang:'FLASH',weapon_smokegrenade:'SMOKE',weapon_molotov:'MOLLY',weapon_incgrenade:'INCENDIARY',weapon_decoy:'DECOY',weapon_ssg08:'SSG 08',weapon_aug:'AUG',weapon_sg556:'SG 553',weapon_famas:'FAMAS',weapon_galilar:'GALIL',weapon_mp9:'MP9',weapon_mp7:'MP7',weapon_mp5sd:'MP5-SD',weapon_ump45:'UMP-45',weapon_p90:'P90',weapon_mac10:'MAC-10',weapon_bizon:'BIZON',weapon_nova:'NOVA',weapon_xm1014:'XM1014',weapon_mag7:'MAG-7',weapon_sawedoff:'SAWED-OFF',weapon_m249:'M249',weapon_negev:'NEGEV',weapon_tec9:'TEC-9',weapon_fiveseven:'FIVE-SEVEN',weapon_cz75a:'CZ75',weapon_p250:'P250',weapon_elite:'DUALIES',weapon_revolver:'R8',weapon_taser:'ZEUS'};
-const weaponLabel=(name?:string)=>WEAPON_LABELS[name||'']||weaponInfo(name)?.label||'';
 // Killfeed: server-derived kills, newest first, faded out by age. Ages come from the host clock in
 // the snapshot, so the entries expire on the same schedule on every output surface.
 function Killfeed({events,sides,pos,nameOf}:{events?:{kills?:KillEvent[]};sides:ResolvedSides;pos?:React.CSSProperties;nameOf?:(player:{steamid?:string;name?:string},side?:string)=>string}){

@@ -4,6 +4,7 @@ import {Trophy,Users} from 'lucide-react';
 import {assetUrl} from './assets';
 import {sceneTeams,teamBySlot,mapCards,nextMap,seriesScore,winnerOf,lineupFor,liveLineup,sideOfTeam,fitName,fitSize,breakWords,breakClock,bracketLayout,slotView,type SceneTeam,type MapCard,type LiveLike} from './scenes';
 import {splitRoster,type PlayerCard} from '../server/players';
+import {weaponLabel} from './weapons';
 import type {SceneId} from '../server/controls';
 import type {SeriesState} from '../server/series';
 import type {ResolvedSides} from '../server/sides';
@@ -193,19 +194,34 @@ function RoundRecapScene({config,teams,sides,events}:{config:any;teams:[SceneTea
  return <Frame config={config} teams={teams} label="Round recap">
   <div className="st-recap">
    <motion.div className="st-recap-kicker" {...rise(0,-12)}>ROUND {round?.round??'—'} · {round?.map?.replace(/^de_/,'').toUpperCase()||'LIVE MATCH'}</motion.div>
-   {winnerTeam?<><motion.div className="st-recap-winner" style={tint(winnerTeam.color)} {...rise(1,22)}><Crest team={winnerTeam} size={132}/><div><small>ROUND WON BY</small><h1>{winnerTeam.name}</h1><span>{reason}</span></div><b className="st-recap-score">{round?.ctScore??0}<i>:</i>{round?.tScore??0}</b></motion.div><motion.div className="st-recap-kills" {...rise(2,18)}><small>ELIMINATIONS · {kills.length}</small>{kills.length?kills.map((kill,index)=><div key={kill.id} className="st-recap-kill"><b>{kill.killerName||'UNKNOWN'}</b><span>{kill.weapon?.replace('weapon_','').replace(/_/g,' ').toUpperCase()||'ELIMINATION'}{kill.headshot?' · HEADSHOT':''}</span><b>{kill.victimName}</b><i>0{index+1}</i></div>):<p>No credited kills were captured for this round.</p>}</motion.div></>:<div className="st-recap-empty"><small>ROUND RECAP</small><h1>Waiting for a confirmed round result</h1><p>The recap uses only round results derived from CS2 GSI. It never guesses a winner.</p></div>}
+   {winnerTeam?<><motion.div className="st-recap-winner" style={tint(winnerTeam.color)} {...rise(1,22)}><Crest team={winnerTeam} size={140}/><div><small>ROUND WON BY</small><h1 style={{fontSize:fitSize(winnerTeam.name,1040,{max:112,min:48})}}>{winnerTeam.name}</h1><span>{reason}</span></div><b className="st-recap-score">{round?.ctScore??0}<i>:</i>{round?.tScore??0}</b></motion.div><motion.div className="st-recap-kills" {...rise(2,18)}><small>ELIMINATIONS · {kills.length}</small>{kills.length?kills.map((kill,index)=><div key={kill.id} className="st-recap-kill"><b>{kill.killerName||'UNKNOWN'}</b><span>{weaponLabel(kill.weapon)||'ELIMINATION'}{kill.headshot?' · HEADSHOT':''}</span><b>{kill.victimName}</b><i>0{index+1}</i></div>):<p>No credited kills were captured for this round.</p>}</motion.div></>:<div className="st-recap-empty"><small>ROUND RECAP</small><h1>Waiting for a confirmed round result</h1><p>The recap uses only round results derived from CS2 GSI. It never guesses a winner.</p></div>}
   </div>
  </Frame>;
 }
-function PlayerStatsScene({config,teams,sides,players}:{config:any;teams:[SceneTeam,SceneTeam];sides?:ResolvedSides;players:LiveLike[]}){
- const ordered=teams.map(team=>{const side=sideOfTeam(sides,team.id);const rows=players.filter(player=>!side||player.team===side).sort((a,b)=>(b.match_stats?.kills||0)-(a.match_stats?.kills||0)).slice(0,5);return {team,side,rows}});
+// One team column of the Player statistics scene. The side the GSI feed is calling this team is the
+// authoritative filter; when there is no live binding the operator's own roster SteamIDs split the
+// players, and only then the observer-slot order (1–5 / 6–10, which is how CS2 hands out slots in
+// observer mode) — each column always shows its own five players instead of the same list twice.
+function statsRowsFor(config:any,team:SceneTeam,side:'CT'|'T'|undefined,players:LiveLike[]):LiveLike[]{
+ const byKills=(rows:LiveLike[])=>[...rows].sort((a,b)=>(b.match_stats?.kills||0)-(a.match_stats?.kills||0)).slice(0,5);
+ if(side) return byKills(players.filter(player=>player.team===side));
+ const roster:any[]=(config?.teams||[]).find((candidate:any)=>candidate.id===team.id)?.players||[];
+ const rostered=new Set(roster.map((player:any)=>String(player.steamid||'')).filter(Boolean));
+ const byRoster=rostered.size?players.filter(player=>player.steamid&&rostered.has(String(player.steamid))):[];
+ const half=team.slot==='A'?[0,5]:[5,10];
+ return byKills(byRoster.length?byRoster:[...players].sort((a,b)=>(a.observer_slot??99)-(b.observer_slot??99)).slice(half[0],half[1]));
+}
+// A player with no roster entry and no alias is still a player: show the name CS2 reports rather than
+// a dash, so the numbers always have a face next to them.
+function PlayerStatsScene({config,teams,sides,players,nameOf}:{config:any;teams:[SceneTeam,SceneTeam];sides?:ResolvedSides;players:LiveLike[];nameOf:(player:LiveLike,side?:string)=>string}){
+ const ordered=teams.map(team=>{const side=sideOfTeam(sides,team.id);return {team,side,rows:statsRowsFor(config,team,side,players).map(player=>({player,name:nameOf(player,side)||player.name||'Unknown player'}))}});
  return <Frame config={config} teams={teams} label="Player statistics">
   <div className="st-stats">
-   <motion.div className="st-stats-title" {...rise(0,-14)}><small>THE NUMBERS THAT MATTER</small><h1>PLAYER STATISTICS</h1><span>{config?.event?.stage||'CURRENT MAP'} · LIVE GSI</span></motion.div>
+   <motion.div className="st-stats-title" {...rise(0,-14)}><small>THE NUMBERS THAT MATTER</small><h1>PLAYER STATISTICS</h1><span>{config?.event?.stage?`${String(config.event.stage).toUpperCase()} · LIVE GSI`:'CURRENT MAP · LIVE GSI'}</span></motion.div>
    <div className="st-stats-columns">{ordered.map(({team,side,rows},teamIndex)=><motion.section className="st-stats-team" style={tint(team.color)} key={team.id} {...rise(teamIndex+1,20)}>
-    <header><Crest team={team} size={58}/><div><h2>{team.name}</h2><small>{side?`${side} SIDE`:'ROSTER'}</small></div><span>LIVE</span></header>
+    <header><Crest team={team} size={58}/><div><h2 style={{fontSize:fitSize(team.name,600,{max:52,min:30})}}>{team.name}</h2><small>{side?`${side} SIDE`:'ROSTER ORDER'}</small></div><span>LIVE</span></header>
     <div className="st-stat-head"><b>PLAYER</b><span>K</span><span>D</span><span>A</span><span>MVP</span></div>
-    {rows.length?rows.map((player,index)=><div className="st-stat-row" key={player.steamid||player.name||index}><b>{player.name||'Unknown player'}</b><span>{player.match_stats?.kills??'—'}</span><span>{player.match_stats?.deaths??'—'}</span><span>{player.match_stats?.assists??'—'}</span><span>{player.match_stats?.mvp??'—'}</span></div>):<div className="st-stats-empty">Waiting for player statistics from the observer feed.</div>}
+    {rows.length?rows.map(({player,name},index)=><div className="st-stat-row" key={player.steamid||name||index}><b>{name}</b><span>{player.match_stats?.kills??'—'}</span><span>{player.match_stats?.deaths??'—'}</span><span>{player.match_stats?.assists??'—'}</span><span>{player.match_stats?.mvp??'—'}</span></div>):<div className="st-stats-empty">Waiting for player statistics from the observer feed.</div>}
    </motion.section>)}</div>
    <div className="st-stats-foot">KILLS <b>K</b> · DEATHS <b>D</b> · ASSISTS <b>A</b> · MVP AWARDS <b>MVP</b> — DATA PROVIDED BY CS2 GSI</div>
   </div>
@@ -232,6 +248,6 @@ export function SceneStage({scene,config,swapped,series,sides,players,nameOf,eve
  else if(scene==='winner') body=<WinnerScene key="winner" config={config} teams={teams} series={series} sides={sides} cards={cards}/>;
  else if(scene==='break') body=<BreakScene key="break" config={config} teams={teams} cards={cards} breakEndsAt={breakEndsAt} now={now}/>;
  else if(scene==='recap') body=<RoundRecapScene key="recap" config={config} teams={teams} sides={sides} events={events}/>;
- else if(scene==='stats') body=<PlayerStatsScene key="stats" config={config} teams={teams} sides={sides} players={players}/>;
+ else if(scene==='stats') body=<PlayerStatsScene key="stats" config={config} teams={teams} sides={sides} players={players} nameOf={nameOf}/>;
  return <AnimatePresence mode="wait">{body}</AnimatePresence>;
 }
