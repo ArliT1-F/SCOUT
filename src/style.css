@@ -848,6 +848,10 @@ footer .status-dot{margin-right:7px}
    1920 × 1080 canvas scales here exactly as it does there. */
 .site-hero-art{position:relative;display:flex;flex-direction:column;gap:12px}
 .site-stage{border-color:var(--line)!important;border-radius:14px!important;box-shadow:0 30px 70px -30px #000c,0 0 0 1px #ffffff0a inset}
+/* The site stages stand the transparent HUD over a real map picture instead of the panel preview's
+   abstract shapes: the same web-resized thumbnail the map cards use, lightly scrimmed for contrast. */
+.site-stage .map-backdrop-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.92}
+.site-stage .map-backdrop::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,7,15,.18) 0%,rgba(10,7,15,.38) 72%,rgba(10,7,15,.5) 100%)}
 .site-stage-hero{width:100%}
 .site-stage-tour{width:100%}
 .site-stage-caption{display:flex;gap:12px;align-items:baseline;justify-content:space-between;flex-wrap:wrap;font-size:10.5px;line-height:1.6;color:var(--text-faint)}
@@ -999,6 +1003,24 @@ footer .status-dot{margin-right:7px}
 .launcher-link .mini-button{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:4px;padding:6px 9px;font-size:9px;letter-spacing:.6px;color:var(--text-dim);background:var(--bg-soft)}
 .launcher-link .mini-button:hover{color:var(--accent-bright);border-color:var(--accent-deep)}
 .launcher-link-error{font-size:9.5px;line-height:1.5;color:var(--bad)}
+/* Site flare art: the CS2 renders in public/assets decorate the page without speaking.
+   Every one is aria-hidden and pointer-events:none, and steps aside where it would crowd the copy. */
+.site-hero{position:relative}
+.site-hero>div{position:relative;z-index:1}
+.site-hero-bg{position:absolute;left:-70px;top:50%;transform:translateY(-52%);height:min(560px,92%);opacity:.16;pointer-events:none;user-select:none;filter:saturate(1.15);mask-image:radial-gradient(closest-side,#000 52%,transparent 100%);-webkit-mask-image:radial-gradient(closest-side,#000 52%,transparent 100%)}
+.site-armory{display:flex;justify-content:center;align-items:center;gap:clamp(24px,6vw,90px);padding:6px 34px 30px;overflow:hidden}
+.site-armory img{width:auto;object-fit:contain}
+.armory-m4{height:clamp(64px,9vw,118px);transform:rotate(-2.4deg);filter:drop-shadow(0 16px 28px rgba(72,178,187,.28));animation:armory-float 7s ease-in-out infinite}
+.armory-ak{height:clamp(64px,9vw,126px);transform:rotate(1.7deg);filter:drop-shadow(0 16px 28px rgba(255,77,61,.22));animation:armory-float 8s ease-in-out infinite reverse}
+.armory-de{height:clamp(70px,10vw,150px);transform:rotate(-3deg);filter:drop-shadow(0 16px 28px rgba(72,178,187,.25));animation:armory-float 9s ease-in-out infinite}
+@keyframes armory-float{0%,100%{translate:0 0}50%{translate:0 -7px}}
+.site-final{position:relative}
+.site-final>h2,.site-final>p,.site-final>.site-cta{position:relative;z-index:1}
+.site-agent{position:absolute;bottom:10px;height:min(300px,34vw);opacity:.55;pointer-events:none;user-select:none;mask-image:linear-gradient(180deg,#000 76%,transparent 100%);-webkit-mask-image:linear-gradient(180deg,#000 76%,transparent 100%)}
+.agent-t{left:max(8px,calc(50% - 660px))}
+.agent-ct{right:max(8px,calc(50% - 660px))}
+@media(max-width:1080px){.site-agent{display:none}.site-armory{gap:22px}}
+@media(prefers-reduced-motion:reduce){.site-armory img{animation:none}}
 @media(max-width:1080px){
  .site-hero{grid-template-columns:1fr;gap:30px;padding-top:44px}
  .site-h1{font-size:46px}

@@ -153,6 +153,7 @@ export function LandingPage(){
   <main className="site-main">
    {offline&&<OfflineBanner>The SCOUT host is not reachable on this address, so account actions are unavailable. The product pages work anyway — start the launcher to sign in or apply.</OfflineBanner>}
    <section className="site-hero">
+    <img className="site-hero-bg" src="/assets/cs2.png" alt="" aria-hidden="true"/>
     <div>
      <div className="site-eyebrow"><span className="site-eyebrow-dot"/>CLOSED BETA · CS2 BROADCAST OVERLAY</div>
      <h1 className="site-h1">A broadcast team for the tournaments that <em>cannot hire one</em>.</h1>
@@ -170,6 +171,11 @@ export function LandingPage(){
       <span>The live scene, rendered by the overlay the broadcast output uses. Sample match data.</span>
      </div>
     </div>
+   </section>
+   <section className="site-armory" aria-hidden="true">
+    <img className="armory-m4" src="/assets/m4a1-s.png" alt=""/>
+    <img className="armory-ak" src="/assets/ak-47.png" alt=""/>
+    <img className="armory-de" src="/assets/oceanic-deag.png" alt=""/>
    </section>
    <section className="site-strip">
     <span><ShieldCheck size={15}/>No injection, no memory reading</span>
@@ -237,6 +243,8 @@ export function LandingPage(){
     <div className="site-faq">{FAQ.map(([question,answer])=><details key={question}><summary>{question}<ChevronRight size={15}/></summary><p>{answer}</p></details>)}</div>
    </section>
    <section className="site-final">
+    <img className="site-agent agent-t" src="/assets/cs2-t.png" alt="" aria-hidden="true"/>
+    <img className="site-agent agent-ct" src="/assets/cs2-ct.png" alt="" aria-hidden="true"/>
     <h2>Bring your next match to air</h2>
     <p>Apply for the closed beta, and we will send your invite link as soon as your account is approved.</p>
     <div className="site-cta center"><a className="button primary" href="/apply">Apply for the closed beta<ArrowRight size={14}/></a><a className="button" href="/login">I already have an account</a></div>
