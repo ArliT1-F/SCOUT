@@ -76,7 +76,11 @@ export function TournamentsCard(){
 }
 export function PublicStats(){
  const [stats,setStats]=useState<any>(null);
- useEffect(()=>{void (async()=>{const {res,body}=await api('/api/platform/stats');if(res.ok&&body.enabled)setStats(body)})()},[]);
+ useEffect(()=>{
+  let mounted=true;
+  const load=async()=>{try{const {res,body}=await api('/api/platform/stats');if(mounted&&res.ok)setStats(body.enabled?body:null)}catch{}};
+  void load();const timer=setInterval(()=>void load(),15000);return()=>{mounted=false;clearInterval(timer)};
+ },[]);
  if(!stats) return null;
  return <section className="site-card"><h3>Live on SCOUT so far</h3><div className="feed-counters">{[['Kills',stats.totals.kills],['Headshots',stats.totals.headshots],['Grenades exploded',stats.totals.grenades],['Rounds',stats.totals.rounds],['Matches',stats.totals.matches]].map(([l,v]:any)=><div className="feed-counter" key={l}><b>{v}</b><small>{String(l).toUpperCase()}</small></div>)}</div></section>;
 }

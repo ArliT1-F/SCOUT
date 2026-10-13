@@ -2,6 +2,7 @@ import {createServer,type IncomingMessage,type Server,type ServerResponse} from 
 import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync} from 'node:fs';
 import path from 'node:path';
+import {DEFAULT_PLATFORM_SETTINGS,isPlatformOwner,sanitizeSettings,type PlatformSettings} from './platform.js';
 import {
  ACCOUNT_COOKIE,ACCOUNT_TTL_MS,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
  DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_APPLICATIONS_PER_HOUR,MAX_LOGIN_FAILURES,MIN_PASSWORD,
@@ -39,6 +40,8 @@ export interface AccountServiceOptions {
  download?:Partial<DownloadView>;
  /** Closing applications keeps sign-in and the launcher working; only `/apply` is refused. */
  applicationsOpen?:boolean;
+ /** The account allowed to write /settings; service keys never substitute for its session. */
+ ownerEmail?:string;
  /** The sentence the dashboard shows about the beta (the local flow uses a review note too). */
  reviewNote?:string;
  /** The name the dashboard shows as the host behind the beta. */
@@ -84,6 +87,9 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
    origin TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, status TEXT NOT NULL,
    account_id TEXT, device_id TEXT, pending_token TEXT, claimed_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS platform_settings (
+   id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS events (
    at INTEGER NOT NULL, kind TEXT NOT NULL, account_id TEXT, detail TEXT NOT NULL DEFAULT ''
   );
@@ -98,8 +104,13 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   notes:options.download?.notes||process.env.SCOUT_DOWNLOAD_NOTES||'',
  };
  const apiKey=options.apiKey??process.env.SCOUT_BETA_API_KEY??'';
- const applicationsOpen=options.applicationsOpen??process.env.SCOUT_ACCOUNT_APPLICATIONS!=='closed';
- const reviewNote=options.reviewNote??process.env.SCOUT_ACCOUNT_REVIEW_NOTE??'';
+ const ownerEmail=options.ownerEmail??process.env.SCOUT_OWNER_EMAIL??'';
+ // Environment switches seed the desk once; existing deployments keep their behaviour on upgrade.
+ db.prepare('INSERT OR IGNORE INTO platform_settings (id,data) VALUES (1,?)').run(JSON.stringify({
+  ...DEFAULT_PLATFORM_SETTINGS,applicationsOpen:options.applicationsOpen??process.env.SCOUT_ACCOUNT_APPLICATIONS!=='closed',
+  reviewNote:options.reviewNote??process.env.SCOUT_ACCOUNT_REVIEW_NOTE??'',
+ }));
+ const settings=():PlatformSettings=>({...DEFAULT_PLATFORM_SETTINGS,...JSON.parse(String(db.prepare('SELECT data FROM platform_settings WHERE id = 1').get()!.data))});
  const serviceName=options.serviceName??options.host??process.env.SCOUT_ACCOUNT_NAME??'SCOUT account service';
  const secureCookies=options.secureCookies??'auto';
  const log=options.log??((line:string)=>console.log(`[accounts] ${line}`));
@@ -201,7 +212,20 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
    try{
     reap();
     if(method==='GET'&&route==='/healthz'){const accounts=(get('SELECT COUNT(*) AS n FROM accounts')!.n as number);return json(res,200,{ok:true,accounts,pending:Number(get('SELECT COUNT(*) AS n FROM accounts WHERE status = ?','pending')!.n),devices:Number(get('SELECT COUNT(*) AS n FROM devices WHERE revoked_at IS NULL')!.n)})}
+    if(route==='/settings'&&method==='GET'){checkServiceKey(req);return json(res,200,{settings:settings()})}
+    if(route==='/settings'&&method==='PUT'){
+     const origin=req.headers.origin;
+     if(origin&&new URL(origin).host!==req.headers.host)fail(403,'untrusted-origin','Cross-site settings requests are refused.');
+     const current=sessionAccount(cookieId(req));
+     if(!current)fail(401,'no-session','Sign in as the SCOUT owner to change platform settings.');
+     if(current!.account.status!=='approved'||!isPlatformOwner(String(current!.account.email),{SCOUT_OWNER_EMAIL:ownerEmail}))fail(403,'not-platform-owner','Only the SCOUT owner may change platform settings.');
+     const next=sanitizeSettings(await body(req),settings(),String(current!.account.email),now());
+     run('UPDATE platform_settings SET data = ? WHERE id = 1',JSON.stringify(next));
+     event('settings.updated',String(current!.account.id),`v${next.version}`);
+     return json(res,200,{settings:next});
+    }
     if(method==='GET'&&route==='/status'){
+     const {applicationsOpen,reviewNote}=settings();
      const current=sessionAccount(cookieId(req));
      const account=current?accountRow(String(current.account.id)):null;
      const answer:BetaStatusView={
@@ -216,7 +240,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
     // Applying is the one write a stranger may make. Rate limited per address; a duplicate address is
     // told to sign in rather than told what the address is.
     if(method==='POST'&&route==='/apply'){
-     if(!applicationsOpen) fail(403,'applications-closed','The closed beta is not taking new applications right now.');
+     if(!settings().applicationsOpen) fail(403,'applications-closed','The closed beta is not taking new applications right now.');
      const input=(await body(req)) as Partial<ApplicationInput>&{address?:string};
      const email=normalizeEmail(String(input.email||''));
      if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) fail(400,'bad-email','That does not look like an email address.');
@@ -383,6 +407,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
     // `revoked`, not an error: the launcher must be able to tell "not entitled" from "did not ask".
     if(method==='POST'&&route==='/license/check'){
      const input=await body(req);
+     if(input.resolveAccount)checkServiceKey(req); // internal identity extension, not a browser/licence field
      const deviceId=String(input.deviceId||'');
      const token=String(input.token||'');
      const device=deviceId?get('SELECT * FROM devices WHERE id = ?',deviceId):null;
@@ -393,7 +418,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      if(!token||hashToken(token)!==String(device.token_digest)) return json(res,200,refused);
      run('UPDATE devices SET last_seen_at = ? WHERE id = ?',now(),deviceId);
      if(!account||String(account.status)!=='approved') return json(res,200,refused);
-     return json(res,200,{status:'active',email:String(account.email),displayName:String(account.display_name)} as LicenceCheck);
+     return json(res,200,{status:'active',email:String(account.email),displayName:String(account.display_name),...(input.resolveAccount?{accountId:String(account.id)}:{})} as LicenceCheck);
     }
     fail(404,'not-found',`This account service has no ${method} ${route}. The contract is in docs/BETA.md.`);
    }catch(error:any){

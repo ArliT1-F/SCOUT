@@ -26,7 +26,8 @@ import {appPath} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
-import {PlatformStore,isPlatformOwner,platformOwnerEmail,METRIC_KINDS,type MetricKind} from './platform.js';
+import {PlatformStore,isPlatformOwner,platformOwnerEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash} from './platform.js';
+import {PlatformDeviceService,PlatformSyncAgent,SyncOutbox} from './platform-sync.js';
 import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
 const app=express();
 // Routes are matched case-sensitively, like the gate below: otherwise `/API/controls` reaches the handler while
@@ -71,7 +72,15 @@ const installation=new Installation(path.join(betaDir,'installation.json'));awai
 // Is this installation entitled to run? Local installs are their own authority; a hosted account
 // service is asked at most every 15 minutes and its answer is cached (server/licensing.ts). The
 // broadcast is never gated on it — see docs/BETA.md.
-const platform=await new PlatformStore(process.env.SCOUT_PLATFORM_FILE||'config/platform/store.json').load();
+const platformFile=process.env.SCOUT_PLATFORM_FILE||'config/platform/store.json';
+const platform=await new PlatformStore(platformFile).load();
+let platformSync:PlatformSyncAgent|undefined;
+async function refreshPlatformSettings(){
+ if(!beta.launcher.settings)return;
+ const result=await beta.launcher.settings();
+ if(result.ok)await platform.setSettings(result.value.settings);
+}
+const devicePlatform=new PlatformDeviceService(platform,beta.launcher,'public/uploads',refreshPlatformSettings);
 if(!platformOwnerEmail()) console.log('[platform] SCOUT_OWNER_EMAIL is not set — the /admin platform panel stays closed until it names the SCOUT owner account.');
 const licence=new LicenceMonitor({
  mode:beta.mode,
@@ -111,13 +120,14 @@ function watchInstallationLink(){
    const current=installation.view().pending;
    if(!current||current.deviceCode!==deviceCode){if(linkPoll)clearInterval(linkPoll);linkPoll=null;return}
    const poll=await beta.launcher.devicePoll({deviceCode});
-   if(!poll.ok) return;
+   if(!poll.ok||installation.view().pending?.deviceCode!==deviceCode)return;
    const state=poll.value.status;
    if(state==='pending') return;
    if(linkPoll)clearInterval(linkPoll);
    linkPoll=null;
    if(state==='approved'&&installation.completeLink(poll.value)){
     await installation.save();
+    void platformSync?.tick();
     console.log(`[beta] this installation is now linked to ${installation.view().email}`);
    }else{
     installation.touch();
@@ -179,6 +189,18 @@ const UPLOAD_KINDS:Record<string,{dir:string;exts:Record<string,string>}>={
  overlay:{dir:'overlays',exts:IMAGE_EXTS},
 };
 for(const dir of UPLOAD_DIRS) await mkdir(path.join(UPLOAD_ROOT,dir),{recursive:true});
+// Panel saves, imports, activations and remote applies share one atomic commit lane. The remote
+// apply rechecks the live hash inside it so a save during slow artwork restoration is never lost.
+let matchWrites:Promise<unknown>=Promise.resolve();
+function matchWrite<T>(fn:()=>Promise<T>){const write=matchWrites.then(fn);matchWrites=write.catch(()=>{});return write}
+async function writeMatchConfig(next:ScoutConfig){
+ await writeFile('config/teams.json.tmp',JSON.stringify(next,null,2));
+ await rename('config/teams.json.tmp','config/teams.json');config=next;
+}
+async function saveTournamentConfig(next:ScoutConfig){
+ await platform.saveActiveConfig(next);
+ await platformSync?.saveBack(next);
+}
 // ---- The gate in front of every mutation. It is deliberately path/method based rather than a list of
 // routes: a route added later is protected by construction, whichever operator feature it belongs to.
 // POST /gsi is CS2's own feed and authenticates with the GSI token inside its body, and POST/DELETE
@@ -336,6 +358,8 @@ app.get('/healthz',(_req,res)=>{
 });
 // Event packs include locally uploaded, validated artwork; only this route gets a larger parser.
 app.use('/api/pack/import',express.json({limit:'70mb'}));
+// Config-push outbox events embed the same bounded event pack, never arbitrary upload URLs.
+app.use('/api/platform/device/metrics',express.json({limit:'70mb'}));
 app.use(express.json({limit:'1mb'}));
 // The WebSocket carries the same snapshot the public overlay renders, so it stays readable — but a
 // handshake from another site is refused: no legitimate cross-site client exists, and a rebound
@@ -359,6 +383,27 @@ function broadcast(){const data=JSON.stringify(snapshot()); for(const client of 
 // whether it is local, remote, authenticated and when its session expires without a second request.
 wss.on('connection',(ws,req)=>ws.send(JSON.stringify(snapshot(req?panel.view({address:req.socket.remoteAddress,host:req.headers.host,cookie:req.headers.cookie,headers:req.headers}):undefined))));
 setInterval(broadcast,1000).unref();
+// Opt-in only: a normal local host never creates an outbox, sync state or polling timer.
+if(process.env.SCOUT_PLATFORM_URL){
+ try{
+  const directory=path.dirname(platformFile);
+  const outbox=await new SyncOutbox(path.join(directory,'outbox.json')).load();
+  platformSync=await new PlatformSyncAgent({url:process.env.SCOUT_PLATFORM_URL,installation,platform,outbox,file:path.join(directory,'sync.json'),uploadRoot:UPLOAD_ROOT,readConfig:()=>config,changed:broadcast,
+   writeConfig:(next,tournament,expectedHash,deviceId)=>matchWrite(async()=>{
+    if(installation.credentials().deviceId!==deviceId||configHash(config)!==expectedHash)return false;
+    if(configHash(next)!==expectedHash)await writeMatchConfig(next);
+    await platform.adopt(tournament,deviceId,installation.view().email||'',next);return true;
+   }),
+  }).load();
+ }catch(error:any){console.warn('[platform-sync] sync disabled; local broadcast is unaffected:',error.message)}
+}
+for(const route of ['sync','metrics'] as const){
+ app.post('/api/platform/device/'+route,async(req,res)=>{
+  if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return}
+  try{sendBetaResult(res,await devicePlatform[route](req.body))}
+  catch{res.status(503).json({error:'Platform sync could not be completed. Retry this batch.',code:'sync-unavailable'})}
+ });
+}
 // ---- Hosted multi-tenancy (server/platform.ts): approved (whitelisted) accounts own independent
 // tournaments; only the SCOUT owner (SCOUT_OWNER_EMAIL) administers the platform at /admin.
 async function currentAccount(req:express.Request){
@@ -386,15 +431,18 @@ function checkedConfig(raw:unknown,res:express.Response){
  return normalizeConfig(parsed.data);
 }
 app.get('/api/platform/status',async(req,res)=>{
+ await refreshPlatformSettings();
  const account:any=await currentAccount(req).catch(()=>null);
  res.json({ownerConfigured:Boolean(platformOwnerEmail()),isOwner:isPlatformOwner(account?.email),account:account?{id:account.id,email:account.email,status:account.status}:null,settings:platform.settings,activeTournamentId:platform.data.activeTournamentId,tournaments:account?platform.listFor(account.id):[],publicStats:platform.settings.publicStatsEnabled?platform.adminSummary([]).totals:null});
 });
-app.get('/api/platform/stats',(_req,res)=>{ // public aggregates for /welcome (owner enables them in /admin)
+app.get('/api/platform/stats',async(_req,res)=>{
+ await refreshPlatformSettings(); // public aggregates for /welcome (owner enables them in /admin)
  if(!platform.settings.publicStatsEnabled){res.json({enabled:false,totals:null});return}
  res.json({enabled:true,totals:platform.adminSummary([]).totals,tournaments:platform.data.tournaments.length});
 });
-app.get('/api/platform/tournaments',async(req,res)=>{const a=await requireAccount(req,res);if(a)res.json({tournaments:platform.listFor(a.id),limit:platform.settings.maxTournamentsPerUser,activeTournamentId:platform.data.activeTournamentId})});
+app.get('/api/platform/tournaments',async(req,res)=>{await refreshPlatformSettings();const a=await requireAccount(req,res);if(a)res.json({tournaments:platform.listFor(a.id),limit:platform.settings.maxTournamentsPerUser,activeTournamentId:platform.data.activeTournamentId})});
 app.post('/api/platform/tournaments',async(req,res)=>{
+ await refreshPlatformSettings();
  const a=await requireAccount(req,res); if(!a) return;
  const parsed=tournamentInput.safeParse(req.body||{}); if(!parsed.success){res.status(400).json({error:'Give the tournament a name.',code:'invalid-tournament'});return}
  const cfg=checkedConfig(parsed.data.config,res); if(cfg===null) return;
@@ -410,12 +458,12 @@ app.delete('/api/platform/tournaments/:id',async(req,res)=>{const a=await requir
 app.get('/api/platform/tournaments/:id',async(req,res)=>{const a=await requireAccount(req,res);if(!a)return;const t=platform.ownedBy(String(req.params.id),a.id);if(!t){res.status(404).json({error:'That tournament is not yours (or does not exist).',code:'not-found'});return}res.json({tournament:t})});
 app.post('/api/platform/tournaments/:id/activate',async(req,res)=>{
  const a=await requireAccount(req,res); if(!a) return;
- const r=await platform.activate(String(req.params.id),a.id); if(!r.ok){sendPlatform(res,r);return}
- // Activating loads this user's own workspace into the live output: their teams/bracket/maps
- // replace the shared config atomically and every connected output re-renders.
- if(r.value.config){config=normalizeConfig(r.value.config);await writeFile('config/teams.json.tmp',JSON.stringify(config,null,2));await rename('config/teams.json.tmp','config/teams.json')}
- audit.record({id:a.id,name:a.email,role:'owner'},'platform.tournament.activate',r.value.name); broadcast();
- res.json({tournament:{...r.value,config:undefined,hasConfig:r.value.config!==null},activeTournamentId:platform.data.activeTournamentId});
+ await matchWrite(async()=>{
+  const r=await platform.activate(String(req.params.id),a.id);if(!r.ok){sendPlatform(res,r);return}
+  if(r.value.config)await writeMatchConfig(normalizeConfig(r.value.config));
+  audit.record({id:a.id,name:a.email,role:'owner'},'platform.tournament.activate',r.value.name);broadcast();
+  res.json({tournament:{...r.value,config:undefined,hasConfig:r.value.config!==null},activeTournamentId:platform.data.activeTournamentId});
+ });
 });
 app.post('/api/platform/tournaments/:id/metrics',async(req,res)=>{
  const a=await requireAccount(req,res); if(!a) return;
@@ -428,12 +476,18 @@ app.post('/api/platform/tournaments/:id/metrics',async(req,res)=>{
 // them with per-user tournaments, match logs and the real-time settings.
 app.get('/api/platform/admin',async(req,res)=>{
  const a=await requirePlatformOwner(req,res); if(!a) return;
+ await refreshPlatformSettings();
  const accounts=await beta.launcher.applications().catch(()=>[]);
  res.json(platform.adminSummary(accounts.map(x=>({id:x.id,email:x.email,status:x.status}))));
 });
 app.put('/api/platform/admin/settings',async(req,res)=>{
  const a=await requirePlatformOwner(req,res); if(!a) return;
- const settings=await platform.updateSettings(req.body||{},a.email);
+ let settings;
+ if(beta.launcher.updateSettings){
+  const result=await beta.launcher.updateSettings(req.body||{},req.get('cookie')||'');
+  if(!result.ok){sendBetaResult(res,result);return}
+  settings=result.value.settings;await platform.setSettings(settings);
+ }else settings=await platform.updateSettings(req.body||{},a.email);
  audit.record({id:a.id,name:a.email,role:'owner'},'platform.settings.update',`v${settings.version} · maxTournaments=${settings.maxTournamentsPerUser}`);
  broadcast(); // open panels receive the new settings in their next snapshot (<=1s heartbeat too)
  res.json({settings});
@@ -492,8 +546,7 @@ app.post('/api/beta/link/unlink',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  if(!ownerOnly(res))return;
  const view=installation.view();
- installation.unlink();
- await installation.save();
+ await matchWrite(async()=>{installation.unlink();await installation.save()});
  if(linkPoll){clearInterval(linkPoll);linkPoll=null}
  audit.record(accessPrincipal(res),'beta.installation.unlink',view.email||view.installationId);
  res.json({link:installation.view()});
@@ -503,7 +556,15 @@ app.post('/api/beta/link/unlink',async(req,res)=>{
 app.get('/api/beta/link',(req,res)=>{
  const decision=panel.authorize(panelRequest(req));
  if(!decision.ok){res.status(decision.status).json({error:decision.message,code:decision.code});return}
- res.json({mode:beta.mode,link:installation.view()});
+ res.json({mode:beta.mode,link:installation.view(),...(platformSync?{sync:platformSync.view()}:{})});
+});
+app.post('/api/beta/link/apply',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'match-edit'))return;
+ if(!platformSync){res.status(409).json({error:'Launcher sync is not configured.',code:'sync-disabled'});return}
+ const sync=await platformSync.applyUpdate();
+ if(sync.state!=='synced'){res.status(409).json({error:sync.message,code:sync.state,sync});return}
+ audit.record(accessPrincipal(res),'platform.config.apply',sync.tournament?.name||'');res.json({sync});
 });
 // The owner's side of the applications. Approving mints the one-time invite link, which is printed
 // here exactly like the panel token is: this host may have no mail server, so the console (and the
@@ -584,6 +645,7 @@ if(beta.site){
  };
  app.get('/api/beta/status',async(req,res)=>{
   const view=await site.status(accountCookieId(req));
+  view.applicationsOpen=platform.settings.applicationsOpen;view.reviewNote=platform.settings.reviewNote;
   const latest=releases.latest();
   // A published release wins over the configured default: it is the file this host actually holds.
   if(view.download&&latest) view.download={url:latest.url,version:`SCOUT-Setup-${latest.version}.exe`,notes:latest.notes||`Published ${new Date(latest.publishedAt).toLocaleString()}`};
@@ -591,6 +653,7 @@ if(beta.site){
  });
  app.post('/api/beta/apply',async(req,res)=>{
   if(!sameOrigin(req)){res.sendStatus(403);return}
+  if(!platform.settings.applicationsOpen){res.status(403).json({error:'The closed beta is not taking new applications right now.',code:'applications-closed'});return}
   const parsed=applicationSchema.safeParse(req.body);
   if(!parsed.success){res.status(400).json({error:'Tell us your name and an email address we can reach you at.',code:'invalid-application'});return}
   const result=await site.apply(parsed.data,betaContext(req));
@@ -665,34 +728,34 @@ if(beta.site){
  });
  console.log(`[beta] Closed beta accounts are stored in ${betaDir}/store.json (local mode). Approve an application in the panel, or set SCOUT_BETA_API_URL to use a hosted account service.`);
 }else{
- // Hosted accounts: the browser's requests go upstream unchanged — same path, same cookie, same
- // body — so the landing page, the panel and the launcher all see one account service. Nothing is
- // cached or rewritten on the way; an unreachable service is reported as exactly that.
+ // Hosted accounts: the browser keeps the same account routes, cookies and bodies. The host
+ // owns only settings/download presentation; service-only routes are never exposed by this proxy.
  const upstream=(process.env.SCOUT_BETA_API_URL||'').replace(/\/$/,'');
  app.use('/api/beta',async(req,res)=>{
   if(!sameOrigin(req)){res.sendStatus(403);return}
+  const route=req.originalUrl.replace(/^\/api\/beta/,'').split('?')[0];
+  // Never proxy service-only identity/settings routes with the host's service key for a browser.
+  if(!new Set(['/status','/apply','/login','/logout','/activate','/device/start','/device/poll','/device/approve','/device/deny','/devices/revoke']).has(route)){res.status(404).json({error:'Unknown account route.',code:'not-found'});return}
   try{
+   if(route==='/status'||route==='/apply')await refreshPlatformSettings();
+   if(route==='/apply'&&!platform.settings.applicationsOpen){res.status(403).json({error:'The closed beta is not taking new applications right now.',code:'applications-closed'});return}
    const response=await fetch(upstream+req.originalUrl.replace(/^\/api\/beta/,''),{
-    method:req.method,
+    method:req.method,signal:AbortSignal.timeout(30_000),
     headers:{'Content-Type':'application/json',...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),...(process.env.SCOUT_BETA_API_KEY?{Authorization:`Bearer ${process.env.SCOUT_BETA_API_KEY}`}:{})},
     body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
    });
    let text=await response.text();
    const cookies=typeof response.headers.getSetCookie==='function'?response.headers.getSetCookie():[];
    if(cookies.length) res.setHeader('Set-Cookie',cookies);
-   // One exception to "upstream answers verbatim": when the operator has published a release here
-   // (Operations tab), the download the dashboard offers is that file rather than the service's
-   // default. Everything else — mode, sign-in, applications, the launcher flow — stays upstream's.
-   const route=req.originalUrl.replace(/^\/api\/beta/,'').split('?')[0];
+   // The authoritative desk drives applications-open/review-note, and a published release
+   // overrides the service's default download. Account and launcher answers otherwise stay upstream's.
    if(req.method==='GET'&&route==='/status'&&response.ok){
     const latest=releases.latest();
-    if(latest){
-     try{
-      const view=JSON.parse(text);
-      if(view.download) view.download={url:latest.url,version:`SCOUT-Setup-${latest.version}.exe`,notes:latest.notes||`Published ${new Date(latest.publishedAt).toLocaleString()}`};
-      text=JSON.stringify(view);
-     }catch{}
-    }
+    try{
+     const view=JSON.parse(text);view.applicationsOpen=platform.settings.applicationsOpen;view.reviewNote=platform.settings.reviewNote;
+     if(view.download&&latest)view.download={url:latest.url,version:`SCOUT-Setup-${latest.version}.exe`,notes:latest.notes||`Published ${new Date(latest.publishedAt).toLocaleString()}`};
+     text=JSON.stringify(view);
+    }catch{}
    }
    res.status(response.status).type(response.headers.get('content-type')||'application/json').send(text);
   }catch(error:any){
@@ -773,9 +836,14 @@ app.post('/gsi',(req,res)=>{
  // at most once per 10 s instead of once per packet.
  if(ingested){const derived=events.observe(store.state,Date.now(),ingested.reset);
   const activeTournament=platform.active();
-  if(activeTournament){void platform.record(activeTournament.id,[...derived.kills.flatMap((kill:any)=>kill.headshot?[{kind:'kill' as const,map:kill.map,detail:`${kill.killerName||'unknown'} > ${kill.victimName}`},{kind:'headshot' as const,map:kill.map}]:[{kind:'kill' as const,map:kill.map,detail:`${kill.killerName||'unknown'} > ${kill.victimName}`}]),...(derived.ended?[{kind:'round' as const,map:derived.ended.map,detail:`${derived.ended.winner||'—'} ${derived.ended.ctScore}:${derived.ended.tScore}`}]:[])]).catch(()=>{})}
+  const metrics:MetricEvent[]=[...derived.kills.flatMap(kill=>kill.headshot?[{kind:'kill' as const,map:kill.map,detail:`${kill.killerName||'unknown'} > ${kill.victimName}`},{kind:'headshot' as const,map:kill.map}]:[{kind:'kill' as const,map:kill.map,detail:`${kill.killerName||'unknown'} > ${kill.victimName}`}]),...(derived.ended?[{kind:'round' as const,map:derived.ended.map,detail:`${derived.ended.winner||'—'} ${derived.ended.ctScore}:${derived.ended.tScore}`}]:[])];
   const grenadeIds=new Set(Object.keys(store.state.grenades||{}));
-  if(activeTournament&&prevGrenadeIds.size){const gone=[...prevGrenadeIds].filter(id=>!grenadeIds.has(id));if(gone.length) void platform.record(activeTournament.id,gone.map(()=>({kind:'grenade' as const,map:store.state.map?.name}))).catch(()=>{})}
+  if(prevGrenadeIds.size){const gone=[...prevGrenadeIds].filter(id=>!grenadeIds.has(id));metrics.push(...gone.map(()=>({kind:'grenade' as const,map:store.state.map?.name})))}
+  if(activeTournament&&metrics.length)void (async()=>{
+   let localEvents=metrics;
+   try{if(platformSync)localEvents=await platformSync.appendMetrics(activeTournament.id,metrics)}catch(error:any){console.warn('[platform-sync] could not append metrics to the outbox:',error.message)}
+   await platform.record(activeTournament.id,localEvents);
+  })().catch(error=>console.warn('[platform] could not record metrics:',error.message));
   prevGrenadeIds=grenadeIds;
   for(const kill of derived.kills){archives.addKill(kill);console.log(`[events] round ${kill.round+1}: ${kill.killerName||'unknown'} killed ${kill.victimName}${kill.headshot?' (headshot)':''}`)}
   if(derived.ended){archives.addRound(derived.ended);console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`)}
@@ -793,12 +861,15 @@ app.post('/api/pack/import',async(req,res)=>{
  if(!permit(res,'design'))return;
  const checked=eventPackSchema.safeParse(req.body);if(!checked.success){res.status(400).json({error:'Invalid event pack: '+checked.error.issues.slice(0,6).map(issue=>`${issue.path.join('.')||'pack'} ${issue.message}`).join('; ')});return}
  try{
-  const restored=await restoreEventPack(checked.data,UPLOAD_ROOT);
-  const files:[string,unknown][]=[['config/teams.json',restored.config],['config/radars.json',restored.radars],['config/layout.json',restored.layout],['config/overlay.json',restored.overlay]];
-  for(const [file,value] of files)await writeFile(file+'.tmp',JSON.stringify(value,null,2));
-  for(const [file] of files)await rename(file+'.tmp',file);
-  config=restored.config;radars=restored.radars;layout=restored.layout;overlay=restored.overlay;
-  await pruneUploads(config,radars,overlay);audit.record(accessPrincipal(res),'event-pack.import',`${config.event.name||'event'} · ${restored.assets} assets`);broadcast();res.json({ok:true,assets:restored.assets,assetBytes:restored.assetBytes,config,radars,layout,overlay});
+  await matchWrite(async()=>{
+   const restored=await restoreEventPack(checked.data,UPLOAD_ROOT);
+   const files:[string,unknown][]=[['config/teams.json',restored.config],['config/radars.json',restored.radars],['config/layout.json',restored.layout],['config/overlay.json',restored.overlay]];
+   for(const [file,value] of files)await writeFile(file+'.tmp',JSON.stringify(value,null,2));
+   for(const [file] of files)await rename(file+'.tmp',file);
+   config=restored.config;radars=restored.radars;layout=restored.layout;overlay=restored.overlay;
+   await saveTournamentConfig(config);
+   await pruneUploads(config,radars,overlay);audit.record(accessPrincipal(res),'event-pack.import',`${config.event.name||'event'} · ${restored.assets} assets`);broadcast();res.json({ok:true,assets:restored.assets,assetBytes:restored.assetBytes,config,radars,layout,overlay});
+  });
  }catch(error:any){res.status(400).json({error:error.message||'Could not import event pack'})}
 });
 app.get('/api/recordings',async(req,res)=>{if(!signedInRead(req,res))return;res.json({files:await recorder.list(),status:recorder.status})});
@@ -850,9 +921,7 @@ app.put('/api/config',async(req,res)=>{
  if(!parsed.success){res.status(400).json({error:'Invalid configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'config'} ${issue.message}`).slice(0,6).join('; ')});return}
  const next=normalizeConfig(parsed.data);
  try {
-  await writeFile('config/teams.json.tmp',JSON.stringify(next,null,2));
-  await rename('config/teams.json.tmp','config/teams.json');
-  config=next;
+  await matchWrite(async()=>{await writeMatchConfig(next);await saveTournamentConfig(next)});
   await pruneUploads(next,radars);
   audit.record(accessPrincipal(res),'match.config.update',`${config.teams.map(team=>team.name).join(' vs ')} · ${config.maps.length} maps`);
   broadcast();res.json(config);
@@ -864,6 +933,8 @@ app.put('/api/config',async(req,res)=>{
 // their Save click. Drop-in files under public/radars/ are operator-managed and never pruned.
 async function pruneUploads(current:ScoutConfig,radarsConfig:any,overlayConfig:OverlayConfig=overlay){
  const referenced=referencedUploads(current,radarsConfig,overlayConfig);
+ // Saved inactive workspaces must keep their artwork for future launcher packs too.
+ for(const t of platform.data.tournaments)if(t.config)for(const reference of referencedUploads(normalizeConfig(t.config)))referenced.add(reference);
  for(const kind of UPLOAD_DIRS){
   const dir=path.join(UPLOAD_ROOT,kind);
   let files:string[]=[];try{files=await readdir(dir)}catch{continue}
@@ -959,4 +1030,5 @@ app.use((err:any,_req:any,res:any,_next:any)=>{res.status(err.status||500).json(
 // processes; the value is only ever used after checking it is really a node.exe. A checkout never
 // sets the variable, so nothing is written next to the sources.
 if(process.env.SCOUT_PID_FILE) await writeFile(process.env.SCOUT_PID_FILE,String(process.pid)).catch(()=>{});
+platformSync?.start();
 server.listen(port,'0.0.0.0',()=>console.log('SCOUT host ready on port '+port+'\n[gsi] expecting CS2 pushes at '+feed.uri+' · token source: '+tokenSource+(tokenSource==='default'?' (built-in CHANGE_ME — set GSI_TOKEN before using a changed cfg token)':'')));

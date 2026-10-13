@@ -1,6 +1,7 @@
 import {createHash,randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
+import type {PlatformSettings} from './platform.js';
 // The closed beta: who may download the launcher, and which installation belongs to whom.
 //
 // SCOUT is a local-first program — the host runs on the observer's machine and the overlay is a
@@ -83,14 +84,16 @@ export interface SiteBetaService {
  signOut(cookieId:string|undefined):Promise<void>;
  activate(input:{invite:string;password:string},context:BetaContext):Promise<BetaResult<{cookieId:string;account:AccountView}>>;
 }
-export interface LicenceCheck {status:'active'|'revoked'|'unknown';email?:string;displayName?:string}
+export interface LicenceCheck {status:'active'|'revoked'|'unknown';email?:string;displayName?:string;accountId?:string} // accountId is service-only, never a licence/browser view
 export interface LauncherBetaService {
  deviceStart(input:{label:string;platform:string},context:BetaContext):Promise<BetaResult<DeviceGrantView>>;
  devicePoll(input:{deviceCode:string}):Promise<BetaResult<DevicePollView>>;
  // What a running installation asks about itself: is this launcher still linked to an approved
  // account? In local mode the answer is the device list next door; in hosted mode it is the
  // account service's own record, which is the only place a revocation can be known.
- installationStatus(input:{deviceId:string;installationId:string;token:string}):Promise<BetaResult<LicenceCheck>>;
+ installationStatus(input:{deviceId:string;installationId:string;token:string},options?:{includeAccountId?:boolean}):Promise<BetaResult<LicenceCheck>>;
+ settings?():Promise<BetaResult<{settings:PlatformSettings}>>;
+ updateSettings?(input:Partial<PlatformSettings>,cookie:string):Promise<BetaResult<{settings:PlatformSettings}>>;
  // The panel's own two operations, so a hosted deployment can still review applications from the
  // observer machine: in local mode they are the store, in hosted mode they carry the service key.
  applications():Promise<AccountView[]>;
@@ -141,6 +144,7 @@ export function accountView(account:BetaAccount):AccountView {
 export class LocalBetaService implements BetaService {
  readonly mode:BetaMode='local';
  private store:BetaStore={version:1,accounts:[],sessions:[],grants:[]};
+ private writes:Promise<void>=Promise.resolve();
  private readonly dir:string;
  private readonly download:DownloadView;
  private readonly autoApprove:boolean;
@@ -165,9 +169,13 @@ export class LocalBetaService implements BetaService {
   return this;
  }
  async save(){
-  await mkdir(this.dir,{recursive:true});
-  await writeFile(this.storeFile+'.tmp',JSON.stringify(this.store,null,2),{mode:0o600});
-  await rename(this.storeFile+'.tmp',this.storeFile);
+  const snapshot=JSON.stringify(this.store,null,2);
+  const write=this.writes.then(async()=>{
+   await mkdir(this.dir,{recursive:true});
+   await writeFile(this.storeFile+'.tmp',snapshot,{mode:0o600});
+   await rename(this.storeFile+'.tmp',this.storeFile);
+  });
+  this.writes=write.catch(()=>{});await write;
  }
  private reap(){
   const now=this.now();
@@ -320,7 +328,7 @@ export class LocalBetaService implements BetaService {
   }
   return {ok:true,value:{status:'approved',deviceId:grant.deviceId||undefined,account:view}};
  }
- async installationStatus(input:{deviceId:string;installationId:string;token:string}):Promise<BetaResult<LicenceCheck>>{
+ async installationStatus(input:{deviceId:string;installationId:string;token:string},options?:{includeAccountId?:boolean}):Promise<BetaResult<LicenceCheck>>{
   this.reap();
   for(const account of this.store.accounts){
    const device=account.devices.find(entry=>entry.id===input.deviceId);
@@ -332,7 +340,7 @@ export class LocalBetaService implements BetaService {
    device.lastSeenAt=this.now();
    await this.save();
    if(account.status!=='approved') return {ok:true,value:{status:'revoked',email:account.email,displayName:account.displayName}};
-   return {ok:true,value:{status:'active',email:account.email,displayName:account.displayName}};
+   return {ok:true,value:{status:'active',email:account.email,displayName:account.displayName,...(options?.includeAccountId?{accountId:account.id}:{})}};
   }
   return {ok:true,value:{status:'unknown'}};
  }
@@ -374,7 +382,7 @@ export class HostedBetaService implements LauncherBetaService {
  private async call<T>(route:string,method:string,body?:unknown,headers?:Record<string,string>):Promise<BetaResult<T>>{
   try{
    const res=await this.fetchImpl(this.baseUrl.replace(/\/$/,'')+route,{
-    method,
+    method,signal:AbortSignal.timeout(30_000),
     headers:{'Content-Type':'application/json',...(this.apiKey?{Authorization:`Bearer ${this.apiKey}`}:{}),...headers},
     body:body===undefined?undefined:JSON.stringify(body),
    });
@@ -391,7 +399,9 @@ export class HostedBetaService implements LauncherBetaService {
  // only be a copy that drifts. What the host itself needs is the launcher half below.
  async decide(id:string,decision:'approve'|'reject',decidedBy:string){return this.call<{account:AccountView;invite:string|null}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy})}
  async applications(){const result=await this.call<{applications:AccountView[]}>('/applications','GET');return result.ok?result.value.applications:[]}
- async installationStatus(input:{deviceId:string;installationId:string;token:string}){return this.call<LicenceCheck>('/license/check','POST',input)}
+ async installationStatus(input:{deviceId:string;installationId:string;token:string},options?:{includeAccountId?:boolean}){return this.call<LicenceCheck>('/license/check','POST',{deviceId:input.deviceId,installationId:input.installationId,token:input.token,...(options?.includeAccountId?{resolveAccount:true}:{})})}
+ async settings(){return this.call<{settings:PlatformSettings}>('/settings','GET')}
+ async updateSettings(input:Partial<PlatformSettings>,cookie:string){return this.call<{settings:PlatformSettings}>('/settings','PUT',input,{Cookie:cookie})}
  async deviceStart(input:{label:string;platform:string},context:BetaContext){return this.call<DeviceGrantView>('/device/start','POST',{...input,origin:context.origin})}
  async devicePoll(input:{deviceCode:string}){return this.call<DevicePollView>('/device/poll','POST',input)}
 }
@@ -415,6 +425,7 @@ export interface InstallationView {
  lastCheckedAt:number|null;pending:{userCode:string;deviceCode:string;expiresAt:number}|null;installationId:string;
 }
 export class Installation {
+ private writes:Promise<void>=Promise.resolve();
  private state:{version:1;installationId:string;account:{email:string;displayName:string}|null;deviceId:string|null;installationToken:string|null;linkedAt:number|null;lastCheckedAt:number|null;pending:{userCode:string;deviceCode:string;expiresAt:number}|null};
  constructor(private readonly file:string,private readonly now:()=>number=Date.now){
   this.state={version:1,installationId:newToken(12),account:null,deviceId:null,installationToken:null,linkedAt:null,lastCheckedAt:null,pending:null};
@@ -428,9 +439,13 @@ export class Installation {
   return this;
  }
  async save(){
-  await mkdir(path.dirname(this.file),{recursive:true});
-  await writeFile(this.file+'.tmp',JSON.stringify(this.state,null,2),{mode:0o600});
-  await rename(this.file+'.tmp',this.file);
+  const snapshot=JSON.stringify(this.state,null,2);
+  const write=this.writes.then(async()=>{
+   await mkdir(path.dirname(this.file),{recursive:true});
+   await writeFile(this.file+'.tmp',snapshot,{mode:0o600});
+   await rename(this.file+'.tmp',this.file);
+  });
+  this.writes=write.catch(()=>{});await write;
  }
  // The host's own copy of what it presents to the account service. Never part of `view()`: the
  // panel only ever needs to know *that* this installation is linked, not what it holds.
