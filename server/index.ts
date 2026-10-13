@@ -27,7 +27,11 @@ import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
 import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
-const app=express(), server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
+const app=express();
+// Routes are matched case-sensitively, like the gate below: otherwise `/API/controls` reaches the handler while
+// the gate, which looks for `/api/`, never sees it (found by the route audit, docs/API-AUDIT.md).
+app.set('case sensitive routing',true);
+const server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // ---- Operator access from another machine (server/auth.ts). Reads stay open on purpose: the OBS
 // browser source of a second machine has to load /obs and its WebSocket feed with no credentials, and
@@ -181,20 +185,29 @@ const PUBLIC_BETA_PATHS=new Set([
  '/api/beta/devices/revoke',
 ]);
 function isProtected(req:express.Request){
- if(!req.path.startsWith('/api/')) return false;
+ const routePath=req.path.toLowerCase();
+ if(!routePath.startsWith('/api/')) return false;
  if(req.method==='GET'||req.method==='HEAD'||req.method==='OPTIONS') return false;
- if(req.path==='/api/session') return false;
+ if(routePath==='/api/session') return false;
  // The closed beta's public doors (server/beta.ts). An applicant has no panel authority by
  // definition, and an account session is its own credential — on a hosted deployment there is no
  // panel session at all. These routes carry their own same-origin check and their own throttles.
  // Everything else under /api/beta (the owner's application list, the launcher link) stays behind
  // the panel gate like every other mutation.
- return !PUBLIC_BETA_PATHS.has(req.path);
+ return !PUBLIC_BETA_PATHS.has(routePath);
 }
 // Same-origin as well as token: a browser page on another site must not be able to drive the panel,
 // and a name the operator listed (a proxy that rewrites Host) is treated as the operator's own.
 function sameOrigin(req:express.Request){return originTrusted(req.get('origin'),req.get('host'),panel.allowedHosts)}
 function panelRequest(req:express.Request){return {address:req.socket.remoteAddress,host:req.get('host'),cookie:req.get('cookie'),headers:req.headers}}
+// Operator data that is not a capability of its own (recordings, match archives, OBS settings): any signed-in
+// panel role may read it, a request from another site or without a session may not.
+function signedInRead(req:express.Request,res:express.Response){
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site operator requests are refused.',code:'untrusted-origin'});return false}
+ const decision=panel.authorize(panelRequest(req));
+ if(!decision.ok){res.status(decision.status).json({error:decision.message,code:decision.code});return false}
+ res.locals.access=decision;return true;
+}
 function privateRead(req:express.Request,res:express.Response,capability:PanelCapability){
  if(!sameOrigin(req)){res.status(403).json({error:'Cross-site operator requests are refused.',code:'untrusted-origin'});return false}
  const decision=panel.authorize(panelRequest(req));
@@ -697,8 +710,9 @@ app.post('/api/pack/import',async(req,res)=>{
   await pruneUploads(config,radars,overlay);audit.record(accessPrincipal(res),'event-pack.import',`${config.event.name||'event'} · ${restored.assets} assets`);broadcast();res.json({ok:true,assets:restored.assets,assetBytes:restored.assetBytes,config,radars,layout,overlay});
  }catch(error:any){res.status(400).json({error:error.message||'Could not import event pack'})}
 });
-app.get('/api/recordings',async(_req,res)=>res.json({files:await recorder.list(),status:recorder.status}));
+app.get('/api/recordings',async(req,res)=>{if(!signedInRead(req,res))return;res.json({files:await recorder.list(),status:recorder.status})});
 app.get('/api/recordings/:name',async(req,res)=>{
+ if(!signedInRead(req,res))return;
  try{const body=await recorder.read(String(req.params.name));res.type('text/plain').send(body)}catch(error:any){res.status(error.code==='ENOENT'?404:400).json({error:error.message||'Could not read recording'})}
 });
 app.post('/api/recordings',async(req,res)=>{
@@ -707,8 +721,8 @@ app.post('/api/recordings',async(req,res)=>{
  const parsed=z.object({enabled:z.boolean()}).safeParse(req.body);if(!parsed.success){res.status(400).json({error:'Choose whether GSI recording is enabled.'});return}
  try{const status=await recorder.setEnabled(parsed.data.enabled);audit.record(accessPrincipal(res),status.enabled?'recording.start':'recording.stop',status.file||'');broadcast();res.json({status,files:await recorder.list()})}catch(error:any){res.status(500).json({error:error.message||'Could not change recording state'})}
 });
-app.get('/api/archive',(_req,res)=>res.json({archives:archives.list(),active:archives.active?.id||null}));
-app.get('/api/archive/:id',(req,res)=>{const item=archives.detail(String(req.params.id));if(!item){res.status(404).json({error:'Match archive not found'});return}res.json(item)});
+app.get('/api/archive',(req,res)=>{if(!signedInRead(req,res))return;res.json({archives:archives.list(),active:archives.active?.id||null})});
+app.get('/api/archive/:id',(req,res)=>{if(!signedInRead(req,res))return;const item=archives.detail(String(req.params.id));if(!item){res.status(404).json({error:'Match archive not found'});return}res.json(item)});
 app.post('/api/archive/start',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  if(!permit(res,'control')||!requireControl(req,res))return;
@@ -822,7 +836,7 @@ app.put('/api/overlay',async(req,res)=>{
 // OBS integration API. Every mutation is same-origin only, like the rest of the operator API, and none of it can
 // return or store the OBS password.
 const obsView=()=>({config:obsConfig,status:obs.status()});
-app.get('/api/obs',(_req,res)=>res.json(obsView()));
+app.get('/api/obs',(req,res)=>{if(!signedInRead(req,res))return;res.json(obsView())});
 app.put('/api/obs',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  if(!ownerOnly(res))return;

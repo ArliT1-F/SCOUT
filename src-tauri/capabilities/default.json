@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The overlay and operator windows grant nothing to the Tauri API. Both load the SCOUT host's pages over http (src-tauri/src/main.rs), so no page they show may call into the native side. The shell's own logic runs in Rust and needs no permission from a page.",
+  "windows": ["overlay", "panel"],
+  "permissions": []
+}

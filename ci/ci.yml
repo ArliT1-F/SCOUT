@@ -8,6 +8,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: these jobs read the repository and nothing else.
+permissions:
+  contents: read
+
 jobs:
   host-and-panel:
     name: Host, panel and tests
@@ -34,3 +38,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Decisions, geometry, configuration and the licence parser
         run: cargo test --manifest-path src-tauri/core/Cargo.toml
+
+  shell-win32-verify:
+    name: Shell Win32 code path (fake user32)
+    # Runs the real Windows branch of src-tauri/src/win32.rs against a fake user32 (see src-tauri/verify/run.sh).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Windows branch against the fake user32
+        run: bash src-tauri/verify/run.sh
+
+  shell-tauri-check:
+    name: Shell compiles on Windows (Tauri config, capabilities, CSP)
+    # `cargo check` on the real Windows target compiles tauri.conf.json and src-tauri/capabilities/ into the
+    # binary's context, so a malformed capability or CSP fails here rather than in a release.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: cargo check (Tauri app)
+        run: cargo check --manifest-path src-tauri/Cargo.toml

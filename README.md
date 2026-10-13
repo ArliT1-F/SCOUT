@@ -77,6 +77,7 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 - Public-host rebinding, cross-site mutations and WebSocket handshakes from a different site are refused. If a proxy rewrites `Host`, list only your own hostname in `SCOUT_ALLOWED_HOSTS`.
 - No TLS is added. On a plain-HTTP LAN the token is only as private as the network it crosses. Keep the panel on a trusted LAN/VPN or use a TLS reverse proxy; do not expose port 8080 to the public internet.
 - `GET /api/remote/state` is an authenticated Producer/Owner feedback endpoint; `POST /api/remote/action` is role- and lease-protected. Private operator/audit and event-pack export routes enforce their own capabilities. Public match/output reads remain intentionally public.
+- **Route audit**: every route, its gate and the reasons for the public ones are in [docs/API-AUDIT.md](docs/API-AUDIT.md). Operator-data reads (recordings, match archives, OBS settings) need a signed-in session.
 - **Verified here**: the host is driven over HTTP from a second address in `tests/panel-live.test.ts`; tests cover refusals, one-time link/cookie, role-scoped tokens, producer lease/action, designer denials, authenticated Companion feedback, revocation, lockout, rebound-host and WebSocket-origin cases. Real venue networking/proxy TLS remains an on-site check.
 
 ### The mark, the favicon and phones
