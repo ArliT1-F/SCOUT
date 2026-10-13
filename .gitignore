@@ -25,3 +25,6 @@ dist-installer/
 public/download/*
 !public/download/README.txt
 config/account-service/
+
+# Hosted multi-tenant platform: per-user tournaments, settings, metric logs (server/platform.ts)
+config/platform/
