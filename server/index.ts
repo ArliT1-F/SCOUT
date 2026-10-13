@@ -26,6 +26,7 @@ import {appPath} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
+import {PlatformStore,isPlatformOwner,platformOwnerEmail,METRIC_KINDS,type MetricKind} from './platform.js';
 import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
 const app=express();
 // Routes are matched case-sensitively, like the gate below: otherwise `/API/controls` reaches the handler while
@@ -70,6 +71,8 @@ const installation=new Installation(path.join(betaDir,'installation.json'));awai
 // Is this installation entitled to run? Local installs are their own authority; a hosted account
 // service is asked at most every 15 minutes and its answer is cached (server/licensing.ts). The
 // broadcast is never gated on it — see docs/BETA.md.
+const platform=await new PlatformStore(process.env.SCOUT_PLATFORM_FILE||'config/platform/store.json').load();
+if(!platformOwnerEmail()) console.log('[platform] SCOUT_OWNER_EMAIL is not set — the /admin platform panel stays closed until it names the SCOUT owner account.');
 const licence=new LicenceMonitor({
  mode:beta.mode,
  source:beta.mode==='hosted'?beta.launcher:undefined,
@@ -96,6 +99,7 @@ const accountCookieId=(req:express.Request)=>cookieValue(req.get('cookie'),ACCOU
 // The launcher polls its own code in the background once a link is started, so the panel card flips
 // to "linked" without anybody refreshing it. Only one timer runs, and it stops itself on a decision,
 // on expiry, or when the pending code is replaced.
+let prevGrenadeIds=new Set<string>();
 let linkPoll:ReturnType<typeof setInterval>|null=null;
 function watchInstallationLink(){
  if(linkPoll) return;
@@ -194,6 +198,7 @@ function isProtected(req:express.Request){
  // panel session at all. These routes carry their own same-origin check and their own throttles.
  // Everything else under /api/beta (the owner's application list, the launcher link) stays behind
  // the panel gate like every other mutation.
+ if(routePath.startsWith('/api/platform/')) return false; // own account-session auth (above)
  return !PUBLIC_BETA_PATHS.has(routePath);
 }
 // Same-origin as well as token: a browser page on another site must not be able to drive the panel,
@@ -348,12 +353,91 @@ server.on('upgrade',(req,socket,head)=>{
  }
  wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws,req));
 });
-function snapshot(session?:PanelSessionView){const active=archives.active;return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,overlay,lease:lease.view(session?.principalId||undefined),recording:recorder.status,archive:active?{id:active.id,name:active.name,startedAt:active.startedAt,eventCount:active.events.length}:null,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{})}}
+function snapshot(session?:PanelSessionView){const active=archives.active;return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,overlay,lease:lease.view(session?.principalId||undefined),recording:recorder.status,archive:active?{id:active.id,name:active.name,startedAt:active.startedAt,eventCount:active.events.length}:null,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{}),platform:{settings:platform.settings,activeTournamentId:platform.data.activeTournamentId}}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 // The first snapshot of a connection carries *that* connection's session view, so the panel knows
 // whether it is local, remote, authenticated and when its session expires without a second request.
 wss.on('connection',(ws,req)=>ws.send(JSON.stringify(snapshot(req?panel.view({address:req.socket.remoteAddress,host:req.headers.host,cookie:req.headers.cookie,headers:req.headers}):undefined))));
 setInterval(broadcast,1000).unref();
+// ---- Hosted multi-tenancy (server/platform.ts): approved (whitelisted) accounts own independent
+// tournaments; only the SCOUT owner (SCOUT_OWNER_EMAIL) administers the platform at /admin.
+async function currentAccount(req:express.Request){
+ if(beta.site){const v=await beta.site.status(accountCookieId(req));return v.account}
+ try{const r=await fetch((process.env.SCOUT_BETA_API_URL||'').replace(/\/$/,'')+'/status',{headers:{...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{})}});const v:any=await r.json().catch(()=>null);return v?.account??null}catch{return null}
+}
+async function requireAccount(req:express.Request,res:express.Response){
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return null}
+ const account:any=await currentAccount(req);
+ if(!account){res.status(401).json({error:'Sign in with your SCOUT account first.',code:'no-account'});return null}
+ if(account.status!=='approved'){res.status(403).json({error:'Your SCOUT account is not whitelisted (approved) yet.',code:'not-whitelisted'});return null}
+ return account;
+}
+async function requirePlatformOwner(req:express.Request,res:express.Response){
+ const account=await requireAccount(req,res); if(!account) return null;
+ if(!isPlatformOwner(account.email)){res.status(403).json({error:'Only the SCOUT owner may use the platform admin panel.',code:'not-platform-owner',ownerConfigured:Boolean(platformOwnerEmail())});return null}
+ return account;
+}
+function sendPlatform<T>(res:express.Response,r:{ok:true;value:T}|{ok:false;status:number;code:string;message:string},map:(v:T)=>unknown=(v)=>v){if(!r.ok){res.status(r.status).json({error:r.message,code:r.code});return}res.json(map(r.value))}
+const tournamentInput=z.object({name:z.string().trim().max(80).optional(),config:z.unknown().optional()});
+function checkedConfig(raw:unknown,res:express.Response){
+ if(raw===undefined) return undefined;
+ const parsed=configSchema.safeParse(raw);
+ if(!parsed.success){res.status(400).json({error:'Invalid tournament configuration: '+parsed.error.issues.map(i=>`${i.path.join('.')||'config'} ${i.message}`).slice(0,4).join('; '),code:'invalid-config'});return null}
+ return normalizeConfig(parsed.data);
+}
+app.get('/api/platform/status',async(req,res)=>{
+ const account:any=await currentAccount(req).catch(()=>null);
+ res.json({ownerConfigured:Boolean(platformOwnerEmail()),isOwner:isPlatformOwner(account?.email),account:account?{id:account.id,email:account.email,status:account.status}:null,settings:platform.settings,activeTournamentId:platform.data.activeTournamentId,tournaments:account?platform.listFor(account.id):[],publicStats:platform.settings.publicStatsEnabled?platform.adminSummary([]).totals:null});
+});
+app.get('/api/platform/stats',(_req,res)=>{ // public aggregates for /welcome (owner enables them in /admin)
+ if(!platform.settings.publicStatsEnabled){res.json({enabled:false,totals:null});return}
+ res.json({enabled:true,totals:platform.adminSummary([]).totals,tournaments:platform.data.tournaments.length});
+});
+app.get('/api/platform/tournaments',async(req,res)=>{const a=await requireAccount(req,res);if(a)res.json({tournaments:platform.listFor(a.id),limit:platform.settings.maxTournamentsPerUser,activeTournamentId:platform.data.activeTournamentId})});
+app.post('/api/platform/tournaments',async(req,res)=>{
+ const a=await requireAccount(req,res); if(!a) return;
+ const parsed=tournamentInput.safeParse(req.body||{}); if(!parsed.success){res.status(400).json({error:'Give the tournament a name.',code:'invalid-tournament'});return}
+ const cfg=checkedConfig(parsed.data.config,res); if(cfg===null) return;
+ sendPlatform(res,await platform.create(a.id,a.email,parsed.data.name||'My tournament',cfg??config),t=>({tournament:{...t,config:undefined,hasConfig:t.config!==null}}));
+});
+app.put('/api/platform/tournaments/:id',async(req,res)=>{
+ const a=await requireAccount(req,res); if(!a) return;
+ const parsed=tournamentInput.safeParse(req.body||{}); if(!parsed.success){res.status(400).json({error:'Invalid tournament.',code:'invalid-tournament'});return}
+ const cfg=checkedConfig(parsed.data.config,res); if(cfg===null) return;
+ sendPlatform(res,await platform.update(String(req.params.id),a.id,{name:parsed.data.name,config:cfg}),t=>({tournament:{...t,config:undefined,hasConfig:t.config!==null}}));
+});
+app.delete('/api/platform/tournaments/:id',async(req,res)=>{const a=await requireAccount(req,res);if(!a)return;sendPlatform(res,await platform.remove(String(req.params.id),a.id))});
+app.get('/api/platform/tournaments/:id',async(req,res)=>{const a=await requireAccount(req,res);if(!a)return;const t=platform.ownedBy(String(req.params.id),a.id);if(!t){res.status(404).json({error:'That tournament is not yours (or does not exist).',code:'not-found'});return}res.json({tournament:t})});
+app.post('/api/platform/tournaments/:id/activate',async(req,res)=>{
+ const a=await requireAccount(req,res); if(!a) return;
+ const r=await platform.activate(String(req.params.id),a.id); if(!r.ok){sendPlatform(res,r);return}
+ // Activating loads this user's own workspace into the live output: their teams/bracket/maps
+ // replace the shared config atomically and every connected output re-renders.
+ if(r.value.config){config=normalizeConfig(r.value.config);await writeFile('config/teams.json.tmp',JSON.stringify(config,null,2));await rename('config/teams.json.tmp','config/teams.json')}
+ audit.record({id:a.id,name:a.email,role:'owner'},'platform.tournament.activate',r.value.name); broadcast();
+ res.json({tournament:{...r.value,config:undefined,hasConfig:r.value.config!==null},activeTournamentId:platform.data.activeTournamentId});
+});
+app.post('/api/platform/tournaments/:id/metrics',async(req,res)=>{
+ const a=await requireAccount(req,res); if(!a) return;
+ const t=platform.ownedBy(String(req.params.id),a.id); if(!t){res.status(404).json({error:'That tournament is not yours (or does not exist).',code:'not-found'});return}
+ const list=Array.isArray(req.body?.events)?req.body.events.slice(0,100):[];
+ const events=list.filter((e:any)=>e&&METRIC_KINDS.includes(e.kind)).map((e:any)=>({kind:e.kind as MetricKind,count:e.count,map:typeof e.map==='string'?e.map:undefined,detail:typeof e.detail==='string'?e.detail:undefined}));
+ sendPlatform(res,await platform.record(t.id,events),totals=>({totals}));
+});
+// Owner-only platform admin: whitelist decisions stay on /api/beta/applications*, this aggregates
+// them with per-user tournaments, match logs and the real-time settings.
+app.get('/api/platform/admin',async(req,res)=>{
+ const a=await requirePlatformOwner(req,res); if(!a) return;
+ const accounts=await beta.launcher.applications().catch(()=>[]);
+ res.json(platform.adminSummary(accounts.map(x=>({id:x.id,email:x.email,status:x.status}))));
+});
+app.put('/api/platform/admin/settings',async(req,res)=>{
+ const a=await requirePlatformOwner(req,res); if(!a) return;
+ const settings=await platform.updateSettings(req.body||{},a.email);
+ audit.record({id:a.id,name:a.email,role:'owner'},'platform.settings.update',`v${settings.version} · maxTournaments=${settings.maxTournamentsPerUser}`);
+ broadcast(); // open panels receive the new settings in their next snapshot (<=1s heartbeat too)
+ res.json({settings});
+});
 // ---- Panel session: unlock with the token the host printed, keep the cookie, or send the token as
 // `X-Scout-Token` / `Authorization: Bearer` on each mutation (that is the path for a script, and for a
 // browser that refuses the cookie). Neither endpoint ever returns the token.
@@ -424,13 +508,15 @@ app.get('/api/beta/link',(req,res)=>{
 // The owner's side of the applications. Approving mints the one-time invite link, which is printed
 // here exactly like the panel token is: this host may have no mail server, so the console (and the
 // response) is how the operator hands it over. The invite value is never written to the audit trail.
-app.get('/api/beta/applications',(req,res)=>{
+app.get('/api/beta/applications',async(req,res)=>{
  if(!privateRead(req,res,'view-audit'))return;
+ if(platformOwnerEmail()&&!isPlatformOwner((await currentAccount(req))?.email)){res.status(403).json({error:'Only the SCOUT owner may review whitelist applications.',code:'not-platform-owner'});return}
  void beta.launcher.applications().then(applications=>res.json({mode:beta.mode,applications,link:installation.view(),download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION}}));
 });
 app.post('/api/beta/applications/:id',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  if(!ownerOnly(res))return;
+ if(platformOwnerEmail()&&!isPlatformOwner((await currentAccount(req))?.email)){res.status(403).json({error:'Only the SCOUT owner may decide whitelist applications.',code:'not-platform-owner'});return}
  const decision=req.body?.decision==='approve'?'approve':req.body?.decision==='reject'?'reject':null;
  if(!decision){res.status(400).json({error:'Choose approve or reject.',code:'invalid-decision'});return}
  const result=await beta.launcher.decide(String(req.params.id),decision,accessPrincipal(res).name);
@@ -686,6 +772,11 @@ app.post('/gsi',(req,res)=>{
  // Recovered subtrees are normal (CS2 empties fields between rounds), so they are counted and logged
  // at most once per 10 s instead of once per packet.
  if(ingested){const derived=events.observe(store.state,Date.now(),ingested.reset);
+  const activeTournament=platform.active();
+  if(activeTournament){void platform.record(activeTournament.id,[...derived.kills.flatMap((kill:any)=>kill.headshot?[{kind:'kill' as const,map:kill.map,detail:`${kill.killerName||'unknown'} > ${kill.victimName}`},{kind:'headshot' as const,map:kill.map}]:[{kind:'kill' as const,map:kill.map,detail:`${kill.killerName||'unknown'} > ${kill.victimName}`}]),...(derived.ended?[{kind:'round' as const,map:derived.ended.map,detail:`${derived.ended.winner||'—'} ${derived.ended.ctScore}:${derived.ended.tScore}`}]:[])]).catch(()=>{})}
+  const grenadeIds=new Set(Object.keys(store.state.grenades||{}));
+  if(activeTournament&&prevGrenadeIds.size){const gone=[...prevGrenadeIds].filter(id=>!grenadeIds.has(id));if(gone.length) void platform.record(activeTournament.id,gone.map(()=>({kind:'grenade' as const,map:store.state.map?.name}))).catch(()=>{})}
+  prevGrenadeIds=grenadeIds;
   for(const kill of derived.kills){archives.addKill(kill);console.log(`[events] round ${kill.round+1}: ${kill.killerName||'unknown'} killed ${kill.victimName}${kill.headshot?' (headshot)':''}`)}
   if(derived.ended){archives.addRound(derived.ended);console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`)}
   const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}

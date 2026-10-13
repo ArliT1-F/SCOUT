@@ -7,6 +7,7 @@ import type {SceneId} from '../server/controls';
 import {PANEL_SECTIONS,SCENE_LIST} from './panel-catalog';
 import {HudStage} from './showcase';
 import type {AccountView,BetaStatusView,InstallationView} from '../server/beta';
+import {TournamentsCard,PublicStats} from './platform-admin';
 import type {LicenceView} from '../server/licensing';
 import type {PanelSessionView} from '../server/auth';
 // The public half of SCOUT: the landing page a tournament organiser finds, the application form for
@@ -155,6 +156,7 @@ export function LandingPage(){
   <SiteNav account={status?.account??null} onHost={onHost}/>
   <main className="site-main">
    {offline&&<OfflineBanner>The SCOUT host is not reachable on this address, so account actions are unavailable. The product pages work anyway — start the launcher to sign in or apply.</OfflineBanner>}
+   <PublicStats/>
    <section className="site-hero">
     <img className="site-hero-bg" src="/assets/cs2.png" alt="" aria-hidden="true"/>
     <div>
@@ -477,6 +479,7 @@ export function DashboardPage({linkCode}:{linkCode?:string}){
     {notice&&<Notice tone="ok">{notice}</Notice>}
     {error&&<Notice>{error}</Notice>}
     <div className="site-dash-grid">
+     <TournamentsCard/>
      <DownloadCard account={account} download={status?.download??null}/>
      <section className="site-card site-link">
       <span className="site-card-icon"><Link2 size={17}/></span>

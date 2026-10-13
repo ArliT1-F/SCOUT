@@ -67,6 +67,7 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 | `SCOUT_ALLOWED_HOSTS` | Comma-separated names accepted for a reverse proxy/tunnel that rewrites `Host`. |
 | `SCOUT_BETA_API_URL` | Serves accounts from a hosted account service instead of this machine; the host proxies `/api/beta/*` to it unchanged. See [docs/BETA.md](docs/BETA.md). |
 | `SCOUT_BETA_DIR` | Where the local account store lives when no hosted service is configured (default `config/beta/`, gitignored). |
+| `SCOUT_OWNER_EMAIL` | The SCOUT platform owner's account email: only that signed-in account may use `/admin`, decide whitelist applications and change platform settings (per-user tournament limit, public stats). See docs/PLATFORM.md. |
 | `SCOUT_BETA_AUTO_APPROVE=1` | Development only: approves applications the moment they arrive instead of waiting for an owner. |
 | `SCOUT_DOWNLOAD_URL`, `SCOUT_DOWNLOAD_VERSION`, `SCOUT_DOWNLOAD_NOTES` | What the dashboard's download card points at (default: this repository's GitHub releases). A release published in the panel's **Operations** tab overrides it; see [docs/RELEASE.md](docs/RELEASE.md). |
 | `SCOUT_REQUIRE_LICENCE=1` | Makes `GET /api/beta/license` authoritative: the launcher hides its overlay while the answer is a refusal. Off by default — a licence server outage must never take a broadcast off air. |
