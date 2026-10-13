@@ -166,6 +166,10 @@ test('the launcher half works through the host client, unchanged',async(t)=>{
  const active=await launcher.installationStatus({deviceId:poll.value.deviceId!,installationId:'inst-1',token:poll.value.installationToken!});
  assert.equal(active.ok,true);
  if(active.ok) assert.deepEqual(active.value,{status:'active',email:'ada@example.com',displayName:'Ada Operator'});
+ const identity=await launcher.installationStatus({deviceId:poll.value.deviceId!,installationId:'inst-1',token:poll.value.installationToken!},{includeAccountId:true});
+ assert.equal(identity.ok&&identity.value.accountId,decided.value.account.id,'only the authenticated host identity lookup includes accountId');
+ const browserIdentity=await fetch(`${base}/license/check`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deviceId:poll.value.deviceId,installationId:'inst-1',token:poll.value.installationToken,resolveAccount:true})});
+ assert.equal(browserIdentity.status,401,'the internal extension requires the service key, not just the installation token');
  const wrongToken=await launcher.installationStatus({deviceId:poll.value.deviceId!,installationId:'inst-1',token:'not-the-token'});
  assert.equal(wrongToken.ok&&wrongToken.value.status,'revoked','a wrong token is a refusal, not an error');
  const unknownDevice=await launcher.installationStatus({deviceId:'no-such-device',installationId:'inst-1',token:'x'});
@@ -295,4 +299,32 @@ test('the launcher-link revocation flow leaves no error behind for an unknown co
  const noSession=await call('/device/approve',{body:{userCode:'ABCD-EFGH'}});
  assert.equal(noSession.status,401);
  assert.equal(noSession.body.code,'no-session');
+});
+
+test('the owner settings desk drives the very next apply and env values are only an initial seed',async(t)=>{
+ const {call}=await start({ownerEmail:'ada@example.com',applicationsOpen:true,reviewNote:'Initial wave'},t);
+ const originalFile=file;
+ assert.equal((await call('/settings')).status,401,'settings reads require the service key');
+ const seeded=await call('/settings',{key:true});assert.equal(seeded.body.settings.reviewNote,'Initial wave');assert.equal(seeded.body.settings.applicationsOpen,true);
+ assert.equal((await call('/settings',{method:'PUT',key:true,body:{applicationsOpen:false}})).status,401,'a service key cannot write settings instead of an owner session');
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const listed=await call('/applications',{key:true});const approved=await call(`/applications/${listed.body.applications[0].id}`,{key:true,body:{decision:'approve',decidedBy:'Owner'}});
+ await call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'},cookie:true});
+ const crossSite=await call('/settings',{method:'PUT',cookie:true,body:{applicationsOpen:false},headers:{Origin:'https://evil.test'}});assert.equal(crossSite.status,403);
+ const saved=await call('/settings',{method:'PUT',cookie:true,body:{applicationsOpen:false,reviewNote:'Wave closed',maxTournamentsPerUser:1,futureSetting:true}});
+ assert.equal(saved.status,200);assert.equal(saved.body.settings.version,2);assert.equal(saved.body.settings.updatedBy,'ada@example.com');
+ const status=await call('/status',{cookie:true});assert.equal(status.body.applicationsOpen,false);assert.equal(status.body.reviewNote,'Wave closed');
+ const refused=await call('/apply',{body:{...application,email:'next@example.com',address:'203.0.113.8'}});assert.equal(refused.status,403);assert.equal(refused.body.code,'applications-closed');
+ assert.equal((await call('/login',{body:{email:'ada@example.com',password:'a-long-enough-password'}})).status,200,'closing applications never closes existing accounts');
+ assert.equal((await call('/device/start',{body:{label:'PC',platform:'windows'}})).status,200);
+ await service.close();
+ const reopened=await createAccountService({file:originalFile,apiKey:KEY,ownerEmail:'ada@example.com',applicationsOpen:true,reviewNote:'Changed env seed',port:0,host:'127.0.0.1'});
+ try{const persisted=await (await fetch(reopened.url+'/settings',{headers:{Authorization:`Bearer ${KEY}`}})).json();assert.equal(persisted.settings.applicationsOpen,false);assert.equal(persisted.settings.reviewNote,'Wave closed');assert.equal(persisted.settings.version,2)}finally{await reopened.close()}
+});
+
+test('an approved non-owner session cannot write the account service settings',async(t)=>{
+ const {call}=await start({ownerEmail:'different-owner@example.com'},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});const apps=await call('/applications',{key:true});const approved=await call(`/applications/${apps.body.applications[0].id}`,{key:true,body:{decision:'approve',decidedBy:'Owner'}});
+ await call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'},cookie:true});
+ const denied=await call('/settings',{method:'PUT',cookie:true,body:{applicationsOpen:false}});assert.equal(denied.status,403);assert.equal(denied.body.code,'not-platform-owner');assert.equal((await call('/settings',{key:true})).body.settings.applicationsOpen,true);
 });

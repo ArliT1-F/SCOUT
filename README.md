@@ -65,13 +65,15 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 | `SCOUT_REMOTE=off` | Rejects remote panel sessions and tokens; local host operation still works, and public overlay output is unaffected. |
 | `SCOUT_REQUIRE_TOKEN=1` | Even the host machine has to unlock the panel. |
 | `SCOUT_ALLOWED_HOSTS` | Comma-separated names accepted for a reverse proxy/tunnel that rewrites `Host`. |
-| `SCOUT_BETA_API_URL` | Serves accounts from a hosted account service instead of this machine; the host proxies `/api/beta/*` to it unchanged. See [docs/BETA.md](docs/BETA.md). |
+| `SCOUT_BETA_API_URL` | Account-service URL for applications, sign-in, device linking and licence checks; the host proxies browser account routes. This is **not** the platform URL. See [docs/BETA.md](docs/BETA.md). |
+| `SCOUT_PLATFORM_URL` | Opt-in launcher sync: URL of the **central SCOUT host**, not the account service. Polls every 15 s for the account’s active tournament/settings and flushes a persistent metrics/config outbox. Unset leaves local operation unchanged. See [docs/PLATFORM.md](docs/PLATFORM.md#launcher-sync). |
+| `SCOUT_BETA_API_KEY` | Account-service key for the central host’s application administration, settings reads and internal device identity lookup. Configure the same key on the service and central host; do not ship it to venues just to enable sync. |
 | `SCOUT_BETA_DIR` | Where the local account store lives when no hosted service is configured (default `config/beta/`, gitignored). |
 | `SCOUT_OWNER_EMAIL` | The SCOUT platform owner's account email: only that signed-in account may use `/admin`, decide whitelist applications and change platform settings (per-user tournament limit, public stats). See docs/PLATFORM.md. |
 | `SCOUT_BETA_AUTO_APPROVE=1` | Development only: approves applications the moment they arrive instead of waiting for an owner. |
 | `SCOUT_DOWNLOAD_URL`, `SCOUT_DOWNLOAD_VERSION`, `SCOUT_DOWNLOAD_NOTES` | What the dashboard's download card points at (default: this repository's GitHub releases). A release published in the panel's **Operations** tab overrides it; see [docs/RELEASE.md](docs/RELEASE.md). |
 | `SCOUT_REQUIRE_LICENCE=1` | Makes `GET /api/beta/license` authoritative: the launcher hides its overlay while the answer is a refusal. Off by default — a licence server outage must never take a broadcast off air. |
-| `SCOUT_ACCOUNT_DB`, `SCOUT_BETA_API_KEY`, `SCOUT_ACCOUNT_APPLICATIONS`, `SCOUT_ACCOUNT_REVIEW_NOTE`, `SCOUT_ACCOUNT_NAME` | The hosted account service (`npm run account-service`): where its SQLite file lives, the key the host presents, closing applications, the note shown on the dashboard, and the name it reports. [docs/ACCOUNT-SERVICE.md](docs/ACCOUNT-SERVICE.md). |
+| `SCOUT_ACCOUNT_DB`, `SCOUT_ACCOUNT_APPLICATIONS`, `SCOUT_ACCOUNT_REVIEW_NOTE`, `SCOUT_ACCOUNT_NAME` | The hosted account service (`npm run account-service`): SQLite location, **initial seeds only** for applications-open/review-note, and service name. Live settings are owned by `/admin` (set the same `SCOUT_OWNER_EMAIL` on the service and central host). [docs/ACCOUNT-SERVICE.md](docs/ACCOUNT-SERVICE.md). |
 
 - A cookie session lasts 12 hours of use and lives in memory; restarting signs everyone out. There are at most 32 concurrent sessions. Header tokens are checked on every request, so Companion/native clients do not depend on a process-local cookie.
 - Five wrong tokens from one address lock that address for ten minutes. The host does not log the candidate token.
@@ -144,6 +146,7 @@ that.
 - **Secrets are stored as digests.** Passwords use scrypt; session ids, invite tokens, device codes and
   installation tokens are stored as SHA-256 digests. `tests/beta.test.ts` asserts this against the file
   on disk, and that the store and the installation file are mode 0600.
+- **Launcher sync is opt-in.** `SCOUT_PLATFORM_URL` points a venue host at the central platform; the existing installation token authenticates config pulls and a durable metrics/config-push outbox. Newer platform configs never silently replace diverged live edits. Radar, layout and overlay design stay local, and neither revocation nor an expired 7-day offline grace gates the broadcast. [docs/PLATFORM.md](docs/PLATFORM.md#launcher-sync) covers deployment and conflict handling.
 - **Hosted accounts are one variable away.** With `SCOUT_BETA_API_URL` set, the host stops owning the
   accounts and proxies `/api/beta/*` to that service instead — same paths, same cookies, no CORS — while
   the launcher keeps using the device flow against it. [docs/BETA.md](docs/BETA.md) documents the REST

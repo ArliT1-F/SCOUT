@@ -1,20 +1,22 @@
 # Running the hosted account service
 
 `server/account-service.ts` is the service `docs/BETA.md` describes: one process, one SQLite file,
-no dependencies beyond Node's own `node:http`, `node:crypto` and `node:sqlite`. It answers the same
+no external database server or SQLite driver (it uses Node's own `node:sqlite`). It answers the same
 REST contract the local store does, so the host, the landing page, the dashboard and the launcher do
 not know — or care — which of the two they are talking to.
 
 You need it when the accounts should outlive one observer's machine, when several operators share an
 event, or when the beta should keep working while the machine that runs the broadcast is off. You do
 **not** need it to broadcast: nothing about match data, layouts or output goes through it. A match
-runs perfectly with the account service down; only sign-in and the launcher link stop working.
+runs with the account service down; sign-in, linking and authenticated platform sync pause, while
+the venue host keeps its local config/output and queues metrics for later delivery.
 
 ## Start it
 
 ```sh
 SCOUT_BETA_API_KEY=$(openssl rand -hex 24) \
 SCOUT_ACCOUNT_BASE_URL=https://accounts.example.com \
+SCOUT_OWNER_EMAIL=you@example.com \
 npm run account-service
 # [accounts] account service listening on http://127.0.0.1:8790 (SQLite: config/account-service/accounts.sqlite, 0 account(s))
 # [accounts] point the SCOUT host here: SCOUT_BETA_API_URL=http://<this machine>:8790 ...
@@ -25,6 +27,7 @@ Then put the same key on the host and point it at the service:
 ```sh
 SCOUT_BETA_API_URL=https://accounts.example.com \
 SCOUT_BETA_API_KEY=<the same key> \
+SCOUT_OWNER_EMAIL=you@example.com \
 npm start
 ```
 
@@ -38,12 +41,42 @@ refuses those routes outright when no key is configured.
 | --- | --- | --- |
 | `SCOUT_ACCOUNT_DB` | `config/account-service/accounts.sqlite` | The whole state. Back it up like a database, because that is what it is. |
 | `PORT`, `HOST` | `8790`, `0.0.0.0` | Where it listens. Put TLS (nginx, Caddy, a load balancer) in front of it; it speaks plain HTTP. |
-| `SCOUT_BETA_API_KEY` | — | The service key for `/applications*`. Unset means those routes answer `503 service-key-required` — closed, not open. |
+| `SCOUT_BETA_API_KEY` | — | Service key for `/applications*`, `GET /settings`, and the internal identity extension of `/license/check`. Unset closes service-only routes with `503 service-key-required`. It cannot substitute for an owner session on `PUT /settings`. |
+| `SCOUT_OWNER_EMAIL` | — | The approved account allowed to write `/settings`. Set the same email on the central SCOUT host. Unset leaves settings writes closed. |
 | `SCOUT_DOWNLOAD_URL` / `SCOUT_DOWNLOAD_VERSION` / `SCOUT_DOWNLOAD_NOTES` | the repository's GitHub releases | What `/status` offers to an approved account. A release published on the host (Operations tab) overrides it. |
-| `SCOUT_ACCOUNT_APPLICATIONS` | open | `closed` stops taking applications; the accounts that exist keep working. |
-| `SCOUT_ACCOUNT_REVIEW_NOTE` | empty | A sentence shown on the dashboard (used by request, e.g. "wave 2 opens in March"). |
+| `SCOUT_ACCOUNT_APPLICATIONS` | open | **Initial seed only:** `closed` seeds `applicationsOpen:false`. After first start, change applications-open in `/admin` or `PUT /settings`, not this variable. Existing accounts keep working. |
+| `SCOUT_ACCOUNT_REVIEW_NOTE` | empty | **Initial seed only:** the review note shown to applicants/dashboard. Subsequent edits come from the persisted settings desk. |
 | `SCOUT_ACCOUNT_NAME` | `SCOUT account service` | The name `/status` reports as the host behind the beta. |
 | `SCOUT_ACCOUNT_BASE_URL` | — | Only for the CLI: the address used to print a full invite link. |
+
+## Persisted platform settings
+
+The service owns one `platform_settings` SQLite row. On first start (including the first
+upgrade with this table), applications-open and review-note are seeded from the existing
+variables above; other platform settings use SCOUT's defaults. Restarts and later environment
+changes **do not overwrite** the row. Configure any custom tournament limit/public-stats choice
+from `/admin` when moving an existing central JSON settings desk to the hosted desk.
+
+- **`GET /settings`** → `{settings:{maxTournamentsPerUser,applicationsOpen,reviewNote,
+  publicStatsEnabled,version,updatedAt,updatedBy}}`. Requires
+  `Authorization: Bearer <SCOUT_BETA_API_KEY>`; this is a host-to-service read, not a public
+  browser route.
+- **`PUT /settings`**, body: partial settings object. Requires the approved **owner account
+  session cookie**, matched to `SCOUT_OWNER_EMAIL`; a service key alone is refused. Known
+  fields are sanitized, unknown fields ignored, and each save bumps the version and records
+  the owner's email/time. Cross-site requests are refused.
+
+The central host reads this row for its platform desk and application flow, and forwards
+`PUT /api/platform/admin/settings` with the owner's cookie. `/status` and `/apply` on this
+service also read it directly: closing applications refuses the **very next** application,
+without a restart, including callers that bypass the host. The browser's generic account
+proxy does not expose `/settings` or the internal device identity lookup.
+
+`POST /license/check` still returns the ordinary licence view for installation-token callers.
+Only a service-key-authenticated call with `resolveAccount:true` may additionally resolve
+`accountId`, and only after validating an active device on an approved account. The central
+platform uses that identity for `POST /api/platform/device/sync` and `/metrics`; no match data
+or event packs are sent to the account service. See [PLATFORM.md](PLATFORM.md#launcher-sync).
 
 Behind a reverse proxy, forward `X-Forwarded-Proto` — the account cookie is marked `Secure` when the
 request arrives over https, and the same header is what the service trusts for that decision.
@@ -120,7 +153,7 @@ nothing else is logged about an account, and nothing about a broadcast is ever s
 
 ## Upgrading
 
-The schema is created with `CREATE TABLE IF NOT EXISTS` on every start, and adding a column is a
+The schema (including the settings row's table) is created with `CREATE TABLE IF NOT EXISTS` on every start, and adding a column is a
 one-line migration to apply before the new build starts. There is no separate migration step and no
 version table yet; if the schema grows, that is the first thing to add (and it belongs in this
 document, not in a commit message).

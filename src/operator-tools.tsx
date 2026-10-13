@@ -14,6 +14,21 @@ import type {PanelRole,PanelSessionView} from '../server/auth';
 import {MatchStore} from '../server/state';
 import {EventTracker,type EventSnapshot, type KillEvent,type RoundEvent} from '../server/events';
 import {apiFetch} from './session';
+import type {PlatformSyncView,SyncState} from '../server/platform-sync';
+
+const SYNC_LABELS:Record<SyncState,string>={synced:'SYNCED', 'update-available':'UPDATE AVAILABLE',revoked:'REVOKED','offline-grace':'OFFLINE · GRACE',offline:'OFFLINE',unlinked:'NOT LINKED',unsupported:'SYNC UNAVAILABLE'};
+export function LauncherSyncStatus({sync,busy,onApply}:{sync?:PlatformSyncView;busy:boolean;onApply:()=>void}){
+ if(!sync)return null;
+ return <div className={'launcher-sync '+sync.state} aria-live="polite">
+  <span className="launcher-link-head">{sync.state==='synced'?<Check size={11}/>:<AlertCircle size={11}/>}PLATFORM {SYNC_LABELS[sync.state]}</span>
+  {sync.tournament&&<small>{sync.tournament.name} · config v{sync.tournament.configVersion}</small>}
+  <small>{sync.message}</small>
+  {!!sync.outboxCount&&<small>{sync.outboxCount.toLocaleString()} event(s) queued for delivery</small>}
+  {sync.state==='offline-grace'&&sync.graceExpiresAt!==null&&<small>Grace until {new Date(sync.graceExpiresAt).toLocaleString()}</small>}
+  {sync.state==='update-available'&&sync.update&&<><small>{sync.update.name} · platform v{sync.update.configVersion}</small><button className="mini-button" disabled={busy} onClick={onApply}><ArrowDownToLine size={11}/>Apply platform config</button></>}
+ </div>;
+}
+
 
 const stateIcon:Record<CheckState,React.ReactNode>={ready:<Check size={14}/>,warning:<AlertCircle size={14}/>,blocked:<WifiOff size={14}/>,skipped:<span className="preflight-skipped">—</span>};
 export function PreflightPanel({hostConnected,lastSeen,now,gsi,state,sides,radars,obs,config,overlay}:{hostConnected:boolean;lastSeen:number;now:number;gsi?:GsiDiagnostics;state?:MatchState;sides?:ResolvedSides;radars?:RadarsConfig;obs?:ObsStatus;config?:ScoutConfig;overlay?:OverlayConfig}){

@@ -1081,6 +1081,9 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .launcher-link .mini-button{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:4px;padding:6px 9px;font-size:9px;letter-spacing:.6px;color:var(--text-dim);background:var(--bg-soft)}
 .launcher-link .mini-button:hover{color:var(--accent-bright);border-color:var(--accent-deep)}
 .launcher-link-error{font-size:9.5px;line-height:1.5;color:var(--bad)}
+.launcher-sync{display:flex;flex-direction:column;gap:6px;padding-top:9px;margin-top:3px;border-top:1px solid var(--line)}
+.launcher-sync.update-available .launcher-link-head,.launcher-sync.offline-grace .launcher-link-head{color:var(--gold)}
+.launcher-sync.revoked .launcher-link-head,.launcher-sync.offline .launcher-link-head{color:var(--bad)}
 /* Site flare art: the CS2 renders in public/assets decorate the page without speaking.
    Every one is aria-hidden and pointer-events:none, and steps aside where it would crowd the copy. */
 .site-hero{position:relative}

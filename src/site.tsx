@@ -9,6 +9,8 @@ import {HudStage} from './showcase';
 import type {AccountView,BetaStatusView,InstallationView} from '../server/beta';
 import {TournamentsCard,PublicStats} from './platform-admin';
 import type {LicenceView} from '../server/licensing';
+import type {PlatformSyncView} from '../server/platform-sync';
+import {LauncherSyncStatus} from './operator-tools';
 import type {PanelSessionView} from '../server/auth';
 // The public half of SCOUT: the landing page a tournament organiser finds, the application form for
 // the closed beta, the sign-in page, and the dashboard where an approved account downloads the
@@ -545,7 +547,7 @@ export function DownloadCard({account,download}:{account:AccountView;download:Be
 // panel sidebar. It polls, so the moment the code is approved in the dashboard the card turns into
 // the linked account without anyone refreshing anything.
 export function LauncherLinkCard(){
- const [state,setState]=useState<{mode:string;link:InstallationView}|null>(null);
+ const [state,setState]=useState<{mode:string;link:InstallationView;sync?:PlatformSyncView}|null>(null);
  const [licence,setLicence]=useState<LicenceView|null>(null);
  const [busy,setBusy]=useState(false);const [error,setError]=useState('');
  const load=React.useCallback(async()=>{
@@ -572,6 +574,17 @@ export function LauncherLinkCard(){
   if(!res.ok){setError('Could not unlink this installation.');return}
   void load();
  }
+ async function applyPlatformConfig(){
+  if(!window.confirm('Replace the live match config with the latest platform version? Local roster/map/bracket edits will be replaced. Radar, layout and overlay are unchanged.'))return;
+  setBusy(true);setError('');
+  try{
+   const res=await apiFetch('/api/beta/link/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+   const body=await res.json().catch(()=>({}));
+   if(!res.ok)setError(body.error||'Could not apply the platform config.');
+   await load();
+  }catch{setError('The host could not be reached. Your local config is unchanged.')}
+  finally{setBusy(false)}
+ }
  const link=state?.link;
  if(!link) return null;
  if(link.linked) return <div className="launcher-link linked">
@@ -580,6 +593,7 @@ export function LauncherLinkCard(){
   <small>{link.displayName||'SCOUT account'} · {"device "}{link.deviceId?.slice(0,6)||'—'}</small>
   <button className="mini-button" onClick={()=>void unlink()} disabled={busy}>Unlink</button>
   <LicenceLine licence={licence}/>
+  <LauncherSyncStatus sync={state?.sync} busy={busy} onApply={()=>void applyPlatformConfig()}/>
   {error&&<span className="launcher-link-error">{error}</span>}
  </div>;
  if(link.pending) return <div className="launcher-link pending">
