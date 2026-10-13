@@ -133,6 +133,41 @@ test('a request that looks local but names a public host is refused',async()=>{
  assert.deepEqual((await call('/api/status')).json.controls,before,'the refusal did not touch the broadcast');
 });
 
+test('route matching is exact: a differently cased or doubled path cannot slip past the gate',async()=>{
+ // Express matches routes case-insensitively unless told otherwise, and the gate only looks at `/api/`.
+ // Before the fix `PUT /API/controls` reached the handler and changed the broadcast without a session.
+ const before=(await call('/api/status')).json.controls;
+ const changed={...before,scene:before.scene==='break'?'live':'break'};
+ for(const path of ['/API/controls','/Api/Controls','//api/controls']){
+  const rebound=await call(path,{host:'127.0.0.1',method:'PUT',headers:{Host:'evil.example.com',Origin:'http://evil.example.com'},body:changed});
+  assert.ok([403,404].includes(rebound.status),`${path} answered ${rebound.status}`);
+  if(REMOTE){
+   const remote=await call(path,{host:REMOTE,method:'PUT',body:changed});
+   assert.ok([401,404].includes(remote.status),`${path} from another machine answered ${remote.status}`);
+  }
+ }
+ assert.deepEqual((await call('/api/status')).json.controls,before,'no spelling of the route changed the broadcast');
+});
+
+test('operator data reads need a signed-in panel session',async()=>{
+ // Recordings are the raw GSI stream, archives hold the match log and OBS settings name the OBS host: none of
+ // them is public. The public overlay snapshot (/api/status) is, and stays so.
+ for(const path of ['/api/recordings','/api/archive','/api/obs']){
+  const anonymous=await call(path,{host:'127.0.0.1',headers:{Host:'evil.example.com'}});
+  assert.equal(anonymous.status,403,`${path} from a public name without a session`);
+  const withToken=await call(path,{host:'127.0.0.1',headers:{Host:'evil.example.com','X-Scout-Token':TOKEN}});
+  assert.equal(withToken.status,200,`${path} with a valid token`);
+  const crossSite=await call(path,{host:'127.0.0.1',headers:{Origin:'https://evil.example.com','X-Scout-Token':TOKEN}});
+  assert.equal(crossSite.status,403,`${path} from another site, even with the token`);
+  if(REMOTE){
+   const remote=await call(path,{host:REMOTE});
+   assert.equal(remote.status,401,`${path} from another machine without a session`);
+   assert.equal(remote.json.code,'no-session');
+  }
+ }
+ assert.equal((await call('/api/archive')).status,200,'the operator at the host machine still reads its own data');
+});
+
 test('the printed link unlocks a browser and leaves no token in the address bar',async()=>{
  const link=await call(`/?token=${encodeURIComponent(TOKEN)}`,{headers:{Host:'8080-preview.e2b.app',Origin:'https://8080-preview.e2b.app'}});
  assert.ok([301,302].includes(link.status),`expected a redirect, got ${link.status}`);
