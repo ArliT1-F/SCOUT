@@ -29,7 +29,13 @@ function classesRenderedByScenes():Set<string>{
 
 type Rule={selector:string;declarations:string};
 // Top-level rules only: a selector's own declarations are what a scene element reads, and nested
-// @media blocks are the panel's, not the 1920 × 1080 canvas's.
+// @media blocks are the panel's, not the 1920 × 1080 canvas's — a font-size that only applies at
+// 1500px is an operator-window size, not a broadcast one.
+//
+// Blocks are matched by counting braces, not by taking the first '}'. A declaration-less nesting
+// like @keyframes st-blink{0%,100%{opacity:1}50%{opacity:.25}} closes twice, and the naive version
+// swallowed the *next* rule's selector into the keyframes' leftovers — which is why this test used
+// to depend on a duplicate .stage rule existing further down the file to prove the canvas is styled.
 function stylesheetRules():Rule[]{
  const clean=css.replace(/\/\*[\s\S]*?\*\//g,'');
  const out:Rule[]=[];
@@ -37,8 +43,13 @@ function stylesheetRules():Rule[]{
  while(cursor<clean.length){
   const open=clean.indexOf('{',cursor);
   if(open<0) break;
-  const close=clean.indexOf('}',open);
+  // Skip statement at-rules (@import, @charset) so their text never leaks into a selector.
+  const statement=clean.indexOf(';',cursor);
+  if(statement>=0&&statement<open){cursor=statement+1;continue}
   const selector=clean.slice(cursor,open).trim();
+  let depth=1,index=open+1;
+  while(index<clean.length&&depth>0){const character=clean[index];if(character==='{') depth++;else if(character==='}') depth--;index++}
+  const close=index-1;
   if(!selector.startsWith('@')) out.push({selector,declarations:clean.slice(open+1,close)});
   cursor=close+1;
  }

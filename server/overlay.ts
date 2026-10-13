@@ -43,6 +43,9 @@ export const THEME_PRESETS:OverlayTheme[]=[
  overlayThemeSchema.parse({name:'Clean · Minimal',preset:'clean-minimal',accent:'#ffffff',accentBright:'#ffffff',accentDeep:'#9aa2aa',gold:'#ffe28a',text:'#ffffff',muted:'#e5e8ec',panel:'#090d11',panelAlt:'#11171d',line:'#52606b',panelOpacity:.86,cornerRadius:0,borderWidth:1,treatment:'minimal',density:'compact',glow:false,grid:false,motion:'subtle'}),
 ];
 
+// The values a layer used to be created with; see the transform below.
+const LEGACY_WIDGET_COLOR='#f2eef5',LEGACY_WIDGET_FONT='Barlow Condensed';
+
 export const overlayWidgetSchema=z.object({
  id:z.string().trim().regex(/^[a-zA-Z0-9_-]{1,48}$/,'use letters, numbers, dash or underscore'),
  kind:z.enum(OVERLAY_WIDGET_KINDS),
@@ -57,14 +60,23 @@ export const overlayWidgetSchema=z.object({
  opacity:z.number().finite().min(0).max(1).optional().default(1),
  scale:z.number().finite().min(.5).max(2).optional().default(1),
  fontSize:z.number().int().min(8).max(160).nullable().optional().default(null),
- color:hex.optional().default('#f2eef5'),
+ // null = follow the broadcast theme. A pinned hex (or face) still wins, which is what the
+ // studio's colour fields and event packs rely on.
+ color:hex.nullable().optional().default(null),
  fill:hex.nullable().optional().default(null),
  borderColor:hex.nullable().optional().default(null),
  text:z.string().max(500).optional().default(''),
  asset:z.string().max(260).optional().default('').refine(value=>!value||/^(uploads\/overlays\/[\w.\- ]+|radars\/[\w.\-]+\.(?:png|jpg|jpeg|webp)|thumbs\/[\w.\-]+\.(?:png|jpg|jpeg|webp))$/i.test(value),'asset must be a local SCOUT upload'),
- font:z.enum(FONT_FAMILIES).optional().default('Barlow Condensed'),
+ font:z.enum(FONT_FAMILIES).nullable().optional().default(null),
  fit:z.enum(['contain','cover']).optional().default('contain'),
-}).strip();
+}).strip().transform(widget=>({
+ ...widget,
+ // Layers used to be born with the shipped palette pinned: #f2eef5 type and the Barlow face. Those
+ // two defaults are exactly what a theme change could not move once saved, so they are read as
+ // “follow the theme”: a config written before the fix starts tracking the operator's palette.
+ color:widget.color===LEGACY_WIDGET_COLOR?null:widget.color,
+ font:widget.font===LEGACY_WIDGET_FONT?null:widget.font,
+}));
 export type OverlayWidget=z.infer<typeof overlayWidgetSchema>;
 
 const widget=(id:string,kind:OverlayWidgetKind,name:string,zIndex:number,showOn:typeof SCENE_IDS[number][]=['live']):OverlayWidget=>overlayWidgetSchema.parse({id,kind,name,zIndex,showOn});
@@ -107,7 +119,7 @@ export const defaultOverlay=():OverlayConfig=>overlaySchema.parse({});
 export function createWidget(kind:OverlayWidgetKind,id?:string):OverlayWidget {
  const nameByKind:Record<OverlayWidgetKind,string>={event:'Event header',scoreboard:'Scoreboard',radar:'Tactical radar',killfeed:'Killfeed',rosterLeft:'Left roster',rosterRight:'Right roster',lowerThird:'Player lower third',economy:'Economy bar',footer:'Broadcast footer',signal:'Signal-lost banner',phaseBanner:'Phase banner',roundResult:'Round result',phaseCard:'Phase cards',text:'Text overlay',image:'Image overlay',shape:'Shape overlay',clock:'Live clock'};
  const idBase=id||kind;
- return overlayWidgetSchema.parse({id:idBase,kind,name:nameByKind[kind],zIndex:kind==='text'||kind==='image'||kind==='shape'||kind==='clock'?80:20,showOn:['live'],...(kind==='text'?{text:'YOUR TEXT HERE',x:700,y:180,width:520,height:100,fontSize:48,fill:'#111820'}:{}),...(kind==='image'?{x:800,y:120,width:320,height:180,fit:'contain'}:{}),...(kind==='shape'?{x:800,y:500,width:320,height:12,fill:'#d970c2'}:{}),...(kind==='clock'?{x:850,y:180,width:220,height:90,fontSize:54,fill:'#111820'}:{})});
+ return overlayWidgetSchema.parse({id:idBase,kind,name:nameByKind[kind],zIndex:kind==='text'||kind==='image'||kind==='shape'||kind==='clock'?80:20,showOn:['live'],...(kind==='text'?{text:'YOUR TEXT HERE',x:700,y:180,width:520,height:100,fontSize:48}:{}),...(kind==='image'?{x:800,y:120,width:320,height:180,fit:'contain'}:{}),...(kind==='shape'?{x:800,y:500,width:320,height:12}:{}),...(kind==='clock'?{x:850,y:180,width:220,height:90,fontSize:54}:{})});
 }
 export function widgetStyle(widget:OverlayWidget,legacy?:Record<string,string|number>):Record<string,string|number> {
  const style:Record<string,string|number>={...(legacy||{}),opacity:widget.opacity,zIndex:widget.zIndex,scale:widget.scale};
@@ -115,8 +127,11 @@ export function widgetStyle(widget:OverlayWidget,legacy?:Record<string,string|nu
  if(widget.width!==null) style.width=widget.width;
  if(widget.height!==null) style.height=widget.height;
  if(widget.fontSize!==null) style.fontSize=widget.fontSize;
- style['--widget-color']=widget.color;
- style.color=widget.color;style.fontFamily=`'${widget.font}', sans-serif`;
+ // The colour and the face reach the layer only when the operator chose them. Writing the shipped
+ // default inline beat the .hud rule that reads the theme, which is how a saved layer could ignore
+ // every later theme change; an unpinned layer now inherits --text and the display face instead.
+ if(widget.color){style['--widget-color']=widget.color;style.color=widget.color}
+ if(widget.font) style.fontFamily=`'${widget.font}', sans-serif`;
  if(widget.fill){style['--widget-fill']=widget.fill;style.background=widget.fill}
  if(widget.borderColor){style['--widget-border']=widget.borderColor;style.borderColor=widget.borderColor}
  return style;
@@ -127,16 +142,59 @@ export function widgetShown(widget:OverlayWidget|undefined,scene:string):boolean
 export function getWidget(config:OverlayConfig|undefined,id:string):OverlayWidget|undefined {
  return config?.widgets?.find(widget=>widget.id===id);
 }
+type Channels=[number,number,number];
+const channels=(hex:string):Channels=>[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)];
+const BLACK:Channels=[0,0,0],WHITE:Channels=[255,255,255];
+const blend=(from:Channels,to:Channels,amount:number):Channels=>from.map((value,index)=>Math.round(value+(to[index]-value)*amount)) as Channels;
+const solid=(value:Channels)=>`rgb(${value.join(',')})`;
+const soft=(value:Channels,opacity:number)=>`rgba(${value.join(',')},${opacity})`;
+// The theme as CSS custom properties on the 1920 × 1080 canvas. The nine palette tokens are the
+// operator's; everything below them is derived, so one colour change carries through the whole
+// broadcast instead of stopping at the first surface that happens to have its own rule.
+//
+// The derived tokens exist because a full-canvas scene and a HUD panel need different things from
+// the same palette. A HUD panel floats over the game and is deliberately translucent
+// (panelOpacity); a scene *replaces* the game for its duration, so its backdrop, cards and scrims
+// must be opaque — they are mixed from the solid panel colour and never carry the operator's
+// opacity. Blending happens here rather than in color-mix() so the value is a plain rgb()/rgba()
+// string: an unsupported function would leave a scene transparent, and a scene that lets the
+// gameplay through is worse than a scene in the wrong shade.
 export function overlayThemeStyle(theme?:OverlayTheme):Record<string,string|number> {
  const value=overlayThemeSchema.parse(theme||DEFAULT_THEME);
- const rgba=(hex:string,opacity=value.panelOpacity)=>`rgba(${parseInt(hex.slice(1,3),16)},${parseInt(hex.slice(3,5),16)},${parseInt(hex.slice(5,7),16)},${opacity})`;
+ const panel=channels(value.panel),panelAlt=channels(value.panelAlt);
+ const accent=channels(value.accent),accentBright=channels(value.accentBright),accentDeep=channels(value.accentDeep);
+ const panelDeep=blend(panel,BLACK,.28),panelDeeper=blend(panel,BLACK,.55);
  return {
   '--accent':value.accent,'--accent-bright':value.accentBright,'--accent-deep':value.accentDeep,'--gold':value.gold,
-  '--text':value.text,'--text-dim':value.muted,'--text-faint':value.muted,'--line':value.line,'--line-soft':value.line,
-  '--theme-panel':rgba(value.panel),'--theme-panel-alt':rgba(value.panelAlt),'--theme-border':value.line,
+  '--text':value.text,'--text-dim':value.muted,
+  // A third, genuinely fainter level for labels that must not compete with the data: the muted token
+  // mixed back towards the panel, which keeps it derived from the operator's palette instead of a
+  // hard-coded grey that only matches the default theme.
+  '--text-faint':solid(blend(channels(value.muted),panel,.45)),'--line':value.line,'--line-soft':value.line,
+  '--theme-panel':soft(panel,value.panelOpacity),'--theme-panel-alt':soft(panelAlt,value.panelOpacity),'--theme-border':value.line,
   '--display-font':`'${value.fontDisplay}', sans-serif`,'--ui-font':`'${value.fontUi}', sans-serif`,
   '--theme-radius':`${value.cornerRadius}px`,'--theme-border-width':`${value.borderWidth}px`,
   '--theme-glow':value.glow?'0 0 22px color-mix(in srgb, var(--accent) 22%, transparent)':'none',
+  // Scene surfaces (opaque by design — see the note above).
+  '--theme-panel-solid':solid(panel),
+  '--theme-panel-deep':solid(panelDeep),
+  '--theme-panel-deeper':solid(panelDeeper),
+  '--theme-stage-glow':solid(blend(panelDeep,accentDeep,.3)),
+  '--theme-map-tile-a':solid(blend(panelDeep,accentDeep,.22)),
+  '--theme-map-tile-b':solid(blend(panelDeep,accentDeep,.38)),
+  '--theme-card':solid(blend(panelDeep,WHITE,.06)),
+  '--theme-raised':solid(blend(panel,WHITE,.05)),
+  '--theme-won':solid(blend(panelDeep,accentDeep,.32)),
+  '--theme-ink':solid(panelDeeper),
+  '--theme-scrim':soft(panelDeeper,.8),
+  '--theme-scrim-strong':soft(panelDeeper,.93),
+  // Accent tints for chips, live borders and glows, at the opacities the scene rules use.
+  '--theme-accent-soft':soft(accentBright,.08),
+  '--theme-accent-line':soft(accentBright,.38),
+  '--theme-accent-wash':soft(accent,.1),
+  '--theme-accent-haze':soft(accent,.2),
+  '--theme-accent-haze-strong':soft(accent,.25),
+  '--theme-accent-glow':soft(accent,.5),
  };
 }
 export function interpolateWidgetText(text:string,context:Record<string,string|number|undefined>):string {
