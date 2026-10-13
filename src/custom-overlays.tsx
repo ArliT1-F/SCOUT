@@ -17,9 +17,11 @@ export function CustomOverlays({config,scene,context,arranging=false,onMove}:{co
  if(!widgets.length)return null;
  return <div className="custom-overlay-layer" aria-hidden="true">{widgets.sort((a,b)=>a.zIndex-b.zIndex).map(widget=>{
   const base=widgetStyle(widget,{position:'absolute',left:widget.x??0,top:widget.y??0,width:widget.width??320,height:widget.height??90});
-  const decorated:React.CSSProperties={...base as React.CSSProperties,fontSize:widget.fontSize??38,color:widget.color,fontFamily:`'${widget.font}',sans-serif`,textShadow:config?.theme.glow?'0 2px 14px rgba(0,0,0,.55)':'none',border:widget.borderColor?`1px solid ${widget.borderColor}`:undefined,pointerEvents:arranging?'auto':'none',touchAction:'none',cursor:arranging?'move':'default'};
+  // No colour or face here: widgetStyle already pins them when the operator chose one, and an
+  // unpinned graphic inherits the .hud rule that reads the theme, so a theme change moves it.
+  const decorated:React.CSSProperties={...base as React.CSSProperties,fontSize:widget.fontSize??38,textShadow:config?.theme.glow?'0 2px 14px rgba(0,0,0,.55)':'none',border:widget.borderColor?`1px solid ${widget.borderColor}`:undefined,pointerEvents:arranging?'auto':'none',touchAction:'none',cursor:arranging?'move':'default'};
   if(widget.kind==='image')return <div className="custom-overlay custom-image" style={decorated} key={widget.id} onPointerDown={event=>startDrag(widget.id,event)}>{widget.asset?<img src={assetUrl(widget.asset)} alt="" style={{objectFit:widget.fit,width:'100%',height:'100%'}}/>:<span>ADD GRAPHIC</span>}</div>;
-  if(widget.kind==='shape')return <div className="custom-overlay custom-shape" style={{...decorated,background:widget.fill||widget.color,borderRadius:config?.theme.cornerRadius||0}} key={widget.id} onPointerDown={event=>startDrag(widget.id,event)}/>;
+  if(widget.kind==='shape')return <div className="custom-overlay custom-shape" style={{...decorated,background:widget.fill||widget.color||'var(--accent)',borderRadius:config?.theme.cornerRadius||0}} key={widget.id} onPointerDown={event=>startDrag(widget.id,event)}/>;
   const template=widget.kind==='clock'?(widget.text||'{clock}'):widget.text;
   const text=interpolateWidgetText(template,context);
   return <div className={'custom-overlay '+(widget.kind==='clock'?'custom-clock':'custom-text')} style={{...decorated,background:widget.fill?`${widget.fill}e8`:'transparent',borderBottom:widget.borderColor?`2px solid ${widget.borderColor}`:undefined,borderRadius:config?.theme.cornerRadius||0}} key={widget.id} onPointerDown={event=>startDrag(widget.id,event)}>{text||' '}</div>;
