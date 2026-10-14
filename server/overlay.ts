@@ -184,6 +184,11 @@ export function overlayThemeStyle(theme?:OverlayTheme):Record<string,string|numb
   '--theme-map-tile-b':solid(blend(panelDeep,accentDeep,.38)),
   '--theme-card':solid(blend(panelDeep,WHITE,.06)),
   '--theme-raised':solid(blend(panel,WHITE,.05)),
+  // The border a scene card draws against its own card surface: the operator's line colour lifted
+  // towards white, so a matchup chip or a stats panel is outlined by the palette instead of by a
+  // fixed translucent white — which composites to the same grey over every theme's backdrop and
+  // is exactly how the full-canvas scenes came to ignore a palette change while the HUD moved.
+  '--theme-card-line':soft(blend(channels(value.line),WHITE,.22),.6),
   '--theme-won':solid(blend(panelDeep,accentDeep,.32)),
   '--theme-ink':solid(panelDeeper),
   '--theme-scrim':soft(panelDeeper,.8),
