@@ -93,6 +93,38 @@ test('the live HUD surfaces are painted from the palette too',()=>{
   assert.ok(painted(selector,/color:\s*var\(--text/),`${selector} must take its type colour from the theme`);
 });
 
+test('the scene cards and their outlines paint from the palette, not from translucent white',()=>{
+ // The reported bug, and the hole in the palette test above: the scene cards were painted
+ // background:#ffffff0a with #ffffff1c outlines, which that test waved through as theme-neutral.
+ // White at 4-5% composites to the same grey over every theme's backdrop, so a preset change
+ // repainted the live scoreboard (a solid --theme-panel surface) and left matchup, lineups, map
+ // series, bracket, winner, break, recap and stats looking frozen. The cards now read the derived
+ // scene tokens the way .st-bm already did, and this test names the surfaces so it cannot regress
+ // one scene at a time.
+ const painted=(selector:string,property:RegExp)=>rules.some(rule=>partsOf(rule).includes(selector)&&property.test(rule.declarations)&&isSceneRule(rule));
+ for(const surface of ['.st-mapchip','.st-player','.st-map','.st-next','.st-recap-winner','.st-recap-kill','.st-stats-team'])
+  assert.ok(painted(surface,/background:\s*var\(--theme-card/),`${surface} must take its fill from the theme's scene-card token`);
+ for(const surface of ['.st-bench span','.st-results span','.st-recap-kill span'])
+  assert.ok(painted(surface,/background:\s*var\(--theme-raised/),`${surface} must take its fill from the theme's raised-card token`);
+ for(const surface of ['.st-mapchip','.st-map','.st-bm','.st-next','.st-results span','.st-recap-winner','.st-recap-kill'])
+  assert.ok(painted(surface,/border(?:-[a-z]+)?:\s*1px solid var\(--theme-card-line/),`${surface} must take its outline from the theme's card-line token`);
+ // No scene surface or outline may pin a translucent white/black again. Opaque white stays legal
+ // where it is lettering or a dot on an accent chip, and a declaration in a team's own colour
+ // (.st-monogram's sheen over var(--team)) is team identity, not a scene surface.
+ const surfaceProperty=/^(?:background(?:-color|-image)?|border(?:-(?:top|right|bottom|left))?(?:-color)?)$/;
+ const translucent=(hex:string)=>{const digits=hex.slice(1);return digits.length===8?digits.slice(6).toLowerCase()!=='ff':digits.length===4?digits.slice(3).toLowerCase()!=='f':false};
+ const offenders=rules.filter(isSceneRule).flatMap(rule=>rule.declarations.split(';').flatMap(declaration=>{
+  const [property,...rest]=declaration.split(':');
+  if(!property||!rest.length||!surfaceProperty.test(property.trim())) return [];
+  const value=rest.join(':');if(value.includes('var(--team)')) return [];
+  const outside=value.replace(/var\([^()]*(?:\([^()]*\))?[^()]*\)/g,'var()');
+  const hexes=[...outside.matchAll(/#[0-9a-fA-F]{3,8}\b/g)].map(match=>match[0]).filter(translucent);
+  const whites=[...outside.matchAll(/rgba?\(\s*(?:255\s*,\s*255\s*,\s*255|0\s*,\s*0\s*,\s*0)\s*,\s*(?!1\s*\))/g)].map(match=>match[0]);
+  return [...hexes,...whites].map(literal=>`${rule.selector} { ${property.trim()}: ${value.trim()} }`);
+ }));
+ assert.deepEqual(offenders,[],`scene surfaces must read the theme tokens instead of pinning a translucent neutral:\n${offenders.join('\n')}`);
+});
+
 test('scene surfaces stay opaque whatever the operator sets panel opacity to',()=>{
  // A HUD panel is translucent on purpose (panelOpacity). A scene *is* the frame for its duration:
  // if the derived scene tokens carried that opacity, the game capture would show through the
@@ -102,7 +134,7 @@ test('scene surfaces stay opaque whatever the operator sets panel opacity to',()
  assert.match(String(style['--theme-panel']),/rgba\(18,14,24,0\.55\)/,'HUD panels keep the operator’s opacity');
  for(const token of ['--theme-panel-solid','--theme-panel-deep','--theme-panel-deeper','--theme-stage-glow','--theme-map-tile-a','--theme-map-tile-b','--theme-card','--theme-raised','--theme-won','--theme-ink'])
   assert.match(String(style[token as keyof typeof style]),/^rgb\(\d+,\d+,\d+\)$/,`${token} must be an opaque scene surface`);
- for(const token of ['--theme-scrim','--theme-scrim-strong','--theme-accent-soft','--theme-accent-line','--theme-accent-glow'])
+ for(const token of ['--theme-scrim','--theme-scrim-strong','--theme-accent-soft','--theme-accent-line','--theme-accent-glow','--theme-card-line'])
   assert.match(String(style[token as keyof typeof style]),/^rgba\(\d+,\d+,\d+,\d(?:\.\d+)?\)$/,`${token} is a scrim or tint, not a surface`);
 });
 
@@ -144,7 +176,7 @@ test('a theme change moves the rendered layers, not just the surfaces around the
 test('a changed palette moves every derived scene surface',()=>{
  const scout=overlayThemeStyle(THEME_PRESETS[0]);
  const cobalt=overlayThemeStyle(THEME_PRESETS.find(theme=>theme.preset==='arena-cobalt')!);
- for(const token of ['--theme-panel-deep','--theme-panel-deeper','--theme-stage-glow','--theme-map-tile-a','--theme-map-tile-b','--theme-card','--theme-raised','--theme-won','--theme-ink','--theme-scrim','--theme-accent-soft','--theme-accent-line','--theme-accent-glow','--theme-panel-solid'])
+ for(const token of ['--theme-panel-deep','--theme-panel-deeper','--theme-stage-glow','--theme-map-tile-a','--theme-map-tile-b','--theme-card','--theme-raised','--theme-card-line','--theme-won','--theme-ink','--theme-scrim','--theme-accent-soft','--theme-accent-line','--theme-accent-glow','--theme-panel-solid'])
   assert.notEqual(scout[token],cobalt[token],`${token} ignored the palette change`);
  // The derived shades keep the palette's hue: Cobalt's panel is blue, so its deepest surface is too.
  const deep=String(cobalt['--theme-panel-deep']).match(/\d+/g)!.map(Number);
