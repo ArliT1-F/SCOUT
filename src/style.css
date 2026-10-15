@@ -1,4 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=DM+Sans:wght@400;450;500;550;600;650;700&display=swap');
+/* Self-hosted fonts keep the app and product page independent of third-party font services.
+   See public/fonts/OFL-*.txt for the SIL Open Font Licenses. */
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('/fonts/dm-sans-latin-variable.woff2') format('woff2')}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/barlow-condensed-latin-500-normal.woff2') format('woff2')}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/barlow-condensed-latin-600-normal.woff2') format('woff2')}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/barlow-condensed-latin-700-normal.woff2') format('woff2')}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-weight:800;font-display:swap;src:url('/fonts/barlow-condensed-latin-800-normal.woff2') format('woff2')}
 @tailwind base;@tailwind components;@tailwind utilities;
 /* SCOUT theme: black + soft magenta. The near-black canvas, magenta accents and warm gold secondary
    are the project identity — team colours stay operator data and never override the chrome. */
