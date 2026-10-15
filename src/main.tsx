@@ -27,6 +27,7 @@ import {OperationsPanel} from './ops-panel';
 import {PlatformAdminPage} from './platform-admin';
 import type {PanelSessionView} from '../server/auth';
 import './style.css';
+import './landing.css';
 const OUTPUT_ROUTES=['/obs','/game'];
 // Trailing slashes are tolerated; Vite/express serve the same SPA document for either form.
 const isOutputRoute=OUTPUT_ROUTES.includes(location.pathname.replace(/\/+$/,'')||'/');
