@@ -123,10 +123,28 @@ renderer at 1920 × 1080 and scaled the way the panel scales its preview. The sc
 renderer through all nine scenes, the hero states what an applicant needs on one line beside the call
 to action, the map pool is a single strip of the nine shipped pictures, and the engineering detail
 (GSI-only architecture, the `/obs` wiring, per-map radar calibration, the control lease) lives in
-*Under the hood* below the product story. The scene list and the panel-section list come from the
+*Under the hood* below the product story — three answers up front, the rest inside one disclosure.
+The scene list and the panel-section list come from the
 panel's own catalogue (`src/panel-catalog.ts`), so the page cannot advertise a scene or a section the
 product does not have; `tests/site-preview.test.ts` renders the page and every scene to hold it to
 that.
+
+The page's own rules of restraint, which `tests/landing-design.test.ts` pins:
+
+- **The preview is the hero.** The rendered overlay takes the wider column of the hero grid and sits
+  near the top of it: the copy leads, but the first thing the eye lands on is the product.
+- **Reading size is a floor; decoration is not.** Supporting copy never drops below 11px at any
+  breakpoint, captions a little under that, and type below 9px exists only for uppercase decoration
+  (section eyebrows, the map tiles' `DE / …` codes, the preview's window chrome). The test scans
+  `src/landing.css` for `font-size` and refuses anything else.
+- **Nothing on the page pretends to be a button.** The nine map tiles are `<figure>`s with a chosen
+  crop (`MAP_POOL.focus`, the band of each 16:9 picture that actually shows the map) and a label over
+  a scrim — no arrow and no lift, because pressing one does nothing.
+- **Real-event proof is opt-in and never invented.** The community section shows an organiser's own
+  words with their tournament logo, or a short clip of their actual output, only once a human has
+  filled in `public/proof/proof.json` (see `public/proof/README.txt`) and marked each entry
+  `consent: true`. With no file — the state this repository ships — the section keeps saying
+  honestly that the beta is still gathering its first stories.
 
 - **Applications.** `POST /api/beta/apply` stores the application (rate limited per address) and the host
   prints it. An owner reviews them on the panel's **Beta applications** tab and approving mints a

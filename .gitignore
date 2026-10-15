@@ -12,6 +12,11 @@ config/overlay.json
 config/beta/
 public/uploads/*
 !public/uploads/.gitkeep
+# Real-event proof an organiser publishes on their product page (public/proof/README.txt): the
+# template and its instructions are tracked; their quotes, logos and clips are theirs, not ours.
+public/proof/*
+!public/proof/README.txt
+!public/proof/proof.example.json
 # Windows overlay shell (src-tauri): build output and Tauri's generated schemas
 src-tauri/target/
 src-tauri/core/target/

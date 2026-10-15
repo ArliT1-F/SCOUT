@@ -1,0 +1,26 @@
+{
+  "_readme": "Template only. The page reads proof.json, not this file. Copy it to proof.json and replace every bracketed placeholder with real, consented material — see README.txt in this folder.",
+  "entries": [
+    {
+      "kind": "quote",
+      "consent": false,
+      "quote": "[The organiser's own words about running their event on SCOUT, verbatim.]",
+      "name": "[First Last]",
+      "role": "[Head of broadcast]",
+      "organisation": "[Tournament or organisation name]",
+      "event": "[Event name, e.g. Spring Cup 2026]",
+      "date": "[YYYY-MM]",
+      "logo": "/proof/[organiser-logo].svg"
+    },
+    {
+      "kind": "clip",
+      "consent": false,
+      "src": "/proof/[event-clip].mp4",
+      "poster": "/proof/[event-clip-poster].jpg",
+      "caption": "[What the clip shows, e.g. the grand final's last round as it went out on air]",
+      "event": "[Event name]",
+      "organisation": "[Tournament or organisation name]",
+      "date": "[YYYY-MM]"
+    }
+  ]
+}

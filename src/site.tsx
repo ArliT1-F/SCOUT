@@ -124,16 +124,20 @@ const FEATURES=[
 ];
 // Whatever is in public/thumbs/site/ is what the page shows: the same nine included maps the
 // broadcast scenes use, resized once for the web (see public/thumbs/README.txt).
+// `focus` is the vertical anchor of each tile's crop (object-position). The shipped pictures are
+// 16:9 eye-level renders and the tiles are deliberately wider than that, so each map names the band
+// of the picture that actually shows the map: the temple on Ancient, the cooling towers on Nuke,
+// the locomotive on Train — instead of a blind centre crop that cuts whatever happens to be there.
 const MAP_POOL=[
- {file:'de_ancient',label:'Ancient'},
- {file:'de_anubis',label:'Anubis'},
- {file:'de_dust2',label:'Dust II'},
- {file:'de_inferno',label:'Inferno'},
- {file:'de_mirage',label:'Mirage'},
- {file:'de_nuke',label:'Nuke'},
- {file:'de_overpass',label:'Overpass'},
- {file:'de_train',label:'Train'},
- {file:'de_vertigo',label:'Vertigo'},
+ {file:'de_ancient',label:'Ancient',focus:'50% 35%'},
+ {file:'de_anubis',label:'Anubis',focus:'50% 45%'},
+ {file:'de_dust2',label:'Dust II',focus:'50% 50%'},
+ {file:'de_inferno',label:'Inferno',focus:'50% 45%'},
+ {file:'de_mirage',label:'Mirage',focus:'50% 55%'},
+ {file:'de_nuke',label:'Nuke',focus:'50% 25%'},
+ {file:'de_overpass',label:'Overpass',focus:'50% 40%'},
+ {file:'de_train',label:'Train',focus:'50% 60%'},
+ {file:'de_vertigo',label:'Vertigo',focus:'50% 30%'},
 ];
 const STEPS=[
  {title:'Apply',body:'Tell us who you are and what you broadcast. The application takes about a minute.'},
@@ -150,16 +154,74 @@ const FAQ=[
 ];
 // The engineering, deliberately below the product story. Someone choosing an overlay for their cup
 // needs to know it will not touch the game; someone wiring OBS at 2am needs the port and the rules.
-const UNDER_THE_HOOD=[
+// So the section leads with the three answers a buyer actually needs, and keeps the deeper detail
+// (radar calibration, recording, the panel's section list) one disclosure further down, where it
+// stops competing with the product story above it.
+const HOOD_HIGHLIGHTS=[
  {icon:ShieldCheck,title:'GSI only, by architecture',body:'CS2 pushes its own game state to a local HTTP feed; SCOUT reads that and nothing else — no injection, no memory reading, no hooks, nothing for an anti-cheat to look at.'},
  {icon:Monitor,title:'Wired into OBS, not into the game',body:'One Browser Source on /obs at 1920 × 1080, no custom CSS, and the live scene is transparent. Optional two-way scene switching with OBS Studio over obs-websocket keeps your OBS scene and the broadcast scene together.'},
- {icon:SlidersHorizontal,title:'Radar calibration per map',body:'posX, posY and scale live per map in config/radars.json, measured once in Map radars. The nine included maps ship pre-filled from the cs2-map-icons pack; a custom map is a drop-in file, not a code change.'},
  {icon:Users,title:'Several operators, one broadcast',body:'Per-operator tokens, a 45-second control lease that stops two people driving at once, and an audit trail of who switched what and when.'},
+];
+const HOOD_DEEPER=[
+ {icon:SlidersHorizontal,title:'Radar calibration per map',body:'posX, posY and scale live per map in config/radars.json, measured once in Map radars. The nine included maps ship pre-filled from the cs2-map-icons pack; a custom map is a drop-in file, not a code change.'},
  {icon:ArchiveIcon,title:'Recording, archives and replay',body:'GSI recording, round-by-round archives and replay previews, stored on the observer machine. Nothing is uploaded to us.'},
 ];
+// ------------------------------------------------------------------ real-event proof
+// The one thing a gradient cannot buy: evidence that a real broadcast ran on SCOUT. An organiser's
+// own words with their own tournament logo, or a short clip of their actual output, are worth more
+// than anything this page can draw — and unlike anything this page can draw, they have to be true.
+//
+// So the page does not invent them. It reads public/proof/proof.json (see public/proof/README.txt),
+// a file a human fills in with material the organiser has agreed to see published, and renders
+// exactly that. No file, an unreadable file, or an entry without `consent: true` renders nothing at
+// all, and the section keeps saying honestly that the beta is still gathering its first stories.
+// The fetch is same-origin and static, so a marketing site with no host behind it shows proof too.
+type ProofEntry={kind:'quote'|'clip';consent?:boolean;quote?:string;name?:string;role?:string;organisation?:string;event?:string;date?:string;logo?:string;src?:string;poster?:string;caption?:string};
+function useBroadcastProof(){
+ const [entries,setEntries]=useState<ProofEntry[]>([]);
+ useEffect(()=>{
+  let mounted=true;
+  (async()=>{
+   let list:ProofEntry[]=[];
+   try{
+    const res=await fetch('/proof/proof.json',{headers:{Accept:'application/json'}});
+    // A host with no proof file answers this with the SPA document (text/html), so the content type
+    // — not the status — is what says whether anyone published anything.
+    if(res.ok&&(res.headers.get('content-type')||'').includes('application/json')){
+     const body=await res.json();
+     // Only entries a human marked as consented, and only shapes the page knows how to show.
+     list=(Array.isArray(body?.entries)?body.entries:[]).filter((entry:ProofEntry)=>entry&&entry.consent===true&&(entry.kind==='quote'&&!!entry.quote?.trim()||entry.kind==='clip'&&!!entry.src?.trim()));
+    }
+   }catch{/* no proof published yet — the section says so itself */}
+   if(mounted)setEntries(list);
+  })();
+  return()=>{mounted=false};
+ },[]);
+ return entries;
+}
+function ProofCard({entry}:{entry:ProofEntry}){
+ if(entry.kind==='clip')return <figure className="landing-proof-clip">
+  <video controls preload="none" playsInline poster={entry.poster||undefined} src={entry.src}/>
+  <figcaption><b>{entry.event||entry.organisation||'A real SCOUT broadcast'}</b>{(entry.caption||entry.organisation)&&<span>{[entry.caption,entry.organisation,entry.date].filter(Boolean).join(' · ')}</span>}</figcaption>
+ </figure>;
+ return <figure className="landing-proof-quote">
+  {entry.logo&&<img src={entry.logo} alt={`${entry.organisation||entry.event||'The organiser'}'s logo`} loading="lazy" decoding="async"/>}
+  <blockquote>{entry.quote}</blockquote>
+  <figcaption><b>{entry.name||entry.organisation||entry.event}</b><span>{[entry.role,entry.organisation,entry.event,entry.date].filter(Boolean).join(' · ')}</span></figcaption>
+ </figure>;
+}
+function BroadcastProof({entries}:{entries:ProofEntry[]}){
+ if(!entries.length)return null;
+ return <div className="landing-proof-real">
+  <span className="site-section-eyebrow">FROM REAL EVENTS</span>
+  <div className="landing-proof-grid">{entries.slice(0,4).map((entry,index)=><ProofCard entry={entry} key={index}/>)}</div>
+  <small>Published with each organiser's permission, in their own words and their own artwork. Clips are recordings of the overlay as it went out on air.</small>
+ </div>;
+}
 export function LandingPage(){
  const {status,offline}=useBetaStatus();
  const onHost=!offline&&!!status?.host;
+ const proof=useBroadcastProof();
  // The scene the reader picked in the tour. The frame renders it with the product's own renderer,
  // so the page never has to be updated by hand when a scene changes.
  const [scene,setScene]=useState<SceneId>('live');
@@ -170,7 +232,7 @@ export function LandingPage(){
   const root=landingRef.current;
   if(!root||typeof IntersectionObserver==='undefined'||window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
   const observer=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){entry.target.classList.add('is-visible');observer.unobserve(entry.target)}},{threshold:.08});
-  root.querySelectorAll('.site-section-head,.site-card,.site-step,.site-map-chip,.landing-benefit,.landing-price,.site-final').forEach((node,index)=>{
+  root.querySelectorAll('.site-section-head,.site-card,.site-step,.site-map-chip,.landing-benefit,.landing-price,.site-final,.site-how-more').forEach((node,index)=>{
    (node as HTMLElement).style.setProperty('--reveal-delay',`${index%3*65}ms`);
    node.classList.add('reveal-ready');observer.observe(node);
   });
@@ -250,8 +312,10 @@ export function LandingPage(){
     <img loading="lazy" decoding="async" className="site-scatter scatter-m4" src="/assets/m4a1-s.png" alt="" aria-hidden="true"/>
     <div className="site-section-head"><span className="site-section-eyebrow">THE MAP POOL</span><h2>Familiar battlegrounds.<br/>A fresh perspective.</h2><p>From Mirage to Ancient, your map graphics are already in the box. Nine map images and calibrated radars, ready for your next series.</p></div>
     <div className="site-map-strip">{MAP_POOL.map(map=><figure className="site-map-chip" key={map.file}>
-     <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} loading="lazy" decoding="async"/>
-     <figcaption><span><small>{map.file.replace('de_','DE / ').toUpperCase()}</small><b>{map.label}</b></span><ArrowUpRight size={17}/></figcaption>
+     {/* The tiles are figures, not links: nothing happens when you press one, so nothing on them
+         (no arrow, no lift) pretends otherwise. The crop anchor comes from MAP_POOL.focus. */}
+     <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} loading="lazy" decoding="async" style={{objectPosition:map.focus}}/>
+     <figcaption><span><small>{map.file.replace('de_','DE / ').toUpperCase()}</small><b>{map.label}</b></span></figcaption>
     </figure>)}</div>
    </section>
    <section className="site-section landing-benefits" id="benefits">
@@ -272,12 +336,18 @@ export function LandingPage(){
    </section>
    <section className="site-section site-how" id="how">
     <img loading="lazy" decoding="async" className="site-scatter scatter-ct" src="/assets/cs2-ct.png" alt="" aria-hidden="true"/>
-    <div className="site-section-head"><span className="site-section-eyebrow">UNDER THE HOOD</span><h2>How the overlay actually works</h2><p>The detail a technical lead asks about before anything gets installed on a tournament machine.</p></div>
-    <div className="site-how-grid">{UNDER_THE_HOOD.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
-    <div className="site-panel-map">
-     <div><b>Inside the operator panel</b><p>{PANEL_SECTIONS.length} sections, one for every job a broadcast has — and the panels marked <em>owner</em> only open for the account that owns the installation.</p></div>
-     <div className="site-panel-chips">{PANEL_SECTIONS.map(({name,icon:Icon,ownerOnly})=><span key={name}><Icon size={13}/>{name}{ownerOnly&&<em>owner</em>}</span>)}</div>
-    </div>
+    <div className="site-section-head"><span className="site-section-eyebrow">UNDER THE HOOD</span><h2>How the overlay actually works</h2><p>The three answers a technical lead needs before anything gets installed on a tournament machine — the rest is one tap away.</p></div>
+    <div className="site-how-grid">{HOOD_HIGHLIGHTS.map(({icon:Icon,title,body})=><article className="site-card site-how-card" key={title}><span className="site-card-icon"><Icon size={16}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
+    <details className="site-how-more">
+     <summary><span><b>Deeper detail</b><small>Radar calibration, recording &amp; replay, and every section of the operator panel</small></span><ChevronRight size={15}/></summary>
+     <div className="site-how-more-body">
+      <div className="site-how-grid">{HOOD_DEEPER.map(({icon:Icon,title,body})=><article className="site-card site-how-card" key={title}><span className="site-card-icon"><Icon size={16}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
+      <div className="site-panel-map">
+       <div><b>Inside the operator panel</b><p>{PANEL_SECTIONS.length} sections, one for every job a broadcast has — and the panels marked <em>owner</em> only open for the account that owns the installation.</p></div>
+       <div className="site-panel-chips">{PANEL_SECTIONS.map(({name,icon:Icon,ownerOnly})=><span key={name}><Icon size={13}/>{name}{ownerOnly&&<em>owner</em>}</span>)}</div>
+      </div>
+     </div>
+    </details>
    </section>
    {onHost&&<section className="site-section site-host-card">
     <div className="site-host-left"><span className="site-host-pill"><span className="status-dot"/>SERVED BY YOUR HOST</span><b>This page is being served by a SCOUT host on {status?.host}</b><p>The account service behind it is running {status?.mode==='hosted'?'on a hosted backend, with this host proxying the account calls.':'in local mode: applications, invites and launcher links are stored on this machine.'}</p></div>
@@ -287,8 +357,11 @@ export function LandingPage(){
     <div className="site-section-head"><span className="site-section-eyebrow">SMALL CREW. SMALLER BARRIER TO ENTRY.</span><h2>Your next broadcast.<br/>On us, during the beta.</h2><p>We’re opening access a few organisers at a time. Help shape SCOUT around real events, real workflows, and the details that matter on match day.</p><div className="landing-pricing-note"><ShieldCheck size={20}/><span>The overlay runs on your machine.<br/><b>Your match data stays there, too.</b></span></div></div>
     <article className="landing-price"><div className="landing-price-top"><span>SCOUT CLOSED BETA</span><span className="landing-price-badge">EARLY ACCESS</span></div><div className="landing-price-value">€0<span>/ during closed beta</span></div><p>A complete broadcast toolkit. A chance to shape what’s next.</p><ul>{['Live HUD + eight full-canvas scenes','Overlay Studio & team customisation','Nine included maps & calibrated radars','Multi-operator roles & local recording','Windows launcher with bundled runtime'].map(item=><li key={item}><Check size={16}/>{item}</li>)}</ul><a className="button primary" href="/apply">Apply for free access<ArrowUpRight size={16}/></a><small>Human-reviewed applications. Access by invitation.<br/>No paid plans are currently offered.</small></article>
    </section>
-   <section className="site-section landing-feedback" id="community" aria-labelledby="feedback-heading">
-    <span className="landing-feedback-icon"><Quote size={24}/></span><div><span className="site-section-eyebrow">THE NEXT CHAPTER IS YOURS</span><h2 id="feedback-heading">Built with organisers.<br/>Not just for them.</h2><p>SCOUT is in closed beta. We’re gathering real event feedback before sharing customer stories. Bring your next tournament, tell us what works, and help shape what comes next.</p></div><a className="button" href="/apply">Be part of the beta<ArrowUpRight size={15}/></a>
+   <section className="site-section landing-community" id="community" aria-labelledby="feedback-heading">
+    <BroadcastProof entries={proof}/>
+    <div className="landing-feedback">
+     <span className="landing-feedback-icon"><Quote size={24}/></span><div><span className="site-section-eyebrow">THE NEXT CHAPTER IS YOURS</span><h2 id="feedback-heading">Built with organisers.<br/>Not just for them.</h2>{proof.length?<p>SCOUT is in closed beta, and the organisers above ran it at a real event. Bring your next tournament, tell us what works, and help shape what comes next.</p>:<p>SCOUT is in closed beta. We’re gathering real event feedback before sharing customer stories. Bring your next tournament, tell us what works, and help shape what comes next.</p>}</div><a className="button" href="/apply">Be part of the beta<ArrowUpRight size={15}/></a>
+    </div>
    </section>
    <section className="site-section" id="faq">
     <div className="site-section-head"><span className="site-section-eyebrow">FAQ</span><h2>Good questions.<br/>Straight answers.</h2></div>
