@@ -206,8 +206,9 @@ if(options.shell){
   }
   shellExe=path.join(repoRoot,'src-tauri','target','release','scout-shell.exe');
   if(!built||!existsSync(shellExe)){
-    warn('the overlay shell was not built, so the installer will ship without scout-shell.exe '+
-         '(the OBS browser source still works; run with --no-shell to make this intentional)');
+    warn('the overlay shell was not built, so the installer will ship without scout-shell.exe. '+
+         'Its shortcuts and postinstall entry then start the host with its console instead, and '+
+         'the OBS browser source still works (run with --no-shell to make this intentional)');
     shellExe='';
   }else{
     log(`  scout-shell.exe ${megabytes(statSync(shellExe).size)}`);
@@ -371,6 +372,7 @@ if(options.installer){
          'Build with a runtime (default, --runtime-zip <file>), or put node.exe in the staging '+
          'runtime directory yourself, or pass --no-installer to stop after staging.');
   banner('Packing the wizard with Inno Setup');
+  checkInstallerScript();
   const iscc=options.iscc||findIscc();
   if(!iscc) fail('ISCC.exe was not found. Install Inno Setup 6.3 or newer '+
                  '(https://jrsoftware.org/isdl.php), or pass --iscc <path to ISCC.exe>.');
@@ -446,6 +448,25 @@ function extractNodeExe(zipPath,target){
   const version=spawnSync(target,['--version'],{stdio:['ignore','pipe','ignore']});
   if(version.status===0) log(`  ${target} reports ${version.stdout.toString().trim()}`);
   rmSync(scratch,{recursive:true,force:true});
+}
+
+// ISPP - Inno's preprocessor - reads every line whose first non-blank character is '#' as one of
+// its own directives, in [Code] too. A Pascal character constant carried over to the next line
+// ("#13#10 + ...") therefore stops ISCC with "Unknown preprocessor directive", a message that
+// points at a line that looks perfectly valid Pascal. Catch that here, before ISCC does.
+function checkInstallerScript(){
+  const file=path.join(repoRoot,'installer','scout.iss');
+  const lines=readFileSync(file,'utf8').split(/\r?\n/);
+  const start=lines.findIndex(line=>/^\s*\[Code\]\s*$/i.test(line));
+  if(start<0) fail(`installer/scout.iss has no [Code] section - the script is not the one this build expects.`);
+  for(let i=start+1;i<lines.length;i++){
+    if(/^\s*#\d/.test(lines[i])){
+      fail(`installer/scout.iss:${i+1}: a [Code] line starts with a character constant.\n`+
+           `Inno's preprocessor reads the leading "#" as a directive and ISCC stops with "Unknown `+
+           `preprocessor directive".\nKeep #13#10 (and any other #nn constant) inside the expression:\n\n`+
+           `  ${lines[i].trim()}`);
+    }
+  }
 }
 
 function findIscc(){

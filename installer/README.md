@@ -71,7 +71,7 @@ port and token, and adds the firewall rule if that task is ticked.
 | Program files | `%LOCALAPPDATA%\Programs\SCOUT` (per-user default; "install for all users" puts it under `C:\Program Files`) |
 | Data directory | `%APPDATA%\SCOUT` — `config\`, `public\uploads\`, `public\radars\`, `public\thumbs\`, `recordings\`, the launcher and the token/port files. It belongs to the account that ran the installer, so on a shared machine install it while logged in as the operator (the default, per-user install, always does) |
 | CS2 config | `<Steam>\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\gamestate_integration_overlay.cfg` (legacy `csgo\cfg` is detected too) |
-| Shortcuts | One primary entry — **SCOUT** — which is the launcher: it starts the host if needed, opens the control panel and shows the overlay over CS2 (F9 panel, F8 overlay, Ctrl+Shift+F8 quit). Below it, for advanced use: *SCOUT control panel (in your browser)*, *SCOUT host (advanced: shows the log)* and *Stop SCOUT*. Desktop: SCOUT (optional). |
+| Shortcuts | One primary entry — **SCOUT** — which is the launcher: it starts the host if needed, opens the control panel and shows the overlay over CS2 (F9 panel, F8 overlay, Ctrl+Shift+F8 quit). Below it, for advanced use: *SCOUT control panel (in your browser)*, *SCOUT host (advanced: shows the log)* and *Stop SCOUT*. Desktop: SCOUT (optional). A build without `scout-shell.exe` (`--no-shell`, or a cargo build that failed) makes the primary and desktop entries start `scout-host.cmd` instead, so the host's console is what opens; the wizard checks the staged tree and picks the entry that can actually run. |
 | Firewall rule | `SCOUT host` — inbound TCP on the chosen port, scoped to `…\SCOUT\runtime\node.exe`, all profiles |
 
 The split between program files and data directory is deliberate: `C:\Program Files` is not
@@ -131,7 +131,11 @@ tree is small (≈6 MB: express, ws, zod; the panel's UI libraries are already i
 bundle and are trimmed with a guard that fails the build if the server ever imports one), and the
 staging script runs end to end with `--no-shell --no-runtime --no-webview2 --no-installer`.
 
-**Not verified**: `installer\scout.iss` has never been compiled by ISCC, and the wizard has never
-run on Windows. Expect to fix a line or two on the first `npm run package:windows` — the places
-worth checking first are Inno's wizard-page APIs (`CreateInputQueryPage`, `CreateInputDirPage`) and
-the `netsh` quoting.
+**Not verified**: the wizard has never been run on Windows. The first ISCC run (6.7.3) stopped in
+the preprocessor; both causes are fixed. A `[Code]` continuation line began with `#13#10`, which
+ISPP reads as a directive of its own, and the script called `Randomize`, which Inno Setup does not
+provide (`Random(Range)` is seeded by setup itself and has used the OS CSPRNG since 6.6). The
+script's calls, constants and wizard-page APIs were then checked against Inno Setup 6.7.3's own
+support-function tables, and `npm run package:windows` refuses to run ISCC if a `[Code]` line ever
+starts with a character constant again. What remains unverified is the wizard itself: the pages,
+the CS2 detection and the `netsh` quoting have to be walked through on a real Windows machine.
