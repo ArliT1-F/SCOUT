@@ -346,6 +346,19 @@ fn program_root(data: &std::path::Path) -> Option<std::path::PathBuf> {
         if path.join("host").join("server").join("index.js").is_file() {
             return Some(path);
         }
+        // Historic app-root.txt points at {app}/host (the smoke-test layout). Normalize
+        // to the program-files root {app} so runtime/node.exe and host/server/index.js
+        // resolve correctly, and support a direct server/index.js layout if it exists.
+        if path.join("server").join("index.js").is_file() {
+            if let Some(parent) = path.parent() {
+                if parent.join("host").join("server").join("index.js").is_file()
+                    || parent.join("runtime").join("node.exe").is_file()
+                {
+                    return Some(parent.to_path_buf());
+                }
+            }
+            return Some(path);
+        }
     }
     let exe = std::env::current_exe().ok()?;
     let host_dir = exe.parent()?;

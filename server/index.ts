@@ -22,7 +22,7 @@ import {controlsSchema,defaultControls,SCENE_IDS,type Controls} from './controls
 import {ObsBridge} from './obs.js';
 import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './obs-config.js';
 import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
-import {appPath} from './runtime.js';
+import {appPath,resolveDistDir} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
@@ -1023,8 +1023,29 @@ app.post('/api/obs/refresh-overlay',async(req,res)=>{
  if(!permit(res,'control')||!requireControl(req,res))return;
  try {const refreshed=await obs.refreshOverlay();audit.record(accessPrincipal(res),'obs.overlay.refresh',refreshed.join(', '));res.json({refreshed})}catch(error:any){res.status(502).json({error:error.message})}
 });
-if(process.env.NODE_ENV==='production'){app.use(express.static(appPath('dist')));app.get('*',(_req,res)=>res.sendFile(appPath('dist','index.html')))}else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true,allowedHosts:true},appType:'spa'});app.use(vite.middlewares)}
-app.use((err:any,_req:any,res:any,_next:any)=>{res.status(err.status||500).json({error:err.status===400?'Invalid JSON':'Request failed'})});
+if(process.env.NODE_ENV==='production'){
+  const distDir=resolveDistDir();
+  // Log once so a mis-configured SCOUT_APP_ROOT is diagnosable from the host log
+  // without opening the browser — the previous generic 500 hid the cause.
+  const { existsSync: _exists } = await import('node:fs');
+  if(!_exists(distDir)) console.error(`[host] panel assets not found — looked in ${appPath('dist')} and ${appPath('host','dist')} (SCOUT_APP_ROOT=${process.env.SCOUT_APP_ROOT||'(cwd)'} cwd=${process.cwd()})`);
+  else console.log(`[host] serving panel from ${distDir}`);
+  app.use(express.static(distDir));
+  app.get('*',(_req,res)=>{
+    const indexFile=path.join(distDir,'index.html');
+    res.sendFile(indexFile,err=>{
+      if(err){
+        console.error(`[host] failed to serve ${indexFile}: ${err.message}`);
+        if(!res.headersSent) res.status(500).json({error:`Panel assets missing at ${indexFile} — reinstall SCOUT or check SCOUT_APP_ROOT`});
+      }
+    });
+  });
+}else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true,allowedHosts:true},appType:'spa'});app.use(vite.middlewares)}
+app.use((err:any,_req:any,res:any,_next:any)=>{
+  // Log the real cause — the previous generic message hid missing-dist and JSON errors.
+  console.error(`[host] request error: ${err?.message||err} status=${err?.status||500} stack=${err?.stack||''}`);
+  res.status(err.status||500).json({error:err.status===400?'Invalid JSON':'Request failed'});
+});
 // A packaged install starts the host from a launcher (installer/README.md). Recording the process id
 // lets scout-stop.cmd - and the uninstaller - stop this host instead of guessing among node
 // processes; the value is only ever used after checking it is really a node.exe. A checkout never

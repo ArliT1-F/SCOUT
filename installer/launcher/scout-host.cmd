@@ -19,8 +19,25 @@ set "SCOUT_DATA=%~dp0"
 
 if not exist "%SCOUT_DATA%app-root.txt" goto :broken
 set /p SCOUT_APP_ROOT=<"%SCOUT_DATA%app-root.txt"
-if not exist "%SCOUT_APP_ROOT%\runtime\node.exe" goto :broken
-if not exist "%SCOUT_APP_ROOT%\host\server\index.js" goto :broken
+
+rem Resolve the bundled host and runtime for both historic and current layouts:
+rem   old: SCOUT_APP_ROOT={app}, host at {app}\host\server\index.js, runtime at {app}\runtime\node.exe
+rem   new: SCOUT_APP_ROOT={app}\host, host at {app}\host\server\index.js, runtime at {app}\runtime\node.exe
+set "SCOUT_HOST_JS="
+set "SCOUT_NODE="
+if exist "%SCOUT_APP_ROOT%\server\index.js" (
+  set "SCOUT_HOST_JS=%SCOUT_APP_ROOT%\server\index.js"
+  if exist "%SCOUT_APP_ROOT%\runtime\node.exe" set "SCOUT_NODE=%SCOUT_APP_ROOT%\runtime\node.exe"
+  if exist "%SCOUT_APP_ROOT%\..\runtime\node.exe" set "SCOUT_NODE=%SCOUT_APP_ROOT%\..\runtime\node.exe"
+)
+if not defined SCOUT_HOST_JS (
+  if exist "%SCOUT_APP_ROOT%\host\server\index.js" (
+    set "SCOUT_HOST_JS=%SCOUT_APP_ROOT%\host\server\index.js"
+    if exist "%SCOUT_APP_ROOT%\runtime\node.exe" set "SCOUT_NODE=%SCOUT_APP_ROOT%\runtime\node.exe"
+  )
+)
+if not defined SCOUT_HOST_JS goto :broken
+if not defined SCOUT_NODE goto :broken
 
 set "PORT=8080"
 if exist "%SCOUT_DATA%port.txt" set /p PORT=<"%SCOUT_DATA%port.txt"
@@ -38,7 +55,7 @@ echo   OBS browser source:         http://127.0.0.1:%PORT%/obs
 echo   Press Ctrl+C to stop. (If Windows asks about terminating the batch job, answer Y.)
 echo.
 
-"%SCOUT_APP_ROOT%\runtime\node.exe" "%SCOUT_APP_ROOT%\host\server\index.js"
+"%SCOUT_NODE%" "%SCOUT_HOST_JS%"
 set "SCOUT_EXIT=%ERRORLEVEL%"
 
 echo.
@@ -49,8 +66,11 @@ exit /b %SCOUT_EXIT%
 :broken
 echo.
 echo   SCOUT cannot start: the installation looks incomplete.
-echo   Expected %SCOUT_APP_ROOT%\host\server\index.js and %SCOUT_APP_ROOT%\runtime\node.exe
+echo   Checked SCOUT_APP_ROOT=%SCOUT_APP_ROOT%
+echo   Looked for host at %SCOUT_APP_ROOT%\server\index.js or %SCOUT_APP_ROOT%\host\server\index.js
+echo   and runtime at %SCOUT_APP_ROOT%\runtime\node.exe or %SCOUT_APP_ROOT%\..\runtime\node.exe
 echo   Run SCOUT-Setup.exe again - it repairs missing program files and keeps your data.
+echo   If the problem persists, open %SCOUT_DATA%scout-host.log (shell) or check the host output above.
 echo.
 pause
 exit /b 1
