@@ -1,15 +1,16 @@
 # Getting SCOUT running
 
 This page is for the person sitting at the observer machine, not for a programmer. It assumes you
-have Windows and the file your SCOUT dashboard gave you: **`SCOUT-Setup-0.1.0.exe`** (the version in
-the name is whatever was released last). Nothing here needs a command prompt, Node.js, or any
-programming tool.
+have Windows and the file the SCOUT website gave you after your account was approved:
+**`SCOUT-Setup-0.1.0.exe`** (the version in the name is whatever was released last). Nothing here
+needs a command prompt, Node.js, or any programming tool.
 
 If you are the one *building* that installer, you want [RELEASE.md](RELEASE.md) instead.
 
 ## 1. Install it
 
-1. Open your SCOUT dashboard in a browser, sign in, and press **Download the launcher**.
+1. Open the SCOUT website's download page (`/download`) in a browser, sign in, and press **Download
+   the launcher**.
 2. Double-click the downloaded file.
 3. Windows will show a blue box saying **"Windows protected your PC"**, because SCOUT's installer is
    not signed with a paid certificate yet. Press **More info → Run anyway**. This is expected, and
@@ -32,6 +33,10 @@ There is one icon in the Start menu and, if you asked for it, on the desktop:
 
 > **SCOUT** — press it. It starts everything: the CS2 feed, the control panel window, and the overlay
 > that sits on top of CS2. The first start takes a few seconds. Nothing else needs starting.
+
+The launcher window opens on the app's own dashboard once the host answers: your account, your
+tournaments, the launcher link and linked devices. There is no dashboard on the website — it only
+carries the landing page, the application form, sign-in and the download.
 
 | Key | What it does |
 | --- | --- |
@@ -56,7 +61,8 @@ The panel is where matches are set up. The tabs you will touch first:
   a chroma key and do not add Custom CSS: SCOUT's overlay is transparent by itself.
 - **Launcher link** (in the sidebar) — links *this installation* to your SCOUT account, so the panel
   can tell you whether the launcher is still allowed to run. Press **Link this installation**, then
-  open your dashboard in a browser and approve the code shown.
+  approve the code in the app dashboard's **Launcher link** card — or sign in on the website and
+  follow the link it prints.
 
 Nothing about a match leaves your computer: SCOUT reads the game's own Game State Integration feed
 (which CS2 sends to `127.0.0.1`), and the only thing it ever asks the internet is the account service.

@@ -3,7 +3,7 @@
 # Push a tag (`git tag v0.4.0 && git push origin v0.4.0`) or run this workflow with an explicit
 # version. The installer is built on windows-latest by installer/README.md's own script — the same
 # `npm run package:windows` an operator would run, including its smoke test — and the resulting file
-# is attached to a GitHub release. That release is what the dashboard hands out by default
+# is attached to a GitHub release. That release is what the download page hands out by default
 # (DEFAULT_DOWNLOAD_URL in server/beta.ts), unless an operator publishes their own build from the
 # panel's Operations tab (docs/RELEASE.md).
 name: Release

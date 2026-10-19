@@ -29,6 +29,11 @@ import {LicenceMonitor} from './licensing.js';
 import {PlatformStore,isPlatformOwner,platformOwnerEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash} from './platform.js';
 import {PlatformDeviceService,PlatformSyncAgent,SyncOutbox} from './platform-sync.js';
 import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
+import {loadEnvFile} from './env.js';
+// Optional `.env` next to the working directory (copy .env.example). Real environment variables win;
+// a missing file is silent. This runs before any setting below is read, so `npm start` needs no shell
+// wrapper on Windows and systemd units can keep using EnvironmentFile=.
+loadEnvFile();
 const app=express();
 // Routes are matched case-sensitively, like the gate below: otherwise `/API/controls` reaches the handler while
 // the gate, which looks for `/api/`, never sees it (found by the route audit, docs/API-AUDIT.md).
@@ -251,7 +256,8 @@ function privateRead(req:express.Request,res:express.Response,capability:PanelCa
 app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
  const at=Date.now();
  res.on('finish',()=>requests.record({at,method:req.method,path:req.path,status:res.statusCode,ms:Date.now()-at,address:req.socket.remoteAddress||''}));
- if(req.path.startsWith('/download/')&&req.method==='GET'&&res.statusCode<400) void releases.noteDownload(req.path.replace('/download/',''));
+ const downloaded=req.path.startsWith('/download/')?req.path.slice('/download/'.length):'';
+ if(downloaded&&req.method==='GET'&&res.statusCode<400) void releases.noteDownload(downloaded);
  next();
 });
 app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
@@ -346,7 +352,13 @@ app.use('/radars',express.static('public/radars'));
 app.use('/thumbs',express.static('public/thumbs'));
 // Installer drop folder: `npm run package:windows` writes SCOUT-Setup-<version>.exe, an operator
 // copies it here and publishes it from the Operations tab. Kept out of git like the recordings.
-app.use('/download',express.static('public/download',{fallthrough:false}));
+// `/download` itself is the website's download page (src/site.tsx), so the folder is served without
+// an index or a directory redirect: the bare page falls through to the SPA, a missing file is 404.
+app.use('/download',express.static('public/download',{index:false,redirect:false}));
+app.use('/download',(req,res,next)=>{
+ if(req.path==='/'||req.path===''){next();return}
+ res.status(404).type('text/plain').send('Not found');
+});
 // A licence check needs no panel session: it is about a file this machine already holds, and the
 // launcher (src-tauri) asks for it before it draws anything over the game.
 app.get('/api/beta/license',async(req,res)=>{
@@ -1034,7 +1046,10 @@ if(process.env.NODE_ENV==='production'){
   const { existsSync: _exists } = await import('node:fs');
   if(!_exists(distDir)) console.error(`[host] panel assets not found — looked in ${appPath('dist')} and ${appPath('host','dist')} (SCOUT_APP_ROOT=${process.env.SCOUT_APP_ROOT||'(cwd)'} cwd=${process.cwd()})`);
   else console.log(`[host] serving panel from ${distDir}`);
-  app.use(express.static(distDir));
+  // No directory redirects: `dist/download` is the build-time copy of the installer folder, and a
+  // redirect would turn the website's `/download` page into `/download/`. The SPA catch-all below
+  // serves the page for both spellings; a real file is served by the `/download` mount above.
+  app.use(express.static(distDir,{redirect:false}));
   app.get('*',(_req,res)=>{
     const indexFile=path.join(distDir,'index.html');
     res.sendFile(indexFile,err=>{

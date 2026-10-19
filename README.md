@@ -1,6 +1,6 @@
 # SCOUT — CS2 broadcast overlay
 
-External Node GSI host, React/TypeScript operator dashboard, a transparent scoreboard HUD for an OBS Browser Source, config-driven full-canvas broadcast scenes, an optional OBS WebSocket bridge and an optional Windows overlay shell. No memory reading, injection, game hooks, or chroma key.
+External Node GSI host, the SCOUT app (React/TypeScript control panel, dashboard and overlay settings) and a transparent scoreboard HUD for an OBS Browser Source, config-driven full-canvas broadcast scenes, an optional OBS WebSocket bridge and an optional Windows overlay shell. No memory reading, injection, game hooks, or chroma key.
 
 ## Run
 
@@ -14,6 +14,17 @@ npm run build
 npm start                   # serves production build
 npm run shell:test          # Rust: the overlay shell's decision logic (needs only a Rust toolchain)
 ```
+
+Settings are environment variables (table in [Operator access, roles and control handoff](#operator-access-roles-and-control-handoff)).
+To set them without a shell wrapper, copy the template and edit it:
+
+```sh
+cp .env.example .env        # optional; every setting has a default
+```
+
+The host, `npm run replay` and `npm run account-service` read `.env` from their working directory
+(`%APPDATA%\SCOUT\.env` in a Windows install). Real environment variables always win, the file is
+gitignored, and `SCOUT_ENV_FILE` points at a different path.
 
 ### Install on a Windows observer machine
 
@@ -33,7 +44,7 @@ Building it needs Windows (or those tools), Rust with `cargo install tauri-cli -
 Inno Setup 6.3+; what the wizard asks, where every file lands and what has and has not been verified
 are in [`installer/README.md`](installer/README.md).
 
-Routes: `/` and `/admin` operator panel; `/?remote=1` touch-first remote console; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
+Routes: the app's dashboard at `/app` (account, tournaments, launcher link, linked devices); its control panel at `/` and `/panel` (teams, maps, scenes and every overlay setting); `/?remote=1` touch-first remote console; `/obs` transparent 1920×1080 design canvas; `/game` shared letterboxed renderer (also what the [Windows overlay shell](#windows-overlay-shell-tauri-v2-optional) displays). Both outputs scale uniformly into the available viewport. The admin's illustrative backdrop and sample players are **preview only**. The public website is `/welcome`, `/apply`, `/login` and `/download`; `/admin` is the SCOUT owner's desk. None of the app's settings live on it. Output routes never use sample match data. No active GSI for 5 seconds shows SIGNAL LOST and clears displayed game data.
 
 ### Operator access, roles and control handoff
 
@@ -71,10 +82,12 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 | `SCOUT_BETA_DIR` | Where the local account store lives when no hosted service is configured (default `config/beta/`, gitignored). |
 | `SCOUT_OWNER_EMAIL` | The SCOUT platform owner's account email: only that signed-in account may use `/admin`, decide whitelist applications and change platform settings (per-user tournament limit, public stats). See docs/PLATFORM.md. |
 | `SCOUT_BETA_AUTO_APPROVE=1` | Development only: approves applications the moment they arrive instead of waiting for an owner. |
-| `SCOUT_DOWNLOAD_URL`, `SCOUT_DOWNLOAD_VERSION`, `SCOUT_DOWNLOAD_NOTES` | What the dashboard's download card points at (default: this repository's GitHub releases). A release published in the panel's **Operations** tab overrides it; see [docs/RELEASE.md](docs/RELEASE.md). |
+| `SCOUT_DOWNLOAD_URL`, `SCOUT_DOWNLOAD_VERSION`, `SCOUT_DOWNLOAD_NOTES` | What the website's `/download` page offers an approved account (default: this repository's GitHub releases). A release published in the panel's **Operations** tab overrides it; see [docs/RELEASE.md](docs/RELEASE.md). |
 | `SCOUT_REQUIRE_LICENCE=1` | Makes `GET /api/beta/license` authoritative: the launcher hides its overlay while the answer is a refusal. Off by default — a licence server outage must never take a broadcast off air. |
 | `SCOUT_ACCOUNT_DB`, `SCOUT_ACCOUNT_APPLICATIONS`, `SCOUT_ACCOUNT_REVIEW_NOTE`, `SCOUT_ACCOUNT_NAME` | The hosted account service (`npm run account-service`): SQLite location, **initial seeds only** for applications-open/review-note, and service name. Live settings are owned by `/admin` (set the same `SCOUT_OWNER_EMAIL` on the service and central host). [docs/ACCOUNT-SERVICE.md](docs/ACCOUNT-SERVICE.md). |
+| `SCOUT_ENV_FILE` | Path of the `.env` file to read instead of `./.env` (absolute, or relative to the working directory). |
 
+- **`.env` is optional.** Copy `.env.example` to `.env` to set any of the variables above without a shell wrapper. The host, `npm run replay` and `npm run account-service` load it once at startup; a name already present in the real environment is never overwritten, so `SCOUT_OWNER_EMAIL=… npm start` beats a stale file. A missing file prints nothing; a malformed line is reported with its line number and skipped. Values are never echoed to the log. `.env` is gitignored — it holds tokens once filled in.
 - A cookie session lasts 12 hours of use and lives in memory; restarting signs everyone out. There are at most 32 concurrent sessions. Header tokens are checked on every request, so Companion/native clients do not depend on a process-local cookie.
 - Five wrong tokens from one address lock that address for ten minutes. The host does not log the candidate token.
 - Public-host rebinding, cross-site mutations and WebSocket handshakes from a different site are refused. If a proxy rewrites `Host`, list only your own hostname in `SCOUT_ALLOWED_HOSTS`.
@@ -109,11 +122,19 @@ drawer whose classes are not rendered.
 
 ### Landing page, sign-in and the closed beta
 
-The public half of SCOUT lives at `/welcome` (the product page), `/apply` (the whitelist application),
-`/login` (sign-in) and `/dashboard` (an approved account's download and launcher link). They are
-ordinary pages of the same SPA and need no token: an applicant has no authority by definition, and a
-hosted deployment of the marketing site has no operator panel at all. `/`, `/admin`, `/obs` and
-`/game` are untouched, so the printed startup link and every OBS source keep working exactly as before.
+The public half of SCOUT is the website: `/welcome` (the product page), `/apply` (the whitelist
+application), `/login` (sign-in, invite activation and launcher-code approval) and `/download` (an
+approved account's installer). They are ordinary pages of the same SPA and need no token: an applicant
+has no authority by definition, and a hosted deployment of the marketing site has no operator panel at
+all.
+
+The dashboard and every overlay setting belong to the app, not the website. `/app` is what the
+launcher opens once the host answers: account status, tournaments, the launcher-link card and linked
+devices. The control panel — teams, players, maps, scenes, Overlay Studio, radars and every other
+overlay setting — is `/` and `/panel`, in its own window opened by the launcher. `/admin` remains the
+SCOUT owner's desk, and `/obs` and `/game` are untouched, so the printed startup link and every OBS
+source keep working exactly as before. `/dashboard` survives only as a redirect for old bookmarks and
+launcher links.
 
 **The product page shows the product, not a drawing of it.** `/welcome` mounts the same `Hud`
 component the panel previews and `/obs` plays (`src/hud.tsx`), driven by the sample world the panel's
@@ -135,14 +156,14 @@ that.
 - **The invite sets the password.** `POST /api/beta/activate` turns the invite into an account with a
   scrypt-hashed password and an HttpOnly session cookie. Nothing is sent by email, and no password ever
   passes through the operator.
-- **The launcher download is behind the account.** It appears on `/dashboard` only once the account is
+- **The launcher download is behind the account.** It appears on `/download` only once the account is
   approved; a pending applicant sees what they are waiting for instead of the button.
 - **The launcher link is a device code.** The panel sidebar's *Launcher link* card starts a link
   (`POST /api/beta/link/start`) and shows an 8-character code such as `6TYK-RZNW`, with no
-  look-alike letters. The operator approves it while signed in — `/dashboard?link=6TYK-RZNW` — and the
-  launcher polls, receives its installation token exactly once and stores it in
-  `config/beta/installation.json` (0600). Approving requires the account session, never just the code,
-  and unlinking a device in the dashboard invalidates its token immediately.
+  look-alike letters. The operator approves it in the app's **Launcher link** card, or on the website
+  at `/login?link=6TYK-RZNW` when they are signed out. The launcher polls, receives its installation
+  token exactly once and stores it in `config/beta/installation.json` (0600). Approving requires the account session, never just the code,
+  and unlinking a device in the app's dashboard invalidates its token immediately.
 - **Secrets are stored as digests.** Passwords use scrypt; session ids, invite tokens, device codes and
   installation tokens are stored as SHA-256 digests. `tests/beta.test.ts` asserts this against the file
   on disk, and that the store and the installation file are mode 0600.
@@ -174,11 +195,11 @@ that.
 2. Replace `CHANGE_ME` with your own local token, and start the host with matching `GSI_TOKEN`. Default token exists only for initial local setup.
 3. Restart CS2. Use Fullscreen Windowed (borderless) and observer/GOTV mode for all-player blocks.
 4. Configure native HUD visibility for your observer environment. Console permissions vary; validate your cvars before going on air.
-5. Confirm the dashboard says Receiving live data, check the **CS2 feed** panel for accepted packets and an `allplayers` chip, then switch the preview from Demo feed to GSI feed. If it stays on "Waiting for CS2", work through [Why is nothing showing?](#why-is-nothing-showing-cs2-feed-panel).
+5. Confirm the panel says Receiving live data, check the **CS2 feed** panel for accepted packets and an `allplayers` chip, then switch the preview from Demo feed to GSI feed. If it stays on "Waiting for CS2", work through [Why is nothing showing?](#why-is-nothing-showing-cs2-feed-panel).
 
 ### Why is nothing showing? (CS2 feed panel)
 
-The dashboard shows a **CS2 feed** panel on the Overview and Setup guide tabs. It is the one place that separates the four ways a GSI feed goes quiet, because the previous code could not tell them apart:
+The panel shows a **CS2 feed** panel on the Overview and Setup guide tabs. It is the one place that separates the four ways a GSI feed goes quiet, because the previous code could not tell them apart:
 
 | What the panel shows | What it means | What to do |
 | --- | --- | --- |
@@ -186,7 +207,7 @@ The dashboard shows a **CS2 feed** panel on the Overview and Setup guide tabs. I
 | `TOKEN-REJECTED` climbing | Packets arrive and every one is refused with `401`. The cfg `auth token` and the host's `GSI_TOKEN` differ. | Make them match and restart the host. The panel shows whether the host is using the built-in default or the `GSI_TOKEN` environment token — it never shows the token itself. |
 | `SHAPE-REJECTED` climbing | A packet arrived without a `provider` block, so it was not a GSI payload. | Usually the same `.cfg.txt` or "CS2 not restarted" mistake; the panel names the last reason. |
 | `ACCEPTED` climbing, `allplayers` chip missing | CS2 is **playing, not spectating**. It only sends `allplayers` in observer/GOTV mode, so the scoreboard and clock work while rosters and the killfeed stay empty. | Join the match as observer or GOTV. |
-| `ACCEPTED` climbing, blocks listed, `LAST PACKET` seconds ago | The feed is healthy but the dashboard preview is on Demo feed. | Switch the preview to **GSI feed**. |
+| `ACCEPTED` climbing, blocks listed, `LAST PACKET` seconds ago | The feed is healthy but the panel preview is on Demo feed. | Switch the preview to **GSI feed**. |
 
 The host prints the same story in its console: the expected URI and token source at startup, the block list of the first accepted packet, the first `allplayers` block, a warning after 100 accepted packets with no `allplayers`, and rejection reasons rate-limited to one log per 10 seconds (CS2 posts at ~20 Hz, so unthrottled logging floods a terminal). `GET /api/status` exposes the same counters as `gsi`.
 
@@ -199,7 +220,7 @@ Packets are validated per subtree before merging (`server/schema.ts`, zod): ever
 **Replay Studio** separates three tasks that should not be confused during an event:
 
 - GSI recording is opt-in: start the host with `LOG_GSI=1`, or use the Producer-controlled recorder in the panel. Accepted payloads are written as JSONL with their auth token stripped; files rotate at 32 MiB and up to 12 captures are retained under ignored `recordings/`.
-- Load a local GSI JSONL file or a saved host capture in **Replay Studio**. It reconstructs snapshots locally, samples for preview, and plays/seeks/slows them down only in the operator dashboard preview. The replay never posts to `/gsi`, never changes `/obs`, and never overwrites the live host state. The safe local preview limit is 32 MiB and 100,000 lines.
+- Load a local GSI JSONL file or a saved host capture in **Replay Studio**. It reconstructs snapshots locally, samples for preview, and plays/seeks/slows them down only in the operator panel preview. The replay never posts to `/gsi`, never changes `/obs`, and never overwrites the live host state. The safe local preview limit is 32 MiB and 100,000 lines.
 - **Session archive** is a separate manual capture of match identity and derived kill/round events. Start/end it from the producer panel; up to 40 match summaries persist in `recordings/matches.json`, with a 10,000-event cap per match. Browse/filter by the event timeline in the archive view and export one match as JSON. This is not a raw GSI recording.
 
 The developer CLI below is a different tool: it deliberately POSTs packets back into the target host for integration testing. **Never run it against a host that is on air**; it injects packets exactly as CS2 does.
@@ -239,7 +260,7 @@ Which config team is on which side is resolved by `server/sides.ts` and exposed 
 2. **Roster SteamIDs** — when the names do not match, a config team whose players are all found on one side in `allplayers` claims that side.
 3. **Remembered binding** — a >5 s heartbeat gap or a partial packet cannot flip the teams: the previous binding is kept while the map name is unchanged, and re-derived when the map changes.
 4. **The name CS2 reported** — an unknown team name is shown as-is (with a fallback colour) rather than silently replaced by the first config team. `confidence: "guess"` in the snapshot marks this case.
-5. **Config order** — only when there is no evidence at all (before the first packet, or an empty payload); `configSides` is what the dashboard shows before GSI arrives.
+5. **Config order** — only when there is no evidence at all (before the first packet, or an empty payload); `configSides` is what the panel shows before GSI arrives.
 
 `config/teams.json`'s `players` array may stay empty: sides are then resolved from the GSI names, which is what the shipped configuration does.
 
@@ -358,7 +379,7 @@ Matchup, lineups, map series, tournament tree, winner, break, round recap and pl
 
 SCOUT can talk to OBS Studio's built-in WebSocket server (obs-websocket 5.x, OBS 28 or newer) to show OBS's status in the panel and switch OBS's scene along with yours. It is **off by default**, outbound-only, and can never affect GSI intake or the overlay: with it off, unreachable or misconfigured the host behaves exactly as before.
 
-1. In OBS: *Tools → WebSocket Server Settings*, enable the server (default port 4455). If you set a password, start the host with `OBS_WS_PASSWORD=<password>`. The password is read from the environment **only** — it is never typed into the panel, saved to disk, returned by the API or included in a snapshot (the same treatment as `GSI_TOKEN`).
+1. In OBS: *Tools → WebSocket Server Settings*, enable the server (default port 4455). If you set a password, start the host with `OBS_WS_PASSWORD=<password>` (or put it in `.env`). The password is read from the process environment **only** — SCOUT never accepts it in the panel, writes it to its own config, returns it by API or includes it in a snapshot (the same treatment as `GSI_TOKEN`).
 2. *Broadcast scenes → OBS Studio*: switch on **Connect to OBS** (or start the host with `OBS_WS_URL=ws://host:4455`, which enables it by default), check the address, map each SCOUT scene to an OBS scene — leave a row blank to leave OBS alone — and **Save OBS settings**. **Test** switches OBS immediately.
 3. **Scene sync** — *Status only*; *SCOUT to OBS* (putting a scene on air switches the mapped OBS scene); or *Both ways* (switching to a mapped scene inside OBS — a hotkey, a Stream Deck — puts the matching SCOUT scene on air). SCOUT recognises the echo of its own switch and never answers it, so two-way sync cannot loop.
 
@@ -387,7 +408,7 @@ Open **Event packages** to export or import a `scout-event-pack` v1 JSON manifes
 
 ### Companion and touch remote
 
-The touch console lives at `/?remote=1`, is designed for phone/tablet taps and uses the same authenticated control lease as the full panel. It exposes scene buttons (including recap and stats), graphics toggles, side swap and timed breaks; the owner can take over an active lease. Return to the full dashboard with **Full panel**.
+The touch console lives at `/?remote=1`, is designed for phone/tablet taps and uses the same authenticated control lease as the full panel. It exposes scene buttons (including recap and stats), graphics toggles, side swap and timed breaks; the owner can take over an active lease. Return to the full panel with **Full panel**.
 
 For Bitfocus Companion or other HTTP button controllers, use a dedicated Producer token and the authenticated `GET /api/remote/state` feedback plus `POST /api/remote/action` actions. The state response includes the active scene, controls, lease owner/expiry, recorder/archive status, available scene IDs and whether the caller currently controls the lease. Actions are audited and return updated feedback. See [`docs/COMPANION.md`](docs/COMPANION.md) for headers, button payloads, supported actions, recommended feedback and network precautions.
 
@@ -422,7 +443,7 @@ The preview uses the real renderer on a 1920 × 1080 canvas. The Browser Source 
 
 All ten requested operator improvements are implemented and integrated: on-air preflight, an isolated local replay studio, searchable match archives, producer-selected recap and player-stat scenes, reusable broadcast themes, authenticated Companion actions/feedback, owner-managed operator roles and lease/audit, versioned secret-free event packages, and the touch-first remote console. The complete editable overlay layer stack (add/edit/remove/reorder/scene-route), custom graphics and theme system are documented under [Overlay Studio and reusable themes](#overlay-studio-and-reusable-themes). `/game` remains a plain browser renderer; the optional shell is what makes it a native click-through window.
 
-**Code and test verification completed in this checkout:** `npx tsc --noEmit`, `npm test` (250 passing tests, including live-host RBAC/Companion/lease checks, event-pack restore, the closed-beta account/launcher-flow suite in `tests/beta.test.ts`, the licence-state and release-registry suite in `tests/licensing.test.ts`, the hosted account service driven over a socket in `tests/account-service.test.ts`, and the product page's frames checked against the real renderer in `tests/site-preview.test.ts`), and `npm run build` all pass. Vite emits existing `framer-motion` module-directive and >500 kB chunk-size warnings; the production build still completes successfully. An HTTP smoke check returned 200 for the operator, `/obs`, `/game`, touch remote, `/welcome`, `/login`, `/apply`, `/dashboard` and required APIs, and checked that the role-authenticated remote feedback responds. The closed-beta flow was also driven end to end over HTTP against a running host — apply, approve, invite, activate, sign in, launcher link, token collection, unlink — with the store inspected to confirm no secret is written in the clear. The same flow runs against the hosted account service in its own test file, over a real socket. The SPA was also mounted in a DOM (jsdom, no browser binary required) on `/welcome` and on the operator panel: the landing page renders the live HUD, all nine scene buttons and map tiles, and clicking a scene in the tour swaps the canvas to that scene's real render; the panel renders its thirteen sections, nine scene cards and its own preview with no console errors.
+**Code and test verification completed in this checkout:** `npx tsc --noEmit`, `npm test` (319 passing tests, including live-host RBAC/Companion/lease checks, event-pack restore, the closed-beta account/launcher-flow suite in `tests/beta.test.ts`, the licence-state and release-registry suite in `tests/licensing.test.ts`, the hosted account service driven over a socket in `tests/account-service.test.ts`, and the product page's frames checked against the real renderer in `tests/site-preview.test.ts`), and `npm run build` all pass. Vite emits existing `framer-motion` module-directive and >500 kB chunk-size warnings; the production build still completes successfully. An HTTP smoke check returned 200 for the app dashboard (`/app`), the operator, `/obs`, `/game`, touch remote, `/welcome`, `/login`, `/apply`, `/download` and required APIs, and checked that the role-authenticated remote feedback responds. The closed-beta flow was also driven end to end over HTTP against a running host — apply, approve, invite, activate, sign in, launcher link, token collection, unlink — with the store inspected to confirm no secret is written in the clear. The same flow runs against the hosted account service in its own test file, over a real socket. The SPA was also mounted in a DOM (jsdom, no browser binary required) on `/welcome` and on the operator panel: the landing page renders the live HUD, all nine scene buttons and map tiles, and clicking a scene in the tour swaps the canvas to that scene's real render; the panel renders its thirteen sections, nine scene cards and its own preview with no console errors.
 
 **Not verified in this checkout:** the launcher's new window, its licence gate and the Tauri glue could not be compiled here — there is no Rust toolchain in this environment — so `src-tauri` changes are unproven until `npm run shell:test` and `npm run shell:test:win32` (or a Windows machine) run them. The release workflow (`ci/release.yml`) has not been executed here either: it is a workflow, and GitHub runs it on a tag. That confirms routing/API startup, not visual rendering: this environment had no browser binary and the Chromium download for Playwright failed, so the editor, theme appearance and `/obs` alpha have **not** had a screenshot/manual-browser check. The Agent Mode preview is available for review.
 

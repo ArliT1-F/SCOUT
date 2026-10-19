@@ -3,10 +3,10 @@
 ## Model
 - **Whitelisting** is unchanged: an account is usable when the SCOUT owner approves its
   application (`server/beta.ts` locally, `server/account-service.ts` hosted).
-- **Every approved account owns independent workspaces.** From `/dashboard` → *My tournaments*
+- **Every approved account owns independent workspaces.** From the app's dashboard (`/app`) → *Tournaments*
   a whitelisted user creates their own tournaments: name + a normalized `ScoutConfig` (teams,
   rosters, maps, bracket). They live in `config/platform/store.json` (gitignored, mode 0600).
-  Browser tournament routes resolve the account from its session and enforce ownership.
+  The tournament routes resolve the account from its session and enforce ownership.
 - **Activating** loads the tournament into this host's live workspace (`config/teams.json` +
   broadcast). Each account also retains its own active selection, so activating another
   account's workspace does not change what the first account's linked venues pull.
@@ -17,11 +17,22 @@
   **1 for release** in `/admin`.
 
 ## /admin — only the SCOUT owner
-Set `SCOUT_OWNER_EMAIL` to your account email. `/admin`, `GET /api/platform/admin` and
-`PUT /api/platform/admin/settings` require an approved account session with exactly that
-email; panel owner tokens do not substitute. When configured, whitelist decisions also
-require the owner account. Unset, `/admin` stays closed and the panel retains its legacy
-local-owner behaviour.
+Set `SCOUT_OWNER_EMAIL` to your account email — as a real environment variable, or in the
+host's `.env` (`cp .env.example .env`; on Windows `%APPDATA%\SCOUT\.env`). `/admin`,
+`GET /api/platform/admin` and `PUT /api/platform/admin/settings` require an approved account
+session with exactly that email; panel owner tokens do not substitute. When configured,
+whitelist decisions also require the owner account. Unset, `/admin` stays closed and the panel
+retains its legacy local-owner behaviour.
+
+There is **no owner password variable**. The owner account is an ordinary approved account: apply
+at `/apply` with that address, approve it (Beta applications tab, or
+`npm run account-service -- --approve you@example.com` in hosted mode), then set the password
+through the one-time invite link. Set the same `SCOUT_OWNER_EMAIL` on the account service and the
+central host.
+
+**First-run order matters.** With `SCOUT_OWNER_EMAIL` set before the account exists, the
+applications panel is locked to an account that does not exist yet. Either start once without it,
+create and approve your account, then add it; or use `SCOUT_BETA_AUTO_APPROVE=1` in development.
 
 The desk shows whitelist review, user/tournament totals, recent match logs and platform
 settings. Settings (`maxTournamentsPerUser`, `applicationsOpen`, `reviewNote`,
@@ -163,15 +174,19 @@ then the **central host**:
 ```sh
 SCOUT_BETA_API_URL=https://accounts.example.com SCOUT_BETA_API_KEY=… \
 SCOUT_OWNER_EMAIL=you@example.com npm start
-# /apply -> owner approval -> sign in -> /dashboard -> create and activate a tournament
+# /apply -> owner approval -> sign in -> /app -> create and activate a tournament
 ```
+
+The same block can live in `.env` (copy `.env.example`) instead — real environment variables still
+win. Remember there is no password to put there: the owner's password is set through the invite
+link, never configured.
 
 On **each venue host**, using the same account service but the platform URL separately:
 
 ```sh
 SCOUT_BETA_API_URL=https://accounts.example.com \
 SCOUT_PLATFORM_URL=https://scout.example.com npm start
-# Launcher Link -> approve its device code in your central dashboard
+# Launcher Link -> approve its device code in the app's dashboard (or the website's sign-in page)
 # GSI and OBS/overlay URLs still point at this venue's own host
 ```
 

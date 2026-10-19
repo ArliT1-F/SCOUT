@@ -23,7 +23,7 @@ export function PlatformAdminPage(){
   setBusy('settings');const {res,body}=await api('/api/platform/admin/settings',{method:'PUT',body:JSON.stringify(settings)});setBusy('');
   if(!res.ok){setNotice(body?.error||'Settings could not be saved.');return} setSettings(body.settings);setNotice(`Settings v${body.settings.version} saved — open panels receive them in real time.`);void load();
  }
- if(error) return <div className="site"><main className="site-main site-narrow"><section className="site-card site-done"><span className="site-card-icon"><Shield size={17}/></span><h2>SCOUT admin is owner-only</h2><p className="site-card-lead">{error} Sign in with the account named by <code>SCOUT_OWNER_EMAIL</code>, then reload. Whitelisted users host their tournaments from their <a href="/dashboard">dashboard</a> instead.</p><div className="site-cta"><a className="button primary" href="/login">Sign in</a><a className="button" href="/dashboard">My dashboard</a></div></section></main></div>;
+ if(error) return <div className="site"><main className="site-main site-narrow"><section className="site-card site-done"><span className="site-card-icon"><Shield size={17}/></span><h2>SCOUT admin is owner-only</h2><p className="site-card-lead">{error} Sign in with the account named by <code>SCOUT_OWNER_EMAIL</code>, then reload. Whitelisted users host their tournaments inside the SCOUT app instead.</p><div className="site-cta"><a className="button primary" href="/login">Sign in</a><a className="button" href="/download">Download the app</a></div></section></main></div>;
  if(!data) return <div className="site"><main className="site-main site-narrow"><p className="site-loading"><Loader2 className="spin" size={16}/>Loading the SCOUT admin…</p></main></div>;
  const accounts=data.users||[];
  return <div className="site"><main className="site-main">
@@ -57,7 +57,8 @@ function AdminApplications({onDecide,busy}:{onDecide:(id:string,d:'approve'|'rej
  if(!apps.length) return <p className="site-fineprint">No applications waiting or recorded.</p>;
  return <div className="beta-list">{apps.map((a:any)=><article key={a.id} className={'beta-row '+a.status}><div className="beta-who"><b>{a.displayName}</b><small>{a.email}{a.organisation?` · ${a.organisation}`:''}</small></div><span className="site-status">{a.status}</span><div className="beta-actions">{a.status!=='approved'&&<button className="button primary" disabled={busy===a.id} onClick={()=>onDecide(a.id,'approve')}>Approve</button>}{a.status!=='rejected'&&<button className="button danger-button" disabled={busy===a.id} onClick={()=>onDecide(a.id,'reject')}>Reject</button>}</div></article>)}</div>;
 }
-// The whitelisted user's own desk, shown on /dashboard.
+// The whitelisted user's own desk, shown in the app dashboard (/app). The website does not
+// render it any more; the panel and the download page are the only other places it is reachable.
 export function TournamentsCard(){
  const [list,setList]=useState<any[]>([]);const [limit,setLimit]=useState(3);const [active,setActive]=useState<string|null>(null);const [name,setName]=useState('');const [error,setError]=useState('');const [notice,setNotice]=useState('');const [visible,setVisible]=useState(true);
  const load=useCallback(async()=>{const {res,body}=await api('/api/platform/tournaments');if(!res.ok){setVisible(false);return}setList(body.tournaments||[]);setLimit(body.limit||3);setActive(body.activeTournamentId||null)},[]);

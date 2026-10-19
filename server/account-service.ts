@@ -2,6 +2,7 @@ import {createServer,type IncomingMessage,type Server,type ServerResponse} from 
 import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync} from 'node:fs';
 import path from 'node:path';
+import {loadEnvFile} from './env.js';
 import {DEFAULT_PLATFORM_SETTINGS,isPlatformOwner,sanitizeSettings,type PlatformSettings} from './platform.js';
 import {
  ACCOUNT_COOKIE,ACCOUNT_TTL_MS,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
@@ -339,7 +340,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      run('INSERT INTO grants (device_code,user_code,label,platform,origin,created_at,expires_at,status) VALUES (?,?,?,?,?,?,?,?)',
       hashToken(deviceCode),normalizeUserCode(userCode),String(input.label||'').slice(0,60),String(input.platform||'').slice(0,40),String(input.origin||'').slice(0,200),moment,moment+DEVICE_CODE_TTL_MS,'pending');
      const base=String(input.origin||'').replace(/\/$/,'');
-     const answer:DeviceGrantView={userCode,deviceCode,expiresAt:moment+DEVICE_CODE_TTL_MS,interval:DEVICE_POLL_INTERVAL_MS,verificationUrl:`${base}/dashboard?link=${encodeURIComponent(userCode)}`};
+     const answer:DeviceGrantView={userCode,deviceCode,expiresAt:moment+DEVICE_CODE_TTL_MS,interval:DEVICE_POLL_INTERVAL_MS,verificationUrl:`${base}/login?link=${encodeURIComponent(userCode)}`};
      log(`a launcher started a link — approve ${userCode} ${base?`at ${answer.verificationUrl}`:''}`);
      return json(res,200,answer);
     }
@@ -458,6 +459,9 @@ function parseSecret(value:string){const [salt,digest]=value.split(':');return s
 // the same store without a socket) never starts a listener or runs a CLI command.
 const isEntry=Boolean(process.argv[1])&&/account-service\.ts$/.test(process.argv[1]);
 if(isEntry){
+ // Same optional `.env` as the host (copy .env.example), so a service key and the owner email can
+ // live in one file instead of a shell wrapper. Real environment variables win.
+ loadEnvFile();
  const flags=process.argv.slice(2);
  const service=await createAccountService({}).catch(error=>{console.error(`[accounts] could not start: ${error.message}`);process.exit(1)});
  if(flags.includes('--list')){

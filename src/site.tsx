@@ -12,9 +12,13 @@ import type {LicenceView} from '../server/licensing';
 import type {PlatformSyncView} from '../server/platform-sync';
 import {LauncherSyncStatus} from './operator-tools';
 import type {PanelSessionView} from '../server/auth';
-// The public half of SCOUT: the landing page a tournament organiser finds, the application form for
-// the closed beta, the sign-in page, and the dashboard where an approved account downloads the
-// launcher and links it to their profile.
+// The public half of SCOUT — the only pages the website serves: the landing page a tournament
+// organiser finds, the application form for the closed beta, sign-in, and the download page that
+// gets an approved account into the app. The owner's admin desk lives in src/platform-admin.tsx.
+//
+// The dashboard and the broadcast panel are deliberately NOT here. Tournaments, linked launchers,
+// the launcher-code approval and every overlay setting live in the desktop app, which the Tauri
+// shell opens from the local host (`/app` and `/`). The website is access, not operation.
 //
 // Three rules the pages keep:
 //   1. Every request goes to this origin's own /api/beta/* — never to a hard-coded cloud host. The
@@ -25,7 +29,7 @@ import type {PanelSessionView} from '../server/auth';
 //      shown with a banner that says what it is.
 //   3. The launcher download is behind the account: a pending applicant sees what they are waiting
 //      for, an approved one sees the button.
-export const SITE_ROUTES=['/welcome','/login','/apply','/dashboard'] as const;
+export const SITE_ROUTES=['/welcome','/login','/apply','/download'] as const;
 export type SiteRoute=typeof SITE_ROUTES[number];
 export const isSiteRoute=(path:string):path is SiteRoute=>(SITE_ROUTES as readonly string[]).includes(path);
 type BetaState={status:BetaStatusView|null;offline:boolean;loading:boolean;error:string};
@@ -84,7 +88,7 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
    {/* Phone-width labels: a nav that does not fit is a nav nobody reads. The long label is the
        desktop one; CSS swaps in the short one under 560px (see "Small screens"). */}
    {onHost&&<a className="site-ghost-link" href="/" title="The operator panel served by this machine"><span className="site-label-long">Operator panel</span><span className="site-label-short">Panel</span><ArrowUpRight size={13}/></a>}
-   {account?<a className="button primary" href="/dashboard"><LayoutDashboard size={14}/><span className="site-label-long">Dashboard</span><span className="site-label-short">Panel</span></a>:<a className="site-ghost-link" href="/login"><LogIn size={13}/>Sign in</a>}
+   {account?<a className="button primary" href="/download"><Download size={14}/><span className="site-label-long">Get the app</span><span className="site-label-short">Download</span></a>:<a className="site-ghost-link" href="/login"><LogIn size={13}/>Sign in</a>}
    {!account&&<a className="button primary" href="/apply"><span className="site-label-long">Apply for access</span><span className="site-label-short">Apply</span><ArrowRight size={14}/></a>}
   </div>
   <button type="button" className="site-menu-toggle" aria-expanded={menuOpen} aria-controls={menuId} aria-label={menuOpen?'Close navigation':'Open navigation'} onClick={()=>setMenuOpen(!menuOpen)}>{menuOpen?<X size={20}/>:<Menu size={20}/>}</button>
@@ -96,7 +100,7 @@ export function SiteFooter(){
   <div className="site-footer-brand"><SiteBrand/><p>Broadcast-ready CS2 overlays, built on Game State Integration alone. Nothing is injected into the game and nothing is read out of its memory.</p></div>
   <div className="site-footer-cols">
    <div><b>Product</b><a href="/welcome#product">What it does</a><a href="/welcome#scenes">Broadcast scenes</a><a href="/welcome#beta">Closed beta</a></div>
-   <div><b>Operators</b><a href="/login">Sign in</a><a href="/dashboard">Dashboard</a><a href="/apply">Apply for access</a></div>
+   <div><b>Operators</b><a href="/login">Sign in</a><a href="/download">Download</a><a href="/apply">Apply for access</a></div>
    <div><b>On this host</b><a href="/">Operator panel</a><a href="/obs" target="_blank" rel="noreferrer">Overlay output /obs</a><a href="/game" target="_blank" rel="noreferrer">Shared renderer /game</a></div>
   </div>
   <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><span>GSI only<i/><span className="status-dot"/>No injection<i/>No memory reading</span></div>
@@ -113,7 +117,7 @@ function Notice({tone='bad',children}:{tone?:'bad'|'ok'|'warn';children:React.Re
 //   - the engineering detail lives further down, in "Under the hood", where the reader who wants it
 //     finds it — and where it does not stand between a first-time visitor and what SCOUT looks like;
 //   - the closed-beta flow is untouched: apply, a human reads it, an invite sets your password, the
-//     dashboard holds the launcher.
+//     download page hands over the installer, and the app itself is the dashboard.
 const FEATURES=[
  {icon:Radio,title:'Let the game tell the story',body:'Live scores, economy, kills and rounds, straight from CS2’s own game-state feed. Less manual work. More attention on the match.'},
  {icon:Monitor,title:'Every detail. Nothing in the way.',body:'A transparent HUD with the scoreboard, tactical radar, rosters and observed player. Built to complement the action, not cover it.'},
@@ -138,8 +142,8 @@ const MAP_POOL=[
 const STEPS=[
  {title:'Apply',body:'Tell us who you are and what you broadcast. The application takes about a minute.'},
  {title:'We review it',body:'A human reads every application. Approved accounts get a one-time invite link that lets them set a password.'},
- {title:'Download the launcher',body:'Your dashboard holds the Windows installer: host, panel, overlay pages and the GSI config, with its own bundled runtime.'},
- {title:'Link it and go live',body:'The launcher shows an 8-character code. Approve it in your dashboard once, then paste its /obs address into OBS.'},
+ {title:'Download the app',body:'Your download page carries the Windows installer: host, dashboard, overlay settings and the GSI config, with its own bundled runtime.'},
+ {title:'Link it and go live',body:'The launcher shows an 8-character code. Approve it in the SCOUT app once, then paste its /obs address into OBS.'},
 ];
 const FAQ=[
  ['Is SCOUT free during the beta?','Yes. The closed beta is free for the organisers we admit. Paid tiers, if they ever exist, will be about hosted services — the overlay itself runs on your machine.'],
@@ -329,7 +333,7 @@ export function ApplyPage(){
    <div className="site-page-head">
     <span className="site-section-eyebrow">CLOSED BETA</span>
     <h1>Apply for access</h1>
-    <p>Tell us who you are and what you broadcast. If it is a fit, you get a one-time invite link that creates your operator account — and the launcher download appears in your dashboard.</p>
+    <p>Tell us who you are and what you broadcast. If it is a fit, you get a one-time invite link that creates your operator account — the installer is then on your download page, and the dashboard lives inside the app.</p>
    </div>
    {done?<section className="site-card site-done">
     <span className="site-done-mark"><CircleCheck size={22}/></span>
@@ -340,7 +344,7 @@ export function ApplyPage(){
    </section>:account?<section className="site-card site-done">
     <h2>You already have an account</h2>
     <p>Signed in as <b>{account.email}</b> — {statusLabel(account.status).toLowerCase()}.</p>
-    <div className="site-cta"><a className="button primary" href="/dashboard">Open your dashboard<ArrowRight size={14}/></a></div>
+    <div className="site-cta"><a className="button primary" href="/download">Get the app<ArrowRight size={14}/></a></div>
    </section>:<div className="site-apply-grid">
     <form className="site-card site-form" onSubmit={submit}>
      <label className="field"><span>YOUR NAME</span><input value={form.name} onChange={set('name')} placeholder="Who should we talk to?" autoComplete="name"/></label>
@@ -356,7 +360,7 @@ export function ApplyPage(){
      <p className="site-fineprint">We only use this to review your application and to reach you about the beta. No newsletter, no resale.</p>
     </form>
     <aside className="site-apply-aside">
-     <div className="site-card"><h3>What happens next</h3><ol className="site-ol"><li>A human reads the application.</li><li>Approved applicants get a one-time invite link.</li><li>The link sets your password and opens your dashboard.</li><li>The dashboard holds the Windows launcher and the launcher-link code.</li></ol></div>
+     <div className="site-card"><h3>What happens next</h3><ol className="site-ol"><li>A human reads the application.</li><li>Approved applicants get a one-time invite link.</li><li>The link sets your password and opens your download page.</li><li>The installed app holds the dashboard, tournaments and every overlay setting.</li></ol></div>
      <div className="site-card"><h3>What you need</h3><ul className="site-ul"><li>Windows 10 or 11, 64-bit</li><li>Counter-Strike 2 on the same machine</li><li>OBS Studio (or the SCOUT shell) for the output</li><li>Nothing else — the installer bundles its own runtime</li></ul></div>
      <button className="site-reload" onClick={()=>void reload()}><RefreshCw size={13}/>Recheck this host</button>
     </aside>
@@ -369,7 +373,7 @@ export function ApplyPage(){
 // Two doors, one page: the SCOUT account (the website) and the panel token (this machine's host).
 // The device-approval flow lands here too — an invite link, or a launcher code — so an operator who
 // is not signed in yet meets one screen instead of three.
-export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
+export function LoginPage({linkCode,invite,next='/download'}:{linkCode?:string;invite?:string;next?:string}){
  const {status,offline,reload}=useBetaStatus();
  const session=usePanelSession();
  const account=status?.account??null;
@@ -384,7 +388,16 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
   const result=await betaRequest('/api/beta/login',{email,password});
   setBusy(null);
   if(!result.ok){setError(result.body?.error||'Sign-in failed.');return}
-  if(code) location.assign(`/dashboard?link=${encodeURIComponent(code)}`);else location.assign('/dashboard');
+  // A launcher code in the URL is approved with the session that sign-in just created, so the
+  // operator does not have to reload and type it twice. The website and the app's login both work.
+  if(code){
+   const approval=await betaRequest('/api/beta/device/approve',{userCode:code});
+   if(!approval.ok){setError(approval.body?.error||'Signed in, but that launcher code could not be approved.');return}
+   setNotice('Launcher linked to your account.');
+   setTimeout(()=>location.assign(next),600);
+   return;
+  }
+  location.assign(next);
  }
  async function activate(event:React.FormEvent){
   event.preventDefault();setError('');
@@ -394,7 +407,7 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
   setBusy(null);
   if(!result.ok){setError(result.body?.error||'That invite could not be used.');return}
   setNotice('Password set. Welcome aboard.');
-  setTimeout(()=>location.assign('/dashboard'),600);
+  setTimeout(()=>location.assign(next),600);
  }
  async function unlockWithToken(event:React.FormEvent){
   event.preventDefault();setBusy('token');setError('');
@@ -409,13 +422,13 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
   }catch(reason:any){setError(reason?.message||'The host refused that token.')}
   finally{setBusy(null)}
  }
- async function approveLauncher(next:boolean){
+ async function approveLauncher(allow:boolean){
   setBusy('device');setError('');
-  const result=await betaRequest(`/api/beta/device/${next?'approve':'deny'}`,{userCode:code});
+  const result=await betaRequest(`/api/beta/device/${allow?'approve':'deny'}`,{userCode:code});
   setBusy(null);
   if(!result.ok){setError(result.body?.error||'That code could not be used.');return}
-  setNotice(next?'Launcher linked to your account.':'Launcher request refused.');
-  setTimeout(()=>location.assign('/dashboard'),700);
+  setNotice(allow?'Launcher linked to your account.':'Launcher request refused.');
+  setTimeout(()=>location.assign(next),700);
  }
  const localSession=session?.local&&session.authenticated;
  return <div className="site">
@@ -427,7 +440,7 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
     <h1>{invite?'Set your password':linkCode?'Approve a launcher':'Welcome back'}</h1>
     <p>{invite?'Your application was approved. Choose the password for your SCOUT account — the invite link stops working the moment it is used.'
       :linkCode?'A launcher is asking to be linked to your account. Confirm the code you see in the launcher window, then approve it.'
-      :'Sign in to your SCOUT account to reach your dashboard and downloads — or unlock the operator panel on this machine with the token the host printed.'}</p>
+      :'Sign in to your SCOUT account to get the installer and approve this launcher — or unlock the operator panel on this machine with the token the host printed.'}</p>
    </div>
    <div className="site-login-grid">
     <div className="site-card site-form">
@@ -444,7 +457,7 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
       {code?<div className="site-device">
        <label className="field"><span>LAUNCHER CODE</span><input value={code} onChange={event=>setCode(event.target.value.toUpperCase())} placeholder="ABCD-EFGH"/></label>
        <div className="site-cta"><button className="button primary" onClick={()=>void approveLauncher(true)} disabled={busy==='device'}><Link2 size={14}/>Link this launcher</button><button className="button" onClick={()=>void approveLauncher(false)} disabled={busy==='device'}><Unplug size={14}/>Refuse</button></div>
-      </div>:<div className="site-cta"><a className="button primary" href="/dashboard">Your dashboard<ArrowRight size={14}/></a></div>}
+      </div>:<div className="site-cta"><a className="button primary" href={next}>Get the app<ArrowRight size={14}/></a></div>}
      </div>:<form onSubmit={signIn}>
       {code&&<div className="site-device-code"><small>LAUNCHER WAITING</small><b>{code}</b><span>Sign in to approve it.</span></div>}
       <label className="field"><span>EMAIL</span><input type="email" value={email} onChange={event=>setEmail(event.target.value)} autoFocus autoComplete="username" placeholder="you@organisation.gg"/></label>
@@ -478,96 +491,75 @@ export function LoginPage({linkCode,invite}:{linkCode?:string;invite?:string}){
  </div>;
 }
 // ------------------------------------------------------------------ dashboard
-export function DashboardPage({linkCode}:{linkCode?:string}){
- const {status,offline,reload,loading}=useBetaStatus();
+// ------------------------------------------------------------------ download
+// The website's last account page. It exists for one reason: a freshly approved operator has no app
+// yet, so the installer has to be reachable somewhere. Everything after the install — tournaments,
+// linked launchers, the launcher code, every overlay setting — lives in the app, not here.
+export function DownloadPage(){
+ const {status,offline,loading}=useBetaStatus();
  const account=status?.account??null;
- const [code,setCode]=useState(linkCode??'');
- const [busy,setBusy]=useState<string|null>(null);
- const [error,setError]=useState('');const [notice,setNotice]=useState('');
- useEffect(()=>{if(linkCode)setCode(linkCode)},[linkCode]);
- async function decide(next:boolean){
-  if(!code.trim()){setError('Type the code the launcher is showing.');return}
-  setBusy('device');setError('');setNotice('');
-  const result=await betaRequest(`/api/beta/device/${next?'approve':'deny'}`,{userCode:code});
-  setBusy(null);
-  if(!result.ok){setError(result.body?.error||'That code could not be used.');return}
-  setNotice(next?'Launcher linked. It will show as linked within a few seconds.':'Launcher request refused.');
-  void reload();
- }
- async function revoke(deviceId:string,label:string){
-  setBusy(deviceId);setError('');setNotice('');
-  const result=await betaRequest('/api/beta/devices/revoke',{deviceId});
-  setBusy(null);
-  if(!result.ok){setError(result.body?.error||'That launcher could not be unlinked.');return}
-  setNotice(`${label} was unlinked. Its token stops working immediately.`);
-  void reload();
- }
- async function signOut(){await betaRequest('/api/beta/logout');location.assign('/login')}
- if(loading) return <div className="site"><SiteNav account={null}/><main className="site-main site-narrow"><p className="site-loading"><Loader2 className="spin" size={16}/>Loading your dashboard…</p></main><SiteFooter/></div>;
  return <div className="site">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
-   {offline&&<OfflineBanner>The SCOUT host is not reachable on this address, so your dashboard cannot be loaded. Start the launcher, or open the host address, and reload.</OfflineBanner>}
-   {!account?<section className="site-card site-done">
-    <h2>Sign in to see your dashboard</h2>
-    <p>The dashboard holds your beta status, the launcher download and the code that links a launcher to your account.</p>
-    <div className="site-cta"><a className="button primary" href="/login">Sign in<ArrowRight size={14}/></a><a className="button" href="/apply">Apply for access</a></div>
-   </section>:<>
-    <div className="site-dash-head">
-     <div>
-      <span className="site-section-eyebrow">DASHBOARD</span>
-      <h1>{account.displayName||account.email}</h1>
-      <p>{account.email}{account.organisation?` · ${account.organisation}`:''}{account.country?` · ${account.country}`:''} · member since {new Date(account.createdAt).toLocaleDateString()}</p>
-     </div>
-     <div className="site-dash-head-right">
-      <span className={`site-status ${statusTone(account.status)}`}><span className="status-dot"/>{statusLabel(account.status)}</span>
-      <button className="site-ghost-link" onClick={()=>void signOut()}>Sign out</button>
-     </div>
-    </div>
-    {notice&&<Notice tone="ok">{notice}</Notice>}
-    {error&&<Notice>{error}</Notice>}
-    <div className="site-dash-grid">
-     <TournamentsCard/>
-     <DownloadCard account={account} download={status?.download??null}/>
-     <section className="site-card site-link">
-      <span className="site-card-icon"><Link2 size={17}/></span>
-      <h3>Link a launcher</h3>
-      <ol className="site-ol compact"><li>Open the launcher on the observer machine.</li><li>In the panel sidebar, find <b>Launcher link</b> and press <b>Link this installation</b>.</li><li>Type the 8-character code it shows below.</li></ol>
-      <label className="field"><span>LAUNCHER CODE</span><input value={code} onChange={event=>setCode(event.target.value.toUpperCase())} placeholder="ABCD-EFGH" spellCheck={false}/></label>
-      <div className="site-cta"><button className="button primary" onClick={()=>void decide(true)} disabled={busy==='device'}>{busy==='device'?<Loader2 className="spin" size={14}/>:<Link2 size={14}/>}Link this launcher</button><button className="button" onClick={()=>void decide(false)} disabled={busy==='device'}><Unplug size={14}/>Refuse</button></div>
-      <p className="site-fineprint">Approving a code is what tells the account service that a specific installation belongs to you. No password is ever typed into the launcher, and unlinking a device stops its token immediately.</p>
+   {offline&&<OfflineBanner>The SCOUT host is not reachable on this address. Start the launcher, or open the host address, and reload.</OfflineBanner>}
+   <div className="site-page-head">
+    <span className="site-section-eyebrow">GET SCOUT</span>
+    <h1>Download the app</h1>
+    <p>The installer carries the host, the overlay and the whole operator dashboard. Once it is installed, the dashboard lives inside the app — this website stays for access, downloads and the owner&apos;s admin desk.</p>
+   </div>
+   {loading?<p className="site-loading"><Loader2 className="spin" size={16}/>Checking your account…</p>
+    :!account?<section className="site-card site-done">
+      <span className="site-card-icon"><Download size={17}/></span>
+      <h2>Sign in to download</h2>
+      <p>The installer is offered to approved beta accounts. Sign in, or apply if you have not yet.</p>
+      <div className="site-cta"><a className="button primary" href="/login">Sign in<ArrowRight size={14}/></a><a className="button" href="/apply">Apply for access</a></div>
      </section>
-     <section className="site-card site-devices">
-      <span className="site-card-icon"><Monitor size={17}/></span>
-      <h3>Linked launchers <span className="site-count">{account.devices.length}</span></h3>
-      {account.devices.length?<ul className="site-device-list">{account.devices.map(device=><li key={device.id}>
-       <div><b>{device.label}</b><small>{device.platform} · linked {new Date(device.createdAt).toLocaleDateString()} · last seen {new Date(device.lastSeenAt).toLocaleString()}</small></div>
-       <button className="site-ghost-link danger" onClick={()=>void revoke(device.id,device.label)} disabled={busy===device.id}>{busy===device.id?<Loader2 className="spin" size={13}/>:<Unplug size={13}/>}Unlink</button>
-      </li>)}</ul>:<p className="site-card-lead">No launcher is linked yet. Once you link one, it appears here — and you can revoke it at any time without reinstalling anything.</p>}
-     </section>
-     <section className="site-card site-next">
-      <span className="site-card-icon"><Swords size={17}/></span>
-      <h3>While you wait</h3>
-      <p className="site-card-lead">The overlay output has no token and needs none, so once the launcher is running you can point OBS at it right away.</p>
-      <ul className="site-ul">
-       <li>Add a <b>Browser Source</b> in OBS: <code>{`http://localhost:8080/obs`}</code>, 1920 × 1080, no custom CSS.</li>
-       <li>Set <b>SCOUT_REQUIRE_TOKEN=1</b> if the panel on the observer PC should ask for the token too.</li>
-       <li>Issue per-operator tokens (producer, designer, viewer) instead of sharing yours.</li>
-      </ul>
-      <div className="site-cta">
-       <button className="button" onClick={()=>navigator.clipboard?.writeText('http://localhost:8080/obs').then(()=>setNotice('OBS source URL copied')).catch(()=>setNotice('Copy manually: http://localhost:8080/obs'))}><Copy size={14}/>Copy the OBS source URL</button>
-       <a className="button" href="/">Open the operator panel<ArrowUpRight size={14}/></a>
-      </div>
-     </section>
-    </div>
-    <p className="site-fineprint site-dash-foot">Account created {new Date(account.createdAt).toLocaleString()}{account.decidedAt?` · decision ${new Date(account.decidedAt).toLocaleString()}`:''}. This host is running the account service {status?.mode==='hosted'?'remotely (SCOUT_BETA_API_URL)':'locally (config/beta/store.json)'}.</p>
-   </>}
+    :<div className="site-dash-grid">
+      <DownloadCard account={account} download={status?.download??null}/>
+      <section className="site-card site-next">
+       <span className="site-card-icon"><LayoutDashboard size={17}/></span>
+       <h3>What happens after the install</h3>
+       <ul className="site-ul">
+        <li>The app opens on its own dashboard: your account, tournaments, linked launchers and the installer&apos;s status.</li>
+        <li>The control panel and every overlay setting are inside the app too — teams, maps, scenes, OBS and Overlay Studio.</li>
+        <li>This website keeps only the landing page, the beta application, sign-in and the owner&apos;s admin desk.</li>
+       </ul>
+       <div className="site-cta"><a className="button primary" href="/app">Open the app dashboard<ArrowUpRight size={14}/></a></div>
+       <p className="site-fineprint">Already on the observer machine? The app opens this address itself. On another machine, open the host address SCOUT prints in its launcher.</p>
+      </section>
+      {account.status!=='approved'&&<section className="site-card">
+       <h3>Your account is {statusLabel(account.status).toLowerCase()}</h3>
+       <p className="site-card-lead">{account.status==='pending'?'The download opens the moment your application is approved. Nothing else is needed from you.':'This account was not approved for the closed beta.'}</p>
+      </section>}
+      <p className="site-fineprint site-dash-foot">Signed in as {account.email}. Account created {new Date(account.createdAt).toLocaleString()}. This host is running the account service {status?.mode==='hosted'?'remotely (SCOUT_BETA_API_URL)':'locally (config/beta/store.json)'}.</p>
+     </div>}
+  </main>
+  <SiteFooter/>
+ </div>;
+}
+// Old bookmarks and the launcher's pre-refactor verification links still point at /dashboard. The
+// page explains where the desk went instead of quietly showing the operator panel.
+export function MovedDashboardPage(){
+ return <div className="site">
+  <SiteNav account={null}/>
+  <main className="site-main site-narrow">
+   <div className="site-page-head">
+    <span className="site-section-eyebrow">THE DASHBOARD MOVED</span>
+    <h1>Your dashboard lives in the app</h1>
+    <p>The website is now only the landing page, the beta application, sign-in, the installer download and the owner&apos;s admin desk. Tournaments, linked launchers and every broadcast setting are inside the SCOUT app.</p>
+   </div>
+   <section className="site-card site-done">
+    <span className="site-card-icon"><Monitor size={17}/></span>
+    <h2>Open SCOUT on the observer machine</h2>
+    <p>The app opens on its own dashboard. If SCOUT is not installed yet, download the installer with an approved account.</p>
+    <div className="site-cta"><a className="button primary" href="/download">Download the app<Download size={14}/></a><a className="button" href="/app">I have the app — open the dashboard</a></div>
+   </section>
   </main>
   <SiteFooter/>
  </div>;
 }
 // The download gate is the one thing the closed beta actually enforces, so it is its own component:
-// what the dashboard shows depends only on the account's status, and a test can render both states.
+// what the download page shows depends only on the account's status, and a test can render both states.
 export function DownloadCard({account,download}:{account:AccountView;download:BetaStatusView['download']}){
  return <section className={`site-card site-download ${account.status==='approved'?'':'locked'}`}>
   <span className="site-card-icon"><Download size={17}/></span>
@@ -590,8 +582,8 @@ export function DownloadCard({account,download}:{account:AccountView;download:Be
 
 // ------------------------------------------------------------------ the panel's own card
 // The launcher side of the link, where the operator actually sees the code: a small card in the
-// panel sidebar. It polls, so the moment the code is approved in the dashboard the card turns into
-// the linked account without anyone refreshing anything.
+// panel sidebar. It polls, so the moment the code is approved in the app (or on /login) the card
+// turns into the linked account without anyone refreshing anything.
 export function LauncherLinkCard(){
  const [state,setState]=useState<{mode:string;link:InstallationView;sync?:PlatformSyncView}|null>(null);
  const [licence,setLicence]=useState<LicenceView|null>(null);
@@ -645,14 +637,14 @@ export function LauncherLinkCard(){
  if(link.pending) return <div className="launcher-link pending">
   <span className="launcher-link-head"><Loader2 className="spin" size={13}/>WAITING FOR APPROVAL</span>
   <b className="launcher-code">{link.pending.userCode}</b>
-  <small>Sign in at <b>/dashboard</b> and approve this code. It expires {new Date(link.pending.expiresAt).toLocaleTimeString()}.</small>
+  <small>Sign in to the SCOUT app (or at <b>/login</b>) and approve this code. It expires {new Date(link.pending.expiresAt).toLocaleTimeString()}.</small>
   <button className="mini-button" onClick={()=>navigator.clipboard?.writeText(link.pending!.userCode).catch(()=>{})}><Copy size={11}/>Copy code</button>
   <LicenceLine licence={licence}/>
   {error&&<span className="launcher-link-error">{error}</span>}
  </div>;
  return <div className="launcher-link">
   <span className="launcher-link-head"><Link2 size={13}/>LAUNCHER NOT LINKED</span>
-  <small>Link this installation to your SCOUT account so the website knows which launcher is yours.</small>
+  <small>Link this installation to your SCOUT account so the platform knows which launcher is yours.</small>
   <button className="mini-button" onClick={()=>void start()} disabled={busy}>{busy?<Loader2 className="spin" size={11}/>:<Link2 size={11}/>}Link this installation</button>
   <LicenceLine licence={licence}/>
   {error&&<span className="launcher-link-error">{error}</span>}
@@ -723,8 +715,10 @@ export function SiteRouter({route}:{route:SiteRoute}){
  const params=new URLSearchParams(location.search);
  const linkCode=params.get('link')||params.get('device')||undefined;
  const invite=params.get('invite')||undefined;
+ // Only the app dashboard is a safe post-login destination; anything else falls back to Download.
+ const next=params.get('next')==='/app'?'/app':'/download';
  if(route==='/welcome') return <LandingPage/>;
  if(route==='/apply') return <ApplyPage/>;
- if(route==='/dashboard') return <DashboardPage linkCode={linkCode}/>;
- return <LoginPage linkCode={linkCode} invite={invite}/>;
+ if(route==='/download') return <DownloadPage/>;
+ return <LoginPage linkCode={linkCode} invite={invite} next={next}/>;
 }

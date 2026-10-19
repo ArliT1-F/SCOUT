@@ -2,7 +2,7 @@
 
 `server/account-service.ts` is the service `docs/BETA.md` describes: one process, one SQLite file,
 no external database server or SQLite driver (it uses Node's own `node:sqlite`). It answers the same
-REST contract the local store does, so the host, the landing page, the dashboard and the launcher do
+REST contract the local store does, so the host, the website, the app's dashboard and the launcher do
 not know — or care — which of the two they are talking to.
 
 You need it when the accounts should outlive one observer's machine, when several operators share an
@@ -31,6 +31,15 @@ SCOUT_OWNER_EMAIL=you@example.com \
 npm start
 ```
 
+Both commands also read a `.env` file from the working directory, so the same block can be written
+once instead: `cp .env.example .env` and fill it in. Real environment variables win over the file.
+`PORT` is shared by the host and this service — when both run on one machine, give the service its
+own port on the command line (`PORT=8790 npm run account-service`) rather than in a shared `.env`.
+
+`SCOUT_OWNER_EMAIL` names the account that may write `/settings`; it is **not** a password. The owner
+signs in with a password set through the normal one-time invite link (`--approve` prints it). There is
+no password setting in the file or the environment.
+
 The host proxies the browser's `/api/beta/*` calls to the service, cookies included, so there is no
 CORS configuration anywhere and the pages keep talking to their own origin. `SCOUT_BETA_API_KEY` is
 sent as `Authorization: Bearer …` on the calls the *host* makes (listing and deciding applications),
@@ -45,7 +54,7 @@ refuses those routes outright when no key is configured.
 | `SCOUT_OWNER_EMAIL` | — | The approved account allowed to write `/settings`. Set the same email on the central SCOUT host. Unset leaves settings writes closed. |
 | `SCOUT_DOWNLOAD_URL` / `SCOUT_DOWNLOAD_VERSION` / `SCOUT_DOWNLOAD_NOTES` | the repository's GitHub releases | What `/status` offers to an approved account. A release published on the host (Operations tab) overrides it. |
 | `SCOUT_ACCOUNT_APPLICATIONS` | open | **Initial seed only:** `closed` seeds `applicationsOpen:false`. After first start, change applications-open in `/admin` or `PUT /settings`, not this variable. Existing accounts keep working. |
-| `SCOUT_ACCOUNT_REVIEW_NOTE` | empty | **Initial seed only:** the review note shown to applicants/dashboard. Subsequent edits come from the persisted settings desk. |
+| `SCOUT_ACCOUNT_REVIEW_NOTE` | empty | **Initial seed only:** the review note shown to applicants and in the app's dashboard. Subsequent edits come from the persisted settings desk. |
 | `SCOUT_ACCOUNT_NAME` | `SCOUT account service` | The name `/status` reports as the host behind the beta. |
 | `SCOUT_ACCOUNT_BASE_URL` | — | Only for the CLI: the address used to print a full invite link. |
 
@@ -149,7 +158,7 @@ nothing else is logged about an account, and nothing about a broadcast is ever s
 - **Migration from the local JSON store.** There is none, deliberately: the local store is meant for
   one machine. Approve the same addresses again here and send them a fresh invite — the launcher's
   `config/beta/installation.json` is unchanged by the move, but the installation is *unlinked* on the
-  service's side until somebody approves a new code from the new dashboard.
+  service's side until somebody approves a new code in the app's dashboard (or at the website's `/login?link=`).
 
 ## Upgrading
 

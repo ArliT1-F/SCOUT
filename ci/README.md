@@ -20,6 +20,6 @@ push that has the `workflow` scope.
 | `ci.yml` | Every push to `main` and every pull request: `tsc --noEmit`, `vite build`, `npm test`, and `cargo test` for `src-tauri/core` (geometry, plan, configuration, the licence parser). |
 | `release.yml` | On a tag (`v0.4.1`) or by hand with a version: installs Rust + the Tauri CLI + Inno Setup, runs the shell tests, calls `node scripts/build-installer.mjs --version <v>` (the same command an operator runs, smoke test included), writes `SHA256SUMS.txt`, uploads the artifacts, and creates or updates the GitHub release the installer belongs to. |
 
-`docs/RELEASE.md` describes what a release is, where the dashboard's download comes from, and what
+`docs/RELEASE.md` describes what a release is, where the download page's installer comes from, and what
 still has to be checked on a real Windows machine. `ci.yml`'s ubuntu jobs are the same commands
 `README.md`'s *Scope and verification* section lists as run in this checkout.

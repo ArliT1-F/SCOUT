@@ -1,10 +1,14 @@
 # SCOUT Shell — Windows overlay
 
-A small [Tauri v2](https://v2.tauri.app/) app with two windows and one job each:
+A small [Tauri v2](https://v2.tauri.app/) app with three windows and one job each:
 
 * the **overlay** — the SCOUT host's `/game` page in a **transparent, click-through, always-on-top window laid exactly over
   the CS2 window**, hidden whenever CS2 is not in front. An alternative to the OBS Browser Source for when the overlay should
   appear on the observer's own screen;
+* the **launcher** — the window an operator sees first (`ui/launcher.html`): host, CS2 and account status, one-click actions
+  and the device-linking code. Once the host answers it hands itself over to that host's `/app` dashboard, so the account,
+  tournaments, launcher link and linked devices are the app's own GUI rather than a website page. If the host never answers
+  the splash stays put and explains what it is waiting for;
 * the **operator panel** — the host's own control surface (`/`) in an ordinary window of the launcher: teams, players, maps,
   scenes, the OBS source address, the layout editor, the beta applications and the launcher link. It opens as soon as the host
   answers and is toggled with **F9**, which is what makes the launcher the whole product rather than a spare monitor for the
@@ -26,6 +30,7 @@ software near a game, follow your event's rules.
 | **F9** | Shows and hides the operator window (`--panel-hotkey`). Never the same chord as F8 or the quit hotkey. |
 | **Ctrl+Shift+F8** | Quits the shell. A hidden, click-through window with no taskbar button has no other way out short of Task Manager. |
 | **The operator panel** | A normal window on the host root, derived from `--url` (`http://10.0.0.7:9000/game` → `http://10.0.0.7:9000/`) unless `--panel-url` says otherwise. It loads the blank page the app ships, shows itself the first time the host answers, and after that it is the operator's window. |
+| **The dashboard** | Once the host answers, the launcher window navigates to `<host>/app`: account status, tournaments, the launcher-link card and linked launchers, with links to the control panel and the website. Nothing there is a website dashboard; the public site is only `/welcome`, `/apply`, `/login` and `/download`. |
 | **The licence check** | With `--require-link` (or `SCOUT_SHELL_REQUIRE_LINK=1`) the shell asks the host `GET /api/beta/license` every minute and draws nothing while the answer is an explicit refusal. Off by default: a licence server outage must never be able to take a broadcast off air. `active`, `unknown` and `offline` all run; `revoked`, `unlinked` and `pending` hide the overlay. |
 | **Waits for the host** | The window starts on a blank transparent page shipped in the app. The overlay is only loaded once the SCOUT host answers on its address, so a host that is not running yet draws nothing over the game — never a browser error page. |
 

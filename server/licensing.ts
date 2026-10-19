@@ -66,8 +66,8 @@ export class LicenceMonitor {
  private describe(state:LicenceState,email:string|null):string{
   switch(state){
    case 'active':return email?`Linked to ${email}. This installation may run.`:'Linked and verified. This installation may run.';
-   case 'pending':return 'A launcher link is waiting to be approved in your SCOUT dashboard.';
-   case 'unlinked':return 'This installation is not linked to a SCOUT account yet. Open the panel sidebar, press Link this installation, and approve the code in your dashboard.';
+   case 'pending':return 'A launcher link is waiting to be approved in the SCOUT app (or on the website sign-in page).';
+   case 'unlinked':return 'This installation is not linked to a SCOUT account yet. In the app dashboard, press Start a link, then approve the code there.';
    case 'revoked':return email?`The account ${email} is not entitled to run SCOUT any more, or this installation was unlinked. Link it again from a current account.`:'This installation was unlinked or revoked. Link it again from a current account.';
    case 'offline':return 'The SCOUT account service could not be reached. The last verified state stays in force until the grace period runs out; the broadcast is not affected.';
    default:return 'The account service does not recognise this installation. Link it again from the panel sidebar.';
