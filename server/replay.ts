@@ -1,5 +1,11 @@
 import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
+import {loadEnvFile} from './env.js';
+// Optional `.env` (same file the host reads) so `npm run replay` picks up GSI_TOKEN without a shell
+// wrapper. Only when this module is the process entry point — importing it in a test must not read
+// the developer's environment file.
+const isEntry=Boolean(process.argv[1])&&import.meta.url===pathToFileURL(process.argv[1]).href;
+if(isEntry) loadEnvFile();
 // Replays a `LOG_GSI=1` recording against a running host, keeping the recorded spacing (divided by
 // --speed) so the store, schema validation and the broadcast clock see the same sequence the
 // observer machine saw. Recording lines look like {"receivedAt":<ms>,"payload":{...}}.
@@ -112,4 +118,4 @@ export async function main(argv=process.argv.slice(2)):Promise<void> {
   if(merged===0) console.warn('[replay] warning: HTTP accepted the packets but the store merged none — the host already holds newer provider timestamps. Restart the host first, or replay a newer recording.');
  }
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) main().catch(error=>{console.error(`[replay] ${error instanceof Error?error.message:String(error)}`);process.exit(1)});
+if(isEntry) main().catch(error=>{console.error(`[replay] ${error instanceof Error?error.message:String(error)}`);process.exit(1)});

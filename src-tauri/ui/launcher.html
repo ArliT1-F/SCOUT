@@ -103,11 +103,11 @@
               <button class="mini" id="btn-start-link">Start link</button>
               <button class="mini primary" id="btn-copy-link">Copy code</button>
             </div>
-            <p class="hint">Approve at <b id="link-url">your dashboard</b> → linked launchers show <b>active</b>. Public downloads are safe to share — unlinked copies stay gated.</p>
+            <p class="hint">Approve in the app (or at <b id="link-url">/login</b>) → linked launchers show <b>active</b>. Public downloads are safe to share — unlinked copies stay gated.</p>
           </div>
           <div id="link-active" style="display:none">
             <p>✓ Linked to <b id="link-email">—</b></p>
-            <p class="hint">Overlay will run even offline for 7 days after last check. Revoking in the dashboard hides the overlay within 15 min when enforcement is on.</p>
+            <p class="hint">Overlay will run even offline for 7 days after last check. Revoking the launcher in the app dashboard hides the overlay within 15 min when enforcement is on.</p>
           </div>
         </div>
       </div>
@@ -123,7 +123,7 @@
     </div>
   </div>
 
-  <footer><span>GSI only · No injection · External overlay</span><span><a href="#" id="lnk-admin">Advanced panel</a> · <a href="#" id="lnk-quit">Quit SCOUT</a></span></footer>
+  <footer><span>GSI only · No injection · External overlay</span><span><a href="#" id="lnk-admin">Dashboard</a> · <a href="#" id="lnk-quit">Quit SCOUT</a></span></footer>
 </div>
 
 <script type="module">
@@ -131,7 +131,7 @@ const qs = new URLSearchParams(location.search);
 const hostUrl = (qs.get('host') || 'http://127.0.0.1:8080').replace(/\/$/,'');
 const $ = s => document.getElementById(s);
 const setPill = (id, text, cls) => { const el=$(id); if(!el) return; el.textContent=text; el.className='pill '+cls; };
-let hostOk=false, interval=null;
+let hostOk=false, interval=null, handedOff=false;
 
 async function check() {
   try {
@@ -139,7 +139,7 @@ async function check() {
     hostOk = !!h.ok;
     setPill('pill-host', hostOk?'HOST ONLINE':'HOST OFFLINE', hostOk?'ok':'bad');
     $('kv-host').textContent = hostOk ? `Online · ${Math.round(h.uptimeMs/1000)}s up` : 'Offline — starting…';
-    $('kv-panel').innerHTML = hostOk ? `<a href="${hostUrl}/admin" target="_blank">${hostUrl}/admin</a>` : '—';
+    $('kv-panel').innerHTML = hostOk ? `<a href="${hostUrl}/" target="_blank">${hostUrl}/</a>` : '—';
     $('kv-obs').innerHTML = hostOk ? `<a href="${hostUrl}/obs" target="_blank">${hostUrl}/obs</a> (1920×1080)` : '—';
     $('step-host').classList.toggle('done', hostOk); $('step-host-txt').textContent = hostOk ? 'Running' : 'Starting…';
     // CS2 via status
@@ -148,6 +148,9 @@ async function check() {
     setPill('pill-cs2', receiving?'CS2 LIVE':'CS2 WAITING', receiving?'live':'warn');
     $('kv-cs2').textContent = receiving ? `Live · ${Object.keys(gsi.blocks||{}).join(', ')}` : 'Waiting for push to /gsi';
     $('step-cs2').classList.toggle('done', !!receiving); $('step-cs2-txt').textContent = receiving ? 'Receiving' : 'Waiting';
+    // The splash has done its job: the app dashboard is a real page of the host now, and it is the
+    // GUI the operator should be in. If the host never answers, this page stays and explains why.
+    if (hostOk && !handedOff) { handedOff = true; setTimeout(() => location.replace(hostUrl + '/app'), 500); }
   } catch { setPill('pill-host','HOST OFFLINE','bad'); $('kv-host').textContent='Offline'; }
 
   try {
@@ -157,22 +160,22 @@ async function check() {
     const [label, cls] = map[state] || ['UNKNOWN','warn'];
     setPill('pill-licence', label, cls); $('licence-dot').textContent = enforced ? label+' · enforced' : label; $('licence-msg').textContent = lic.message || '';
     if (state==='active') { $('link-active').style.display='block'; $('link-pending').style.display='none'; $('link-email').textContent=lic.email||'—'; $('step-link').classList.add('done'); $('step-link-txt').textContent='Linked'; }
-    else { $('link-active').style.display='none'; $('link-pending').style.display='block'; $('step-link-txt').textContent = state==='pending'?'Approve in dashboard': state==='revoked'?'Revoked — relink':'Not linked'; }
+    else { $('link-active').style.display='none'; $('link-pending').style.display='block'; $('step-link-txt').textContent = state==='pending'?'Approve in app': state==='revoked'?'Revoked — relink':'Not linked'; }
   } catch { setPill('pill-licence','ACCOUNT …',''); }
 
   try {
     const link = await fetch(hostUrl+'/api/beta/link').then(r=>r.json()).catch(()=>null);
-    if (link?.link?.pending?.userCode) { $('link-code').textContent = link.link.pending.userCode; $('link-url').textContent = hostUrl+'/dashboard?link='+link.link.pending.userCode; }
+    if (link?.link?.pending?.userCode) { $('link-code').textContent = link.link.pending.userCode; $('link-url').textContent = hostUrl+'/login?link='+link.link.pending.userCode; }
   } catch {}
 }
-$('btn-panel').onclick = () => window.open(hostUrl+'/admin', '_blank');
+$('btn-panel').onclick = () => window.open(hostUrl+'/', '_blank');
 $('btn-obs').onclick = () => window.open(hostUrl+'/obs?checker=1', '_blank');
 $('btn-copy-obs').onclick = async () => { await navigator.clipboard.writeText(hostUrl+'/obs'); $('btn-copy-obs').innerHTML='<i>✓</i><div><b>Copied!</b><br><small>'+hostUrl+'/obs</small></div>'; setTimeout(()=>location.reload(),1200); };
-$('btn-setup').onclick = () => window.open(hostUrl+'/admin', '_blank');
+$('btn-setup').onclick = () => window.open(hostUrl+'/', '_blank');
 $('btn-start-link').onclick = async () => { await fetch(hostUrl+'/api/beta/link/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({label:navigator.platform})}); check(); };
 $('btn-copy-link').onclick = async () => { const c=$('link-code').textContent.trim(); if(c && c!=='—') await navigator.clipboard.writeText(c); };
 $('btn-docs').onclick = () => window.open('https://github.com/ArliT1-F/SCOUT','_blank');
-$('lnk-admin').onclick = (e)=>{ e.preventDefault(); window.open(hostUrl+'/admin','_blank'); };
+$('lnk-admin').onclick = (e)=>{ e.preventDefault(); window.open(hostUrl+'/app','_blank'); };
 if(interval) clearInterval(interval); check(); interval=setInterval(check, 3000);
 </script>
 </body>

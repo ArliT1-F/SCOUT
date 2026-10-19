@@ -10,7 +10,8 @@ import {
  digestSecret,secretMatches,hashToken,accountView,ACCOUNT_TTL_MS,DEVICE_CODE_TTL_MS,MAX_APPLICATIONS_PER_HOUR,MAX_LOGIN_FAILURES,MIN_PASSWORD,
  type AccountView,BetaContext,
 } from '../server/beta';
-import {DownloadCard,isSiteRoute,LandingPage,ApplyPage,LoginPage} from '../src/site';
+import {DownloadCard,isSiteRoute,LandingPage,ApplyPage,LoginPage,SiteNav} from '../src/site';
+import {AppHome} from '../src/launcher-gui';
 
 // The closed beta as it behaves, not as it is described: a stranger may apply and nothing else, an
 // approved account sets its own password through a one-time invite, and a launcher only becomes
@@ -117,7 +118,7 @@ test('the launcher flow needs the account owner, not just the code',async()=>{
  assert.equal(start.ok,true);
  if(!start.ok) return;
  assert.match(start.value.userCode,/^[A-Z2-9]{4}-[A-Z2-9]{4}$/,'the code is short, typo-resistant and readable aloud');
- assert.match(start.value.verificationUrl,/\/dashboard\?link=/,'the launcher tells the operator where to approve it');
+ assert.match(start.value.verificationUrl,/\/login\?link=/,'the launcher tells the operator where to approve it');
  const pending=await service.devicePoll({deviceCode:start.value.deviceCode});
  assert.equal(pending.ok&&pending.value.status,'pending');
  const noSession=await service.deviceDecide(undefined,start.value.userCode,true);
@@ -262,9 +263,10 @@ const clean=(html:string)=>html.replace(/<!-- -->/g,'');
 const approvedAccount:AccountView={id:'a1',email:'ada@example.com',displayName:'Ada Operator',organisation:'Durres LAN',country:'AL',status:'approved',useCase:'weekly cups',events:'Every week',createdAt:1_700_000_000_000,decidedAt:1_700_000_100_000,devices:[]};
 const pendingAccount:AccountView={...approvedAccount,status:'pending',decidedAt:null};
 
-test('the site routes are the four public pages, and nobody else claims them',()=>{
- for(const route of ['/welcome','/login','/apply','/dashboard']) assert.equal(isSiteRoute(route),true,route);
- for(const route of ['/','/admin','/obs','/game','/api/beta/status','']) assert.equal(isSiteRoute(route),false,route);
+test('the website is access only: landing, apply, sign-in, download and the owner admin',()=>{
+ for(const route of ['/welcome','/login','/apply','/download']) assert.equal(isSiteRoute(route),true,route);
+ // The dashboard, the operator panel and the outputs are app surfaces, not website pages.
+ for(const route of ['/','/app','/panel','/dashboard','/admin','/obs','/game','/api/beta/status','']) assert.equal(isSiteRoute(route),false,route);
 });
 
 test('the landing page sells the product without inventing a session',()=>{
@@ -277,6 +279,31 @@ test('the landing page sells the product without inventing a session',()=>{
  assert.match(html,/href="\/login"/);
  const nav=html.slice(html.indexOf('<header'),html.indexOf('</header>'));
  assert.equal(nav.includes('href="/dashboard"'),false,'a visitor is not shown a dashboard they do not have');
+ assert.equal(nav.includes('href="/app"'),false,'the app dashboard is never linked from the website');
+ assert.equal(nav.includes('href="/download"'),false,'a visitor sees sign-in and apply, not a download they cannot use');
+ const signedIn=clean(renderToString(createElement(SiteNav,{account:approvedAccount})));
+ assert.match(signedIn,/href="\/download"/,'a signed-in visitor is pointed at the installer');
+ assert.equal(signedIn.includes('href="/app"'),false,'the app surface is never linked from the website');
+});
+
+test('the app dashboard points at the panel, not at a website dashboard',()=>{
+ // /app is the .exe's own GUI: the launcher lands here once the host answers. Server-rendered, so
+ // only the static shell is checked — the cards themselves arrive from the host's APIs.
+ const previous=(globalThis as any).location;
+ (globalThis as any).location={origin:'http://127.0.0.1:8080',search:''};
+ try{
+  const html=clean(renderToString(createElement(AppHome)));
+  assert.match(html,/Dashboard/,'the app says what surface this is');
+  assert.match(html,/Launcher link/,'linking this installation is an app surface');
+  assert.match(html,/Open control panel/);
+  assert.match(html,/href="\/"/,'the panel lives in the same app');
+  assert.match(html,/href="\/login\?next=\/app"/,'sign-in comes back to the app dashboard');
+  assert.match(html,/href="\/obs\?checker=1"/,'the OBS output is untouched');
+  assert.equal(html.includes('href="/dashboard"'),false,'the old website dashboard is gone');
+ } finally {
+  if(previous===undefined) delete (globalThis as any).location;
+  else (globalThis as any).location=previous;
+ }
 });
 
 test('the application form asks for what a review needs',()=>{
@@ -301,7 +328,7 @@ test('the login page shows both doors, and names the code a launcher is waiting 
  assert.match(invite,/REPEAT PASSWORD/);
 });
 
-test('the dashboard download is gated on approval',()=>{
+test('the download page is gated on approval',()=>{
  const pending=clean(renderToString(createElement(DownloadCard,{account:pendingAccount,download:null})));
  assert.match(pending,/Available after approval/);
  assert.match(pending,/IN REVIEW/);

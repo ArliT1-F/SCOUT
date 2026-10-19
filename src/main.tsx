@@ -21,23 +21,28 @@ import {PANEL_SECTIONS,SCENE_LIST} from './panel-catalog';
 import {demo,demoEvents} from './demo';
 import {UnlockScreen,SessionPill,apiFetch,setDeniedHandler,forgetToken} from './session';
 import {Hud,Mark} from './hud';
-import {SiteRouter,LauncherLinkCard,BetaApplicationsPanel,isSiteRoute,type SiteRoute} from './site';
+import {SiteRouter,LauncherLinkCard,BetaApplicationsPanel,LoginPage,MovedDashboardPage,isSiteRoute,type SiteRoute} from './site';
 import {ScoutMark} from './logo';
 import {OperationsPanel} from './ops-panel';
 import {PlatformAdminPage} from './platform-admin';
-import { LauncherHome } from './launcher-gui';
+import { AppHome } from './launcher-gui';
 import type {PanelSessionView} from '../server/auth';
 import './style.css';
 import './landing.css';
 const OUTPUT_ROUTES=['/obs','/game'];
 // Trailing slashes are tolerated; Vite/express serve the same SPA document for either form.
 const isOutputRoute=OUTPUT_ROUTES.includes(location.pathname.replace(/\/+$/,'')||'/');
-// The public product pages (src/site.tsx): landing, application, sign-in and dashboard. They are
-// deliberately outside the panel's session gate — an applicant has no authority yet, and a hosted
-// deployment has no panel at all — so they are resolved before anything else renders.
+// Three surfaces, deliberately separated:
+//   * the website (src/site.tsx): landing, application, sign-in and the installer download, plus the
+//     owner's admin desk at /admin — public pages, no broadcast controls;
+//   * the app (src/launcher-gui.tsx and the panel below): /app is its dashboard, / and /panel are the
+//     operator's overlay settings. The Tauri shell opens exactly these on the local host;
+//   * the outputs: /obs and /game, public so an OBS browser source never needs a token.
 const trimmedPath=location.pathname.replace(/\/+$/,'')||'/';
 const siteRoute:SiteRoute|null=isSiteRoute(trimmedPath)?trimmedPath:null;
 const isPlatformAdminRoute=trimmedPath==='/admin';
+const isAppHomeRoute=trimmedPath==='/app';
+const isPanelRoute=trimmedPath==='/'||trimmedPath==='/panel';
 // Opt-in browser-only aid: /obs?checker=1 draws a checkerboard behind the canvas so an operator can
 // prove the page is transparent in a normal browser. Never add it to the OBS source URL.
 const showChecker=isOutputRoute&&new URLSearchParams(location.search).get('checker')==='1';
@@ -187,13 +192,21 @@ const events=demoMode?demoKills(now):previewReplay?replayFrame!.events:data?.eve
 // on another machine has no token and must keep loading /obs and its feed.
 if(siteRoute)return <SiteRouter route={siteRoute}/>;
 if(isPlatformAdminRoute)return <PlatformAdminPage/>;
-// Friendly launcher for non-tech users at the root. Advanced operator desk lives at /admin.
-// Keep the shell's launcher window (launcher.html) as primary, but browser at / also shows this.
-if(trimmedPath==='/' && !new URLSearchParams(location.search).has('panel')) return <LauncherHome/>;
+// /dashboard was the website's account desk. It is the app's now; old bookmarks (and any launcher
+// that still prints the old verification link) get an explanation, or the code form they came for.
+if(trimmedPath==='/dashboard'){
+ const params=new URLSearchParams(location.search);
+ const legacyCode=params.get('link')||params.get('device')||undefined;
+ return legacyCode?<LoginPage linkCode={legacyCode} next="/download"/>:<MovedDashboardPage/>;
+}
+// The app's dashboard: account, tournaments, launcher link and the door to the panel. It is not a
+// website page and is never linked from the site navigation.
+if(isAppHomeRoute)return <AppHome/>;
 if(isOutputRoute)return <Output state={data?.state||{}} controls={data?.controls||initial} config={data?.config} sides={data?.sides} resolvedSeries={data?.series} radars={data?.radars} layout={data?.layout} overlay={data?.overlay} lastSeen={data?.lastSeen} now={now} clockSkew={data?.clockSkew||0} signal={signal} events={{kills:(data?.events?.kills||[]).filter((kill:KillEvent)=>now-kill.at<9000),rounds:data?.events?.rounds||[]}}/>;
+if(!isPanelRoute) return <MovedDashboardPage/>;
 if(session&&!session.authenticated&&!session.local) return <UnlockScreen session={session} message={denied} onUnlocked={()=>{setDenied('');void refreshSession()}}/>;
 if(new URLSearchParams(location.search).get('remote')==='1')return <TouchRemote controls={controls} hostConnected={connected} lease={currentLease} canControl={canControl} canTakeover={isOwner} onAction={patch=>void update(patch)} onClaim={claimControl} onRelease={releaseControl} onNotice={flash}/>;
-return <div className="app"><div className="mobile-bar"><button className="mobile-bar-button" aria-label="Open the panel navigation" aria-expanded={navOpen} onClick={()=>setNavOpen(!navOpen)}><Menu size={20}/></button><a className="brand" href="/"><ScoutMark className="brand-symbol" size={26}/> scout<span className="brand-dot">®</span></a><span className="mobile-bar-spacer"/></div><button className={"nav-backdrop"+(navOpen?" open":"")} aria-label="Close the panel navigation" onClick={()=>setNavOpen(false)}/><aside className={"sidebar"+(navOpen?" open":"")}><a className="brand" href="/"><ScoutMark className="brand-symbol" size={40}/> scout<span className="brand-dot">®</span></a><div className="workspace"><span className="workspace-icon">{(config?.event?.name||'S').charAt(0).toUpperCase()}</span><div>{config?.event?.name||'Tournament workspace'}<small>Tournament workspace</small></div><ChevronDown size={15}/></div><div className="nav-label">WORKSPACE</div><nav>{PANEL_SECTIONS.filter(item=>!item.ownerOnly||showOwnerTabs).map(({name,icon:Icon})=><button key={name} className={tab===name?'active':''} onClick={()=>{setTab(name);setNavOpen(false)}}><Icon size={18}/>{name}{name==='Overview'&&<span className="nav-active-dot"/>}</button>)}</nav><div className="sidebar-bottom"><LauncherLinkCard/><div className="host-card"><span className={'status-dot '+(connected?'':'off')}/><b>{connected?'Overlay host online':'Host reconnecting'}</b><small>PORT 8080 <span>v0.1.0</span></small></div><button className="settings-link" onClick={()=>setTab('Setup guide')}><Settings2 size={18}/>Setup guide<ArrowUpRight size={15}/></button><div className="operator"><span>OP</span><div>Observer station<small>Local operator</small></div><MoreHorizontal size={18}/></div></div></aside>
+return <div className="app"><div className="mobile-bar"><button className="mobile-bar-button" aria-label="Open the panel navigation" aria-expanded={navOpen} onClick={()=>setNavOpen(!navOpen)}><Menu size={20}/></button><a className="brand" href="/app"><ScoutMark className="brand-symbol" size={26}/> scout<span className="brand-dot">®</span></a><span className="mobile-bar-spacer"/></div><button className={"nav-backdrop"+(navOpen?" open":"")} aria-label="Close the panel navigation" onClick={()=>setNavOpen(false)}/><aside className={"sidebar"+(navOpen?" open":"")}><a className="brand" href="/app"><ScoutMark className="brand-symbol" size={40}/> scout<span className="brand-dot">®</span></a><div className="workspace"><span className="workspace-icon">{(config?.event?.name||'S').charAt(0).toUpperCase()}</span><div>{config?.event?.name||'Tournament workspace'}<small>Tournament workspace</small></div><ChevronDown size={15}/></div><div className="nav-label">WORKSPACE</div><nav>{PANEL_SECTIONS.filter(item=>!item.ownerOnly||showOwnerTabs).map(({name,icon:Icon})=><button key={name} className={tab===name?'active':''} onClick={()=>{setTab(name);setNavOpen(false)}}><Icon size={18}/>{name}{name==='Overview'&&<span className="nav-active-dot"/>}</button>)}</nav><div className="sidebar-bottom"><LauncherLinkCard/><div className="host-card"><span className={'status-dot '+(connected?'':'off')}/><b>{connected?'Overlay host online':'Host reconnecting'}</b><small>PORT 8080 <span>v0.1.0</span></small></div><button className="settings-link" onClick={()=>setTab('Setup guide')}><Settings2 size={18}/>Setup guide<ArrowUpRight size={15}/></button><div className="operator"><span>OP</span><div>Observer station<small>Local operator</small></div><MoreHorizontal size={18}/></div></div></aside>
  <main><header><div className="breadcrumb">Workspace <ChevronRight size={13}/> <span>{tab}</span></div><div className="header-right"><SessionPill session={session} onLogout={logout}/><span className="header-separator"/><span className="help" onClick={()=>setTab('Setup guide')}>?</span></div></header><div className="content"><div className="page-title"><div><div className="eyebrow">YOUR BROADCAST, UNDER CONTROL</div><h1>{tab==='Overview'?'Broadcast overview':tab}</h1><p>Every round. Every detail. Ready for the big stage.</p></div><div className="title-actions">{(dirty||overlayDirty)&&<span className="unsaved-pill">UNSAVED CHANGES</span>}<button className="button save-button" disabled={!dirty||!canEditMatch} onClick={saveConfig}><Save size={15}/>Save configuration</button><a className="button primary" href="/obs" target="_blank">Open broadcast <ArrowUpRight size={16}/></a></div></div>
  <div className="status-cards"><div className="metric"><span className="metric-icon green"><Radio size={20}/></span><div><small>GSI CONNECTION</small><b>{signal?'Receiving live data':'Waiting for CS2'}<span className={'status-dot '+(signal?'':'amber')}/></b><p>{signal?'Observer feed connected':'Demo available in preview'}</p></div><Activity className="metric-end" size={23}/></div><div className="metric"><span className="metric-icon purple-bg"><Swords size={20}/></span><div><small>CURRENT MATCH</small><b>{sides.CT.name} <span className="muted">vs</span> {sides.T.name}</b><p>{config?.event?.stage||'Exhibition'} <span>·</span> {(config?.format||'bo3').toUpperCase().replace('BO','Best of ')}</p></div></div><div className="metric"><span className="metric-icon gold"><Layers size={20}/></span><div><small>ACTIVE SCENE</small><b>{SCENE_LIST.find(s=>s.id===controls.scene)?.title}</b><p>{controls.scene==='live'?'In-game spectator HUD':'Full-screen broadcast graphic'}</p></div><span className="on-air">OUTPUT</span></div></div>
  {tab==='Overview'&&canControl&&<section className={'control-lease-card'+(currentLease?.mine?' mine':'')}><div className="lease-mark"><Shield size={16}/></div><div><small>LIVE CONTROL LEASE</small><b>{currentLease?.holder?currentLease.mine?`You are in control · ${session?.operator||'operator'}`:`${currentLease.holder} is in control`:'Available · no producer owns the lease'}</b><span>{currentLease?.expiresAt?`Automatic release at ${new Date(currentLease.expiresAt).toLocaleTimeString()} unless renewed by an action.`:'A renewable 45-second lease prevents conflicting scene changes.'}</span></div>{currentLease?.mine?<button className="button" onClick={()=>void releaseControl()}>Release control</button>:currentLease?.holder&&isOwner?<button className="button danger-button" onClick={()=>void claimControl(true)}>Owner takeover</button>:!currentLease?.holder?<button className="button primary" onClick={()=>void claimControl(false)}>Take control</button>:<span className="lease-held">CONTROL IN USE</span>}</section>}

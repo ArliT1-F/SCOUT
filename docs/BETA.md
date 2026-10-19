@@ -11,7 +11,7 @@ Two shapes, one set of pages:
 | --- | --- | --- |
 | Accounts live in | `config/beta/store.json` on the host | your service (database, email, backups) |
 | Who serves `/api/beta/*` | the host itself | your service; the host **proxies** the browser's calls to it, cookies included |
-| Launcher device flow | between the panel and the dashboard on this machine | the launcher talks to your service through the same host endpoints |
+| Launcher device flow | between the launcher and the app's dashboard on this machine | the launcher talks to your service through the same host endpoints |
 | Enabled by | nothing (default) | `SCOUT_BETA_API_URL` (+ optional `SCOUT_BETA_API_KEY`) |
 
 Local mode is not a mock. It is the whole flow — apply, review, invite, password, download, device
@@ -20,14 +20,19 @@ and moving to a hosted service later changes no page and no route.
 
 ## What the pages are
 
-| Route | Purpose | Needs an account? |
-| --- | --- | --- |
-| `/welcome` | Product page, closed-beta story, how access works, FAQ | no |
-| `/apply` | The whitelist application | no |
-| `/login` | Account sign-in, invite activation, launcher-code approval, panel-token unlock | no |
-| `/dashboard` | Beta status, launcher download (approved only), launcher link, linked devices | yes |
-| `/`, `/admin` | Operator panel — including **Beta applications** and **Operations** (health, releases, requests), both owner-only | panel token / local machine |
-| `/obs`, `/game` | Public broadcast output | no |
+The website carries the public pages and the owner's desk; the dashboard and every overlay setting are
+part of the installed app.
+
+| Route | Where | Purpose | Needs an account? |
+| --- | --- | --- | --- |
+| `/welcome` | website | Product page, closed-beta story, how access works, FAQ | no |
+| `/apply` | website | The whitelist application | no |
+| `/login` | website | Account sign-in, invite activation, launcher-code approval, panel-token unlock | no |
+| `/download` | website | The installer, approved accounts only | yes |
+| `/admin` | website | The SCOUT owner's desk — **Beta applications**, **Operations** (health, releases, requests), platform settings | owner account |
+| `/app` | app | Dashboard: beta status, tournaments, launcher link, linked devices | no (the account cards need one) |
+| `/`, `/panel` | app | Control panel — teams, players, maps, scenes and every overlay setting | panel token / local machine |
+| `/obs`, `/game` | app | Public broadcast output | no |
 
 The pages never talk to a cloud host directly: every call is same-origin `/api/beta/*`, and the host
 decides whether that is itself or a service it proxies to. That is why a hosted deployment needs no
@@ -45,15 +50,16 @@ CORS configuration anywhere.
    In hosted mode this is where an email would be sent instead.
 3. **Set a password** — the applicant opens `/login?invite=…`, chooses a password (≥10 characters) and
    is signed in. The invite is stored as a digest, expires after 14 days, and stops working on first use.
-4. **Download** — `/dashboard` shows the installer only while the account is `approved`. The URL comes
+4. **Download** — `/download` shows the installer only while the account is `approved`. The URL comes
    from `SCOUT_DOWNLOAD_URL` (default: this repository's GitHub releases) so it can move to a CDN
    without a code change.
 5. **Link a launcher** — the panel's *Launcher link* card calls `POST /api/beta/link/start`; the host
-   asks the account service for a device grant and shows the code. The operator approves it at
-   `/dashboard?link=CODE` (or on `/login` when a link code is in the URL and they are not signed in
-   yet). The launcher polls, receives its installation token **once**, and writes
-   `config/beta/installation.json` (mode 0600) next to the operator data.
-6. **Revoke** — `/dashboard` lists linked launchers with a last-seen time and an **Unlink** button.
+   asks the account service for a device grant and shows the code. The operator approves it in the
+   app's dashboard, on the **Launcher link** card. If they are on the website instead,
+   `/login?link=CODE` does the same thing once they sign in. The launcher polls, receives its
+   installation token **once**, and writes `config/beta/installation.json` (mode 0600) next to the
+   operator data.
+6. **Revoke** — the app's dashboard lists linked launchers with a last-seen time and an **Unlink** button.
    Revoking takes effect on the launcher's next licence check (within 15 minutes; immediately on a
    restart), and the launcher says so rather than dying quietly.
 7. **Run** — the launcher asks about itself every 15 minutes and caches the answer. The states it can

@@ -38,7 +38,7 @@ export function OperationsPanel(){
   const body=await res.json().catch(()=>({}) as any);
   setBusy('');
   if(!res.ok){setError(body?.error||'That release could not be published.');return}
-  setNotice(`Launcher ${body.release.version} published. Approved dashboards now point at ${body.release.file||body.release.url}.`);
+  setNotice(`Launcher ${body.release.version} published. Approved accounts' download pages now point at ${body.release.file||body.release.url}.`);
   setForm({version:'',file:'',url:'',notes:''});
   void load();
  }
@@ -47,7 +47,7 @@ export function OperationsPanel(){
   const res=await apiFetch(`/api/ops/releases/${encodeURIComponent(version)}`,{method:'DELETE'});
   setBusy('');
   if(!res.ok){setError('That release could not be retired.');return}
-  setNotice(`Release ${version} retired; the dashboard falls back to the default download.`);
+  setNotice(`Release ${version} retired; the download page falls back to the default download.`);
   void load();
  }
  const health=data?.health;
@@ -96,11 +96,11 @@ export function OperationsPanel(){
       <label className="field"><span>NOTES FOR OPERATORS</span><input value={form.notes} onChange={event=>setForm({...form,notes:event.target.value})} placeholder="What changed in this build" maxLength={400}/></label>
       <button className="button primary" type="submit" disabled={busy==='publish'||!form.version.trim()}>{busy==='publish'?<Loader2 className="spin" size={14}/>:<PackagePlus size={14}/>}Publish release</button>
      </form>
-     <p className="ops-hint">Build with <code>npm run package:windows</code>, copy <code>SCOUT-Setup-&lt;version&gt;.exe</code> into <code>{data.download.folder}</code>, then publish it here. With nothing published, approved dashboards use <code>{data.download.defaultUrl}</code>.</p>
+     <p className="ops-hint">Build with <code>npm run package:windows</code>, copy <code>SCOUT-Setup-&lt;version&gt;.exe</code> into <code>{data.download.folder}</code>, then publish it here. With nothing published, approved accounts' download pages use <code>{data.download.defaultUrl}</code>.</p>
      {data.releases.length?<ul className="ops-releases">{data.releases.map(release=><li key={release.version}>
       <div><b>{release.version}</b><small>{release.file||release.url} · {bytes(release.sizeBytes)} · {new Date(release.publishedAt).toLocaleString()} · {release.downloads} download(s){release.notes?` · ${release.notes}`:''}</small></div>
       <button className="mini-button" onClick={()=>void retire(release.version)} disabled={busy===release.version}><Trash2 size={11}/>Retire</button>
-     </li>)}</ul>:<p className="ops-quiet">No release published yet — the dashboard is pointing at the default download.</p>}
+     </li>)}</ul>:<p className="ops-quiet">No release published yet — the download page is pointing at the default download.</p>}
      <a className="text-button" href={data.download.defaultUrl} target="_blank" rel="noreferrer">Open the current default download<Download size={13}/></a>
     </div>
     <div className="ops-block">

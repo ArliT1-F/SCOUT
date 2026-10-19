@@ -14,6 +14,9 @@ import WebSocket from 'ws';
 const repoRoot=fileURLToPath(new URL('..',import.meta.url));
 const TOKEN='panel-token-for-the-live-test';
 const GSI_TOKEN='gsi-token-for-the-live-test';
+// Point the host at a file that does not exist: otherwise a developer's checked-out `.env` would be
+// loaded into the live host and change what this test sees.
+const NO_ENV_FILE=fileURLToPath(new URL('./fixtures/does-not-exist.env',import.meta.url));
 // Every non-loopback IPv4 of this machine stands in for "the operator's laptop on the venue network":
 // the socket address is what the host classifies, and only a real second address produces a real one.
 function remoteAddresses(){
@@ -70,7 +73,7 @@ const cookieHeader=(reply:Reply)=>(reply.headers['set-cookie']||[]).map(value=>v
 before(async()=>{
  port=await freePort();
  try{previousOperator=await readFile(OPERATOR_FILE)}catch{previousOperator=null}
- const env:NodeJS.ProcessEnv={...process.env,PORT:String(port),SCOUT_PANEL_TOKEN:TOKEN,GSI_TOKEN};
+ const env:NodeJS.ProcessEnv={...process.env,PORT:String(port),SCOUT_PANEL_TOKEN:TOKEN,GSI_TOKEN,SCOUT_ENV_FILE:NO_ENV_FILE};
  // The live host must start from the shipped defaults, not from whatever the shell that runs the
  // tests happens to export.
  delete env.SCOUT_REMOTE;delete env.SCOUT_ALLOWED_HOSTS;delete env.SCOUT_REQUIRE_TOKEN;delete env.LOG_GSI;
@@ -95,6 +98,25 @@ test('the panel reports a local session for this machine and none for another',a
  const remote=await call('/api/session',{host:REMOTE});
  assert.deepEqual([remote.json.local,remote.json.authenticated,remote.json.via],[false,false,null]);
  assert.equal(remote.json.address,REMOTE,'the address the panel shows is the one the request arrived from');
+});
+
+test('the download page and the installer folder share /download without swallowing each other',async()=>{
+ const page=await call('/download');
+ assert.equal(page.status,200,'the website page is served, not a directory redirect');
+ assert.match(String(page.headers['content-type']||''),/text\/html/);
+ const file=await call('/download/README.txt');
+ assert.equal(file.status,200,'a published installer file is served from the drop folder');
+ assert.ok(file.text.length>0);
+ const missing=await call('/download/does-not-exist.exe');
+ assert.equal(missing.status,404,'a missing installer is not answered with the SPA shell');
+});
+
+test('the built site cannot take /download away from the page',async()=>{
+ // `vite build` copies public/download into dist/download. A directory redirect from the dist mount
+ // would answer /download with a 301 before the SPA ever sees it, which is exactly what happened
+ // before the live check. The page and the installer folder have to coexist.
+ const source=await readFile(new URL('../server/index.ts',import.meta.url),'utf8');
+ assert.match(source,/express\.static\(distDir,\{redirect:false\}\)/,'the dist mount must not redirect /download');
 });
 
 test('GSI intake is untouched by the panel gate',async()=>{

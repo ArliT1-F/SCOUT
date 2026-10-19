@@ -17,9 +17,9 @@ The workflow changes nothing about the build: it runs `npm run package:windows` 
 and that script refuses to produce an installer whose staged host does not answer the panel, the OBS
 page and a GSI push.
 
-## How the download reaches a dashboard
+## How the download reaches an approved account
 
-`/dashboard` shows the installer only to an approved account. Where the URL comes from, in order:
+`/download` shows the installer only to an approved account. Where the URL comes from, in order:
 
 1. **A release published on the host** — the operator's **Operations** tab (`POST /api/ops/releases`).
    Publish a file that is on this machine (`public/download/SCOUT-Setup-0.4.1.exe` → served as
@@ -31,7 +31,7 @@ page and a GSI push.
 
 In hosted mode (`SCOUT_BETA_API_URL`) the account service owns the download; the one exception is a
 release published on the host, which still wins, because that is the file the operator is standing
-next to. Retiring a release (`DELETE /api/ops/releases/:version`) drops the dashboard back to the
+next to. Retiring a release (`DELETE /api/ops/releases/:version`) drops `/download` back to the
 next source, which is the rollback path: republish the previous version.
 
 ## Version numbers

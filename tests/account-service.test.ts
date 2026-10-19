@@ -144,7 +144,7 @@ test('the launcher half works through the host client, unchanged',async(t)=>{
  assert.equal(grant.ok,true);
  if(!grant.ok) return;
  assert.match(grant.value.userCode,/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
- assert.equal(grant.value.verificationUrl,`http://panel.test:8080/dashboard?link=${encodeURIComponent(grant.value.userCode)}`);
+ assert.equal(grant.value.verificationUrl,`http://panel.test:8080/login?link=${encodeURIComponent(grant.value.userCode)}`);
  assert.equal(grant.value.interval>0,true);
  const before=await launcher.devicePoll({deviceCode:grant.value.deviceCode});
  assert.equal(before.ok&&before.value.status,'pending');

@@ -307,7 +307,7 @@ export class LocalBetaService implements BetaService {
   this.store.grants.push(grant);
   await this.save();
   const base=context.origin.replace(/\/$/,'');
-  return {ok:true,value:{userCode,deviceCode,expiresAt:grant.expiresAt,interval:DEVICE_POLL_INTERVAL_MS,verificationUrl:`${base}/dashboard?link=${encodeURIComponent(userCode)}`}};
+  return {ok:true,value:{userCode,deviceCode,expiresAt:grant.expiresAt,interval:DEVICE_POLL_INTERVAL_MS,verificationUrl:`${base}/login?link=${encodeURIComponent(userCode)}`}};
  }
  async devicePoll(input:{deviceCode:string}):Promise<BetaResult<DevicePollView>>{
   this.reap();
