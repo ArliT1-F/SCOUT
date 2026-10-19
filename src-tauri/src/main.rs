@@ -41,6 +41,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 const LABEL: &str = "overlay";
 /// A second label, not a second process: the operator window lives in the same webview host.
 const PANEL_LABEL: &str = "panel";
+const LAUNCHER_LABEL: &str = "launcher";
 thread_local! {
     /// The host this launcher started, if it started one, so leaving SCOUT can put the machine back
     /// the way it found it — a host the launcher did not start is never touched. Thread-local rather
@@ -137,7 +138,7 @@ fn main() {
                     .resizable(true)
                     .always_on_top(false)
                     .skip_taskbar(false)
-                    .focused(true)
+                    .focused(false)
                     .focusable(true)
                     .visible(false)
                     .inner_size(1440.0, 900.0)
@@ -179,6 +180,27 @@ fn main() {
             } else {
                 None
             };
+            // Dedicated launcher window — the friendly GUI non-tech users see first. It hosts
+            // launcher.html (shipped in src-tauri/ui) which polls the host for licence/link
+            // status and exposes one-click actions. Unlike the operator panel it is visible
+            // immediately and is the primary window.
+            let launcher_url = format!("launcher.html?host={}", urlencoding_like(&config.panel_url));
+            let launcher = WebviewWindowBuilder::new(app, LAUNCHER_LABEL, WebviewUrl::App(launcher_url.into()))
+                .title("SCOUT \u{2014} Launcher")
+                .decorations(true)
+                .resizable(true)
+                .always_on_top(false)
+                .skip_taskbar(false)
+                .focused(true)
+                .focusable(true)
+                .visible(true)
+                .inner_size(980.0, 680.0)
+                .min_inner_size(860.0, 560.0)
+                .center()
+                .build();
+            if let Err(error) = &launcher {
+                log(&format!("could not create launcher window: {error} \u{2014} panel window still works"));
+            }
 
             // The licence gate. Without --require-link nothing here runs.
             let licence_gate = if config.require_link {
@@ -337,6 +359,22 @@ fn read_trimmed(file: &std::path::Path) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+fn urlencoding_like(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() * 3);
+    for b in value.bytes() {
+        let c = b as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~' | ':' | '/') {
+            // Keep : and / readable for host URLs, but encode the rest for the query value.
+            // For the launcher we only need to survive ? and &, so minimal encoding is fine.
+            out.push(c);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    // Encode : and / for the query value to avoid ambiguity, but keep host readable in logs.
+    out.replace(':', "%3A").replace('/', "%2F")
+}
+
 /// The program files root: `app-root.txt` in the data directory (written by the installer, and what
 /// the shortcuts use), or this executable's own parent directory as a fallback, so a launcher that
 /// still sits inside `{app}\host` finds `{app}\runtime\node.exe` either way.
@@ -344,6 +382,19 @@ fn program_root(data: &std::path::Path) -> Option<std::path::PathBuf> {
     if let Some(root) = read_trimmed(&data.join("app-root.txt")) {
         let path = std::path::PathBuf::from(root);
         if path.join("host").join("server").join("index.js").is_file() {
+            return Some(path);
+        }
+        // Historic app-root.txt points at {app}/host (the smoke-test layout). Normalize
+        // to the program-files root {app} so runtime/node.exe and host/server/index.js
+        // resolve correctly, and support a direct server/index.js layout if it exists.
+        if path.join("server").join("index.js").is_file() {
+            if let Some(parent) = path.parent() {
+                if parent.join("host").join("server").join("index.js").is_file()
+                    || parent.join("runtime").join("node.exe").is_file()
+                {
+                    return Some(parent.to_path_buf());
+                }
+            }
             return Some(path);
         }
     }
@@ -409,6 +460,10 @@ fn start_host_if_needed(config: &ShellConfig) -> Option<()> {
         ("gsi_token.txt", "GSI_TOKEN"),
         ("panel_token.txt", "SCOUT_PANEL_TOKEN"),
         ("remote.txt", "SCOUT_REMOTE"),
+        ("beta_api_url.txt", "SCOUT_BETA_API_URL"),
+        ("beta_api_key.txt", "SCOUT_BETA_API_KEY"),
+        ("platform_url.txt", "SCOUT_PLATFORM_URL"),
+        ("require_licence.txt", "SCOUT_REQUIRE_LICENCE"),
     ] {
         if let Some(value) = read_trimmed(&data.join(file)) {
             command.env(variable, value);

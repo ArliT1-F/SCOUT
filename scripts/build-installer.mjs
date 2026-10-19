@@ -378,13 +378,25 @@ if(options.installer){
                  '(https://jrsoftware.org/isdl.php), or pass --iscc <path to ISCC.exe>.');
   mkdirSync(options.out,{recursive:true});
   const versionWin=options.version.split('.').concat(['0','0','0']).slice(0,4).join('.');
-  run(iscc,[
+  const isccArgs=[
     `/DAppVersion=${options.version}`,
     `/DVersionWin=${versionWin}`,
     `/DStageRoot=${stage}`,
     `/O${options.out}`,
-    path.join(repoRoot,'installer','scout.iss'),
-  ]);
+  ];
+  // Bake closed-beta enforcement into the installer when the builder provides it.
+  // This lets a public download be usable only when linked to a whitelisted account.
+  for(const [env,define] of [
+    ['SCOUT_BETA_API_URL','BetaApiUrl'],
+    ['SCOUT_BETA_API_KEY','BetaApiKey'],
+    ['SCOUT_PLATFORM_URL','PlatformUrl'],
+    ['SCOUT_REQUIRE_LICENCE','RequireLicence'],
+    ['SCOUT_OWNER_EMAIL','OwnerEmail'],
+  ]){
+    const value=process.env[env];
+    if(value) { isccArgs.push(`/D${define}=${value}`); console.log(`  ${env}=${value} → baked into installer`); }
+  }
+  run(iscc,[...isccArgs,path.join(repoRoot,'installer','scout.iss')]);
   installerPath=path.join(options.out,`SCOUT-Setup-${options.version}.exe`);
   if(!existsSync(installerPath)) fail(`Inno Setup reported success but ${installerPath} is missing.`);
   log(`  ${installerPath} ${megabytes(statSync(installerPath).size)}`);
