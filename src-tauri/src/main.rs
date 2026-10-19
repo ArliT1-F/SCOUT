@@ -422,6 +422,10 @@ fn start_host_if_needed(config: &ShellConfig) -> Option<()> {
         ("gsi_token.txt", "GSI_TOKEN"),
         ("panel_token.txt", "SCOUT_PANEL_TOKEN"),
         ("remote.txt", "SCOUT_REMOTE"),
+        ("beta_api_url.txt", "SCOUT_BETA_API_URL"),
+        ("beta_api_key.txt", "SCOUT_BETA_API_KEY"),
+        ("platform_url.txt", "SCOUT_PLATFORM_URL"),
+        ("require_licence.txt", "SCOUT_REQUIRE_LICENCE"),
     ] {
         if let Some(value) = read_trimmed(&data.join(file)) {
             command.env(variable, value);

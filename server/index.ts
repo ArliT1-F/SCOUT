@@ -22,7 +22,7 @@ import {controlsSchema,defaultControls,SCENE_IDS,type Controls} from './controls
 import {ObsBridge} from './obs.js';
 import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './obs-config.js';
 import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
-import {appPath,resolveDistDir} from './runtime.js';
+import {appPath,resolveDistDir,readInstalledEnv} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
@@ -59,10 +59,14 @@ const archives=new MatchArchiveStore('recordings/matches.json');await archives.l
 // hosted account service to move all of that off the machine; the /api/beta/* paths stay the same,
 // so the panel, the landing page and the launcher need no changes.
 const betaDir=process.env.SCOUT_BETA_DIR||'config/beta';
+const betaApiUrl=process.env.SCOUT_BETA_API_URL||readInstalledEnv('SCOUT_BETA_API_URL');
+const betaApiKey=process.env.SCOUT_BETA_API_KEY||readInstalledEnv('SCOUT_BETA_API_KEY');
+const requireLicence=process.env.SCOUT_REQUIRE_LICENCE||readInstalledEnv('SCOUT_REQUIRE_LICENCE');
+const platformUrl=process.env.SCOUT_PLATFORM_URL||readInstalledEnv('SCOUT_PLATFORM_URL');
 const beta:BetaRuntime=createBetaService({
  dir:betaDir,
- apiUrl:process.env.SCOUT_BETA_API_URL,
- apiKey:process.env.SCOUT_BETA_API_KEY,
+ apiUrl:betaApiUrl,
+ apiKey:betaApiKey,
  autoApprove:process.env.SCOUT_BETA_AUTO_APPROVE==='1',
  host:hostname(),
  download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION,notes:process.env.SCOUT_DOWNLOAD_NOTES||''},
@@ -85,7 +89,7 @@ if(!platformOwnerEmail()) console.log('[platform] SCOUT_OWNER_EMAIL is not set â
 const licence=new LicenceMonitor({
  mode:beta.mode,
  source:beta.mode==='hosted'?beta.launcher:undefined,
- enforced:process.env.SCOUT_REQUIRE_LICENCE==='1',
+ enforced:requireLicence==='1',
 });
 // Launcher distribution and health (server/operations.ts). Releases are published by an owner from
 // the Operations tab; the files themselves live in public/download/, which is gitignored.
@@ -384,11 +388,11 @@ function broadcast(){const data=JSON.stringify(snapshot()); for(const client of 
 wss.on('connection',(ws,req)=>ws.send(JSON.stringify(snapshot(req?panel.view({address:req.socket.remoteAddress,host:req.headers.host,cookie:req.headers.cookie,headers:req.headers}):undefined))));
 setInterval(broadcast,1000).unref();
 // Opt-in only: a normal local host never creates an outbox, sync state or polling timer.
-if(process.env.SCOUT_PLATFORM_URL){
+if(platformUrl){
  try{
   const directory=path.dirname(platformFile);
   const outbox=await new SyncOutbox(path.join(directory,'outbox.json')).load();
-  platformSync=await new PlatformSyncAgent({url:process.env.SCOUT_PLATFORM_URL,installation,platform,outbox,file:path.join(directory,'sync.json'),uploadRoot:UPLOAD_ROOT,readConfig:()=>config,changed:broadcast,
+  platformSync=await new PlatformSyncAgent({url:platformUrl,installation,platform,outbox,file:path.join(directory,'sync.json'),uploadRoot:UPLOAD_ROOT,readConfig:()=>config,changed:broadcast,
    writeConfig:(next,tournament,expectedHash,deviceId)=>matchWrite(async()=>{
     if(installation.credentials().deviceId!==deviceId||configHash(config)!==expectedHash)return false;
     if(configHash(next)!==expectedHash)await writeMatchConfig(next);
@@ -408,7 +412,7 @@ for(const route of ['sync','metrics'] as const){
 // tournaments; only the SCOUT owner (SCOUT_OWNER_EMAIL) administers the platform at /admin.
 async function currentAccount(req:express.Request){
  if(beta.site){const v=await beta.site.status(accountCookieId(req));return v.account}
- try{const r=await fetch((process.env.SCOUT_BETA_API_URL||'').replace(/\/$/,'')+'/status',{headers:{...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{})}});const v:any=await r.json().catch(()=>null);return v?.account??null}catch{return null}
+ try{const r=await fetch((betaApiUrl||'').replace(/\/$/,'')+'/status',{headers:{...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{})}});const v:any=await r.json().catch(()=>null);return v?.account??null}catch{return null}
 }
 async function requireAccount(req:express.Request,res:express.Response){
  if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return null}
@@ -730,7 +734,7 @@ if(beta.site){
 }else{
  // Hosted accounts: the browser keeps the same account routes, cookies and bodies. The host
  // owns only settings/download presentation; service-only routes are never exposed by this proxy.
- const upstream=(process.env.SCOUT_BETA_API_URL||'').replace(/\/$/,'');
+ const upstream=(betaApiUrl||'').replace(/\/$/,'');
  app.use('/api/beta',async(req,res)=>{
   if(!sameOrigin(req)){res.sendStatus(403);return}
   const route=req.originalUrl.replace(/^\/api\/beta/,'').split('?')[0];
@@ -741,7 +745,7 @@ if(beta.site){
    if(route==='/apply'&&!platform.settings.applicationsOpen){res.status(403).json({error:'The closed beta is not taking new applications right now.',code:'applications-closed'});return}
    const response=await fetch(upstream+req.originalUrl.replace(/^\/api\/beta/,''),{
     method:req.method,signal:AbortSignal.timeout(30_000),
-    headers:{'Content-Type':'application/json',...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),...(process.env.SCOUT_BETA_API_KEY?{Authorization:`Bearer ${process.env.SCOUT_BETA_API_KEY}`}:{})},
+    headers:{'Content-Type':'application/json',...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),...(betaApiKey?{Authorization:`Bearer ${betaApiKey}`}:{})},
     body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
    });
    let text=await response.text();

@@ -31,6 +31,25 @@
   #define StageRoot "..\dist-stage"
 #endif
 
+; Closed-beta enforcement baked at build time. When the builder sets SCOUT_BETA_API_URL etc,
+; every install of this wizard points at the central account service and refuses to run the
+; overlay unless linked to a whitelisted account — the installer itself can be public.
+#ifndef BetaApiUrl
+  #define BetaApiUrl ""
+#endif
+#ifndef BetaApiKey
+  #define BetaApiKey ""
+#endif
+#ifndef PlatformUrl
+  #define PlatformUrl ""
+#endif
+#ifndef RequireLicence
+  #define RequireLicence ""
+#endif
+#ifndef OwnerEmail
+  #define OwnerEmail ""
+#endif
+
 ; The overlay shell is optional: scripts\build-installer.mjs builds it when cargo can and leaves it
 ; out when it cannot. The shortcuts and the postinstall entry must then point at the launcher
 ; instead of a file that is not there, so they are conditional on the staged tree. Relative
@@ -121,9 +140,15 @@ Name: "{#DataDir}\public\uploads\radars"; Flags: uninsneveruninstall
 ; for whoever wants to watch the log or run SCOUT as a background service - the everyday path needs
 ; neither a console nor a port number. Without the shell (see HasShell above) the main icon starts
 ; the host with its console, and the panel is opened from the browser.
+; When RequireLicence is baked in, the shell is started with --require-link so a leaked installer
+; shows a linked-account gate instead of a usable broadcast.
 [Icons]
 #if HasShell
+#if RequireLicence == "1"
+Name: "{group}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game --require-link"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"
+#else
 Name: "{group}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"
+#endif
 #else
 Name: "{group}\SCOUT"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host: the control panel opens at http://127.0.0.1:{code:GetPort}/admin. This build has no overlay shell."
 #endif
@@ -132,7 +157,11 @@ Name: "{group}\SCOUT host (advanced: shows the log)"; Filename: "{#DataDir}\scou
 Name: "{group}\Stop SCOUT"; Filename: "{#DataDir}\scout-stop.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Stop a SCOUT host that is still running (for example one started by the advanced entry above)"
 Name: "{group}\{cm:UninstallProgram,SCOUT}"; Filename: "{uninstallexe}"
 #if HasShell
+#if RequireLicence == "1"
+Name: "{autodesktop}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game --require-link"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"; Tasks: desktopicon
+#else
 Name: "{autodesktop}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"; Tasks: desktopicon
+#endif
 #else
 Name: "{autodesktop}\SCOUT"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host: the control panel opens at http://127.0.0.1:{code:GetPort}/admin. This build has no overlay shell."; Tasks: desktopicon
 #endif
@@ -143,7 +172,11 @@ Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"
 ; console window and a port number to remember. Without the shell the host is started instead, so
 ; the panel still opens on the finished page.
 #if HasShell
+#if RequireLicence == "1"
+Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game --require-link"; Description: "Start SCOUT now (control panel and overlay)"; Flags: postinstall nowait skipifsilent
+#else
 Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; Description: "Start SCOUT now (control panel and overlay)"; Flags: postinstall nowait skipifsilent
+#endif
 #else
 Filename: "{#DataDir}\scout-host.cmd"; Description: "Start the SCOUT host now (control panel in your browser)"; Flags: postinstall nowait skipifsilent
 #endif
@@ -683,6 +716,26 @@ begin
     DeleteFile(Root + '\panel_token.txt');
     WriteValueFile(Root + '\remote.txt', 'off');
   end;
+
+  { Closed-beta enforcement: baked at build time so a public download can be gated to whitelisted
+    accounts without asking the observer. The host (and shell starter) read these files next to
+    port.txt — env vars win when present, so a venue override stays possible. }
+  if ExpandConstant('{#BetaApiUrl}') <> '' then
+    WriteValueFile(Root + '\beta_api_url.txt', ExpandConstant('{#BetaApiUrl}'))
+  else
+    DeleteFile(Root + '\beta_api_url.txt');
+  if ExpandConstant('{#BetaApiKey}') <> '' then
+    WriteValueFile(Root + '\beta_api_key.txt', ExpandConstant('{#BetaApiKey}'))
+  else
+    DeleteFile(Root + '\beta_api_key.txt');
+  if ExpandConstant('{#PlatformUrl}') <> '' then
+    WriteValueFile(Root + '\platform_url.txt', ExpandConstant('{#PlatformUrl}'))
+  else
+    DeleteFile(Root + '\platform_url.txt');
+  if ExpandConstant('{#RequireLicence}') <> '' then
+    WriteValueFile(Root + '\require_licence.txt', ExpandConstant('{#RequireLicence}'))
+  else
+    DeleteFile(Root + '\require_licence.txt');
 
   if IsTaskSelected('gsiintegration') then
   begin
