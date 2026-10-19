@@ -31,6 +31,12 @@
   #define StageRoot "..\dist-stage"
 #endif
 
+; The overlay shell is optional: scripts\build-installer.mjs builds it when cargo can and leaves it
+; out when it cannot. The shortcuts and the postinstall entry must then point at the launcher
+; instead of a file that is not there, so they are conditional on the staged tree. Relative
+; StageRoot paths are resolved from this file's directory, like every other path in the script.
+#define HasShell FileExists(StageRoot + '\host\scout-shell.exe')
+
 #define DataDir "{userappdata}\SCOUT"
 #define RuleName "SCOUT host"
 
@@ -110,23 +116,37 @@ Name: "{#DataDir}\public\uploads\maps"; Flags: uninsneveruninstall
 Name: "{#DataDir}\public\uploads\players"; Flags: uninsneveruninstall
 Name: "{#DataDir}\public\uploads\radars"; Flags: uninsneveruninstall
 
-; One icon does the whole thing: the launcher starts the host if it is not already running, opens the
+; One icon does the whole thing: the shell starts the host if it is not already running, opens the
 ; control panel in a window of its own and puts the overlay over CS2. The console entries below it are
 ; for whoever wants to watch the log or run SCOUT as a background service - the everyday path needs
-; neither a console nor a port number.
+; neither a console nor a port number. Without the shell (see HasShell above) the main icon starts
+; the host with its console, and the panel is opened from the browser.
 [Icons]
+#if HasShell
 Name: "{group}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"
+#else
+Name: "{group}\SCOUT"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host: the control panel opens at http://127.0.0.1:{code:GetPort}/admin. This build has no overlay shell."
+#endif
 Name: "{group}\SCOUT control panel (in your browser)"; Filename: "http://127.0.0.1:{code:GetPort}/admin"; IconFilename: "{app}\host\scout.ico"; Comment: "The control panel as a browser tab - handy for a second screen or a phone on the same network"
 Name: "{group}\SCOUT host (advanced: shows the log)"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Run only the SCOUT host, with its console visible. Unnecessary if you start SCOUT from the icon above"
 Name: "{group}\Stop SCOUT"; Filename: "{#DataDir}\scout-stop.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Stop a SCOUT host that is still running (for example one started by the advanced entry above)"
 Name: "{group}\{cm:UninstallProgram,SCOUT}"; Filename: "{uninstallexe}"
+#if HasShell
 Name: "{autodesktop}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"; Tasks: desktopicon
+#else
+Name: "{autodesktop}\SCOUT"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host: the control panel opens at http://127.0.0.1:{code:GetPort}/admin. This build has no overlay shell."; Tasks: desktopicon
+#endif
 
 [Run]
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing the Microsoft WebView2 runtime..."; Flags: waituntilterminated skipifdoesntexist; Check: NeedsWebView2 and IsTaskSelected('webview2')
 ; Checked by default and first in the list: the finished installer hands over a running SCOUT, not a
-; console window and a port number to remember.
+; console window and a port number to remember. Without the shell the host is started instead, so
+; the panel still opens on the finished page.
+#if HasShell
 Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; Description: "Start SCOUT now (control panel and overlay)"; Flags: postinstall nowait skipifsilent
+#else
+Filename: "{#DataDir}\scout-host.cmd"; Description: "Start the SCOUT host now (control panel in your browser)"; Flags: postinstall nowait skipifsilent
+#endif
 Filename: "http://127.0.0.1:{code:GetPort}/admin"; Description: "Open the control panel in a browser as well"; Flags: postinstall unchecked shellexec nowait skipifsilent
 Filename: "{#DataDir}\scout-host.cmd"; Description: "Advanced: run only the host, with its console visible"; Flags: postinstall unchecked nowait skipifsilent
 
@@ -136,6 +156,9 @@ Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\docs"
 Type: dirifempty; Name: "{app}"
 
+; A line in this section must never *begin* with '#': the preprocessor reads such a line as one of
+; its own directives, so a character constant carried over to a new line ("#13#10 + ...") stops the
+; compile with "Unknown preprocessor directive". Keep them inside the expression.
 [Code]
 const
   TokenAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -502,7 +525,8 @@ procedure InitializeWizard;
 var
   Detected, DefaultGuess: String;
 begin
-  Randomize;
+  { Random() is already seeded: Inno Setup seeds Delphi's generator at startup, and since 6.6
+    it uses the OS CSPRNG. Randomize is not a support function, so calling it fails to compile. }
   Port := '8080';
   GsiToken := GenerateToken(32);
   PanelToken := GenerateToken(40);
@@ -677,8 +701,8 @@ begin
     else
       MsgBox('The CS2 cfg folder was not found, so the Game State Integration config was not ' +
              'installed.' + #13#10#13#10 +
-             'Copy config\gamestate_integration_overlay.cfg from' + #13#10 + Root + '\config' +
-             #13#10 + 'into CS2''s game\csgo\cfg folder (the panel''s Setup guide tab says the ' +
+             'Copy config\gamestate_integration_overlay.cfg from' + #13#10 + Root + '\config' + #13#10 +
+             'into CS2''s game\csgo\cfg folder (the panel''s Setup guide tab says the ' +
              'same).', mbInformation, MB_OK);
   end;
 
