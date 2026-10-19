@@ -25,6 +25,7 @@ import {SiteRouter,LauncherLinkCard,BetaApplicationsPanel,isSiteRoute,type SiteR
 import {ScoutMark} from './logo';
 import {OperationsPanel} from './ops-panel';
 import {PlatformAdminPage} from './platform-admin';
+import { LauncherHome } from './launcher-gui';
 import type {PanelSessionView} from '../server/auth';
 import './style.css';
 import './landing.css';
@@ -186,6 +187,9 @@ const events=demoMode?demoKills(now):previewReplay?replayFrame!.events:data?.eve
 // on another machine has no token and must keep loading /obs and its feed.
 if(siteRoute)return <SiteRouter route={siteRoute}/>;
 if(isPlatformAdminRoute)return <PlatformAdminPage/>;
+// Friendly launcher for non-tech users at the root. Advanced operator desk lives at /admin.
+// Keep the shell's launcher window (launcher.html) as primary, but browser at / also shows this.
+if(trimmedPath==='/' && !new URLSearchParams(location.search).has('panel')) return <LauncherHome/>;
 if(isOutputRoute)return <Output state={data?.state||{}} controls={data?.controls||initial} config={data?.config} sides={data?.sides} resolvedSeries={data?.series} radars={data?.radars} layout={data?.layout} overlay={data?.overlay} lastSeen={data?.lastSeen} now={now} clockSkew={data?.clockSkew||0} signal={signal} events={{kills:(data?.events?.kills||[]).filter((kill:KillEvent)=>now-kill.at<9000),rounds:data?.events?.rounds||[]}}/>;
 if(session&&!session.authenticated&&!session.local) return <UnlockScreen session={session} message={denied} onUnlocked={()=>{setDenied('');void refreshSession()}}/>;
 if(new URLSearchParams(location.search).get('remote')==='1')return <TouchRemote controls={controls} hostConnected={connected} lease={currentLease} canControl={canControl} canTakeover={isOwner} onAction={patch=>void update(patch)} onClaim={claimControl} onRelease={releaseControl} onNotice={flash}/>;
