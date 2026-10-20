@@ -50,11 +50,12 @@ if exist "%SCOUT_DATA%platform_url.txt" set /p SCOUT_PLATFORM_URL=<"%SCOUT_DATA%
 if exist "%SCOUT_DATA%require_licence.txt" set /p SCOUT_REQUIRE_LICENCE=<"%SCOUT_DATA%require_licence.txt"
 
 set "NODE_ENV=production"
+set "SCOUT_SURFACE=host"
 set "SCOUT_PID_FILE=%SCOUT_DATA%scout.pid"
 cd /d "%SCOUT_DATA%"
 
 echo.
-echo   SCOUT host - control panel: http://127.0.0.1:%PORT%/admin
+echo   SCOUT host - control panel: http://127.0.0.1:%PORT%/panel
 echo   OBS browser source:         http://127.0.0.1:%PORT%/obs
 echo   Press Ctrl+C to stop. (If Windows asks about terminating the batch job, answer Y.)
 echo.

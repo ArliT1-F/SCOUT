@@ -1334,3 +1334,10 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
  .site-map-chip small{display:none}
  .site-footer-cols{grid-template-columns:1fr}
 }
+
+/* Owner rotation controls use native checkboxes, not full-width text-field styling. */
+.map-rotation-options{border:1px solid var(--line);border-radius:8px;padding:14px;margin:14px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,135px),1fr));gap:10px}
+.map-rotation-options legend{font-size:12px;padding:0 6px}
+.map-rotation-options p{grid-column:1/-1;margin:0}
+.map-rotation-options label{display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer}
+.map-rotation-options input[type=checkbox]{width:16px;height:16px;min-height:0;padding:0;accent-color:var(--accent)}

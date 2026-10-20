@@ -16,7 +16,7 @@ Everyday things
                              The window that starts is the launcher (scout-shell.exe); closing it
                              with Ctrl+Shift+F8 also stops the host the launcher started. A host
                              you started yourself (see below) is left alone.
-  Open the control panel ... http://127.0.0.1:8080/admin - also on the Start menu as "SCOUT control
+  Open the control panel ... http://127.0.0.1:8080/panel - also on the Start menu as "SCOUT control
                              panel (in your browser)", which is handy for a second screen.
                              The port is the one in port.txt below; the Start menu shortcuts were
                              created with the port chosen at install time, so if you change the

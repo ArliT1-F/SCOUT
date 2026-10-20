@@ -87,10 +87,11 @@ export function TeamEditor({config,onChange}:{config:ScoutConfig;onChange:DraftC
  </section>;
 }
 
-export function MatchEditor({config,onChange}:{config:ScoutConfig;onChange:DraftChange}){
+export function MatchEditor({config,onChange,mapRotation=MAP_NAMES}:{config:ScoutConfig;onChange:DraftChange;mapRotation?:string[]}){
+ const available=mapRotation.length?mapRotation:MAP_NAMES;
  const updateMap=(index:number,patch:Partial<MapConfig>)=>{const maps=clone(config.maps);maps[index]={...maps[index],...patch};onChange({...config,maps})};
- const addMap=()=>{if(config.maps.length>=9)return;const maps=clone(config.maps);maps.push({name:'de_mirage',pick:'decider',status:'upcoming',image:''});onChange({...config,maps})};
- const removeMap=(index:number)=>{const maps=clone(config.maps);maps.splice(index,1);if(!maps.length)maps.push({name:'de_mirage',pick:'decider',status:'upcoming',image:''});onChange({...config,maps})};
+ const addMap=()=>{if(config.maps.length>=9)return;const maps=clone(config.maps);maps.push({name:available[0],pick:'decider',status:'upcoming',image:''});onChange({...config,maps})};
+ const removeMap=(index:number)=>{const maps=clone(config.maps);maps.splice(index,1);if(!maps.length)maps.push({name:available[0],pick:'decider',status:'upcoming',image:''});onChange({...config,maps})};
  const [teamA,teamB]=config.teams;
  return <section className="panel detail-panel">
   <div className="editor-head"><h2>Match & map series</h2><p>Event, format and the maps played — with the pictures shown on the Map series scene. Scores here are the operator's series cards; live round scores still come from GSI.</p></div>
@@ -107,7 +108,7 @@ export function MatchEditor({config,onChange}:{config:ScoutConfig;onChange:Draft
     <div className="map-row" key={mi}>
      <ImageUpload kind="map" value={map.image} title={map.name} onChange={path=>updateMap(mi,{image:path})}/>
      <div className="map-fields">
-      <label className="field"><span>MAP</span><input list="scout-map-names" value={map.name} maxLength={64} onChange={event=>updateMap(mi,{name:event.target.value})}/></label>
+      <label className="field"><span>MAP</span><select value={map.name} onChange={event=>updateMap(mi,{name:event.target.value})}>{!available.includes(map.name)&&<option value={map.name}>{map.name} (outside current rotation)</option>}{available.map(name=><option value={name} key={name}>{name}</option>)}</select></label>
       <label className="field"><span>PICK</span><select value={map.pick} onChange={event=>updateMap(mi,{pick:event.target.value as MapConfig['pick']})}><option value="A">{teamA.name||'Team A'} pick</option><option value="B">{teamB.name||'Team B'} pick</option><option value="decider">Decider</option></select></label>
       <label className="field"><span>STATUS</span><select value={map.status} onChange={event=>updateMap(mi,{status:event.target.value as MapConfig['status']})}><option value="upcoming">Upcoming</option><option value="live">Live</option><option value="done">Finished</option></select></label>
       <label className="field"><span>SCORE</span><span className="score-field"><input type="number" min={0} max={99} value={map.score?.[0]??''} placeholder="—" onChange={event=>updateMap(mi,{score:event.target.value===''?undefined:[Number(event.target.value)||0,map.score?.[1]??0]})}/><i>:</i><input type="number" min={0} max={99} value={map.score?.[1]??''} placeholder="—" onChange={event=>updateMap(mi,{score:event.target.value===''?undefined:[map.score?.[0]??0,Number(event.target.value)||0]})}/></span></label>
@@ -115,7 +116,7 @@ export function MatchEditor({config,onChange}:{config:ScoutConfig;onChange:Draft
      <button type="button" className="icon-button danger" title="Remove map" onClick={()=>removeMap(mi)}><Trash2 size={14}/></button>
     </div>)}
   </div>
-  <datalist id="scout-map-names">{MAP_NAMES.map(name=><option value={name} key={name}/>)}</datalist>
+  <p className="info-note">Available maps follow the owner’s rotation when online. Existing series maps are preserved; offline hosts keep the last downloaded rotation.</p>
   <button type="button" className="control-button dashed wide" onClick={addMap}><span><Plus size={13}/> Add map to the series</span></button>
  </section>;
 }

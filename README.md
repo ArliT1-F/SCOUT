@@ -1,5 +1,12 @@
 # SCOUT — CS2 broadcast overlay
 
+> **Desktop vs website:** The installed SCOUT icon opens the native GUI and starts its local host
+> without a console. Installer builds now fail if the GUI is missing. `npm start` / `npm run website`
+> serve the public landing/application/profile/owner site only; `npm run dev` / `npm run host` run
+> the local broadcast host. Owner map rotations sync to connected hosts and remain cached offline.
+> See [deployment surfaces and Windows verification](docs/SURFACES.md).
+
+
 External Node GSI host, the SCOUT app (React/TypeScript control panel, dashboard and overlay settings) and a transparent scoreboard HUD for an OBS Browser Source, config-driven full-canvas broadcast scenes, an optional OBS WebSocket bridge and an optional Windows overlay shell. No memory reading, injection, game hooks, or chroma key.
 
 ## Run

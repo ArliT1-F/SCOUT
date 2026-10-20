@@ -18,7 +18,7 @@
 //! drawn over exclusive fullscreen.
 //!
 //! Every decision lives in `scout-shell-core` (tested without Tauri); this file observes, asks it, and acts.
-#![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod win32;
 
@@ -59,7 +59,13 @@ fn log(message: &str) {
 
 fn main() {
     win32::attach_parent_console();
-    let config = ShellConfig::parse(std::env::args().skip(1), |key| std::env::var(key).ok());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let installed_url = data_dir().and_then(|data| read_trimmed(&data.join("port.txt")))
+        .and_then(|port| port.parse::<u16>().ok()).filter(|port| *port > 0)
+        .map(|port| format!("http://127.0.0.1:{port}/game"));
+    let config = ShellConfig::parse(args, |key| {
+        std::env::var(key).ok().or_else(|| if key == "SCOUT_URL" { installed_url.clone() } else { None })
+    });
     for warning in &config.warnings {
         log(warning);
     }
@@ -238,7 +244,7 @@ fn main() {
             let poller = window.clone();
             let config = config.clone();
             std::thread::Builder::new().name("scout-shell-poll".into()).spawn(move || {
-                poll_loop(poller, panel, config, enabled, licence_gate, wake, woken)
+                poll_loop(poller, panel, launcher.ok(), config, enabled, licence_gate, wake, woken)
             })?;
             Ok(())
         })
@@ -264,6 +270,7 @@ fn main() {
 fn poll_loop(
     window: WebviewWindow,
     panel: Option<WebviewWindow>,
+    launcher: Option<WebviewWindow>,
     config: ShellConfig,
     enabled: Arc<AtomicBool>,
     licence: Option<Arc<AtomicBool>>,
@@ -274,6 +281,7 @@ fn poll_loop(
     let mut tracker = Tracker::new(config.hide_after_polls());
     let mut overlay_loaded = false;
     let mut panel_loaded = false;
+    let mut launcher_loaded = false;
     let mut panel_shown = false;
     let mut told_off_air = false;
     let interval = Duration::from_millis(config.poll_ms);
@@ -281,6 +289,20 @@ fn poll_loop(
     let _keep_alive = keep_alive;
     let no_gate = licence.is_none();
     loop {
+        // Navigation is native: the bundled splash has a different origin and cannot fetch the
+        // host API under the browser's CORS rules. Do not depend on that fetch to open the GUI.
+        if !launcher_loaded {
+            if let Some(launcher_window) = &launcher {
+                if let Some((host, port)) = host_port(&config.url) {
+                    if http_get(&host, port, "/healthz").map(|body| body.contains("\"ok\":true")).unwrap_or(false) {
+                        if let Ok(mut address) = tauri::Url::parse(&config.url) {
+                            address.set_path("/app");address.set_query(None);address.set_fragment(None);
+                            launcher_loaded = load_page(launcher_window, address.as_str(), "app dashboard");
+                        }
+                    }
+                }
+            }
+        }
         if !overlay_loaded {
             overlay_loaded = load_page(&window, &config.url, "overlay");
         }
@@ -422,17 +444,9 @@ fn start_host_if_needed(config: &ShellConfig) -> Option<()> {
     }
     let data = data_dir()?;
     let root = program_root(&data)?;
-    let url_port = port;
-    let port = read_trimmed(&data.join("port.txt")).unwrap_or_else(|| port.to_string());
-    if let Ok(installed) = port.parse::<u16>() {
-        // The installer picks the port and bakes it into the shortcuts; somebody starting the
-        // executable by hand with the default URL would otherwise watch a blank window.
-        if installed != url_port {
-            log(&format!(
-                "the installed host listens on port {installed}, but this launcher is pointed at port {url_port}; start SCOUT from its shortcut, or pass --url http://127.0.0.1:{installed}/game"
-            ));
-        }
-    }
+    // The configured URL already incorporates port.txt unless explicitly overridden by --url.
+    // Spawn on that same port so the native dashboard and host can never disagree.
+    let port = port.to_string();
     let node = root.join("runtime").join("node.exe");
     let entry = root.join("host").join("server").join("index.js");
     if !node.is_file() || !entry.is_file() {
@@ -452,6 +466,7 @@ fn start_host_if_needed(config: &ShellConfig) -> Option<()> {
         // The host keeps config/, public/uploads/ and recordings/ in the working directory.
         .current_dir(&data)
         .env("NODE_ENV", "production")
+        .env("SCOUT_SURFACE", "host")
         .env("PORT", &port)
         .env("SCOUT_APP_ROOT", &root)
         .env("SCOUT_PID_FILE", data.join("scout.pid"))

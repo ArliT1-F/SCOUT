@@ -290,3 +290,15 @@ test('failed outbox writes never expose unpersisted event IDs, and readable corr
  await rm(file+'.tmp',{recursive:true});assert.equal((await outbox.appendMetrics('device','cup',[{kind:'kill'}]))[0].id,'device:2');
  const corrupted=JSON.parse(await readFile(file,'utf8'));corrupted.sequences.device=1;await writeFile(file,JSON.stringify(corrupted));await assert.rejects(()=>new SyncOutbox(file).load(),/sequence/);
 });
+
+test('owner map rotation reaches a linked host, survives offline restart, and catches up on reconnect',async(t)=>{
+ const h=await harness(t);await h.agent.tick();const initialSeries=JSON.stringify(h.live.maps);const writes=h.writes;
+ await h.central.updateSettings({mapRotation:['de_train','de_mirage']},'owner@example.com');
+ await h.agent.tick();assert.deepEqual(h.local.settings.mapRotation,['de_train','de_mirage']);
+ assert.equal(h.writes,writes,'a settings-only update never overwrites the local match');
+ h.offline();await h.central.updateSettings({mapRotation:['de_ancient']},'owner@example.com');
+ await h.agent.tick();await h.reload();await h.agent.tick();
+ assert.deepEqual(h.local.settings.mapRotation,['de_train','de_mirage']);
+ h.online();await h.agent.tick();assert.deepEqual(h.local.settings.mapRotation,['de_ancient']);
+ assert.equal(JSON.stringify(h.live.maps),initialSeries);
+});

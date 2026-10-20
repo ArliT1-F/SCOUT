@@ -3,13 +3,20 @@ import {createHash,randomBytes} from 'node:crypto';
 import path from 'node:path';
 import {normalizeConfig} from './config.js';
 // Account-owned workspaces and aggregate metrics. Live GSI/WS remains one match per host.
+import {DEFAULT_MAP_ROTATION} from '../src/map-rotation.js';
+export {DEFAULT_MAP_ROTATION};
+export function sanitizeMapRotation(input:unknown,previous:string[]):string[]{
+ if(!Array.isArray(input)||!input.length||input.length>32||input.some(v=>typeof v!=='string'||!/^de_[a-z0-9_]{1,48}$/.test(v)))return [...previous];
+ return [...new Set(input)];
+}
 export interface PlatformSettings {
+ mapRotation:string[];
  maxTournamentsPerUser:number;
  applicationsOpen:boolean; reviewNote:string; publicStatsEnabled:boolean;
  version:number; updatedAt:number; updatedBy:string;
 }
 export const DEFAULT_PLATFORM_SETTINGS:PlatformSettings={
- maxTournamentsPerUser:3,applicationsOpen:true,
+ mapRotation:[...DEFAULT_MAP_ROTATION],maxTournamentsPerUser:3,applicationsOpen:true,
  reviewNote:'Applications are reviewed by a human. You will receive an invite link as soon as your operator account is created.',
  publicStatsEnabled:false,version:1,updatedAt:0,updatedBy:'',
 };
@@ -42,6 +49,7 @@ export function isPlatformOwner(email:string|null|undefined,env:NodeJS.ProcessEn
 export function sanitizeSettings(input:Partial<PlatformSettings>|undefined,previous:PlatformSettings,by:string,now=Date.now()):PlatformSettings{
  const max=Math.floor(Number(input?.maxTournamentsPerUser));
  return {
+  mapRotation:sanitizeMapRotation(input?.mapRotation,previous.mapRotation??DEFAULT_MAP_ROTATION),
   maxTournamentsPerUser:Number.isFinite(max)?Math.min(25,Math.max(1,max)):previous.maxTournamentsPerUser,
   applicationsOpen:typeof input?.applicationsOpen==='boolean'?input.applicationsOpen:previous.applicationsOpen,
   reviewNote:typeof input?.reviewNote==='string'?input.reviewNote.slice(0,400):previous.reviewNote,
