@@ -50,11 +50,10 @@
   #define OwnerEmail ""
 #endif
 
-; The overlay shell is optional: scripts\build-installer.mjs builds it when cargo can and leaves it
-; out when it cannot. The shortcuts and the postinstall entry must then point at the launcher
-; instead of a file that is not there, so they are conditional on the staged tree. Relative
-; StageRoot paths are resolved from this file's directory, like every other path in the script.
-#define HasShell FileExists(StageRoot + '\host\scout-shell.exe')
+; A distributable installer must always contain the native GUI. Never fall back to cmd.
+#if !FileExists(StageRoot + '\host\scout-shell.exe')
+  #error "Missing scout-shell.exe: build the GUI before packaging the installer."
+#endif
 
 #define DataDir "{userappdata}\SCOUT"
 #define RuleName "SCOUT host"
@@ -138,49 +137,35 @@ Name: "{#DataDir}\public\uploads\radars"; Flags: uninsneveruninstall
 ; One icon does the whole thing: the shell starts the host if it is not already running, opens the
 ; control panel in a window of its own and puts the overlay over CS2. The console entries below it are
 ; for whoever wants to watch the log or run SCOUT as a background service - the everyday path needs
-; neither a console nor a port number. Without the shell (see HasShell above) the main icon starts
-; the host with its console, and the panel is opened from the browser.
+; neither a console nor a port number. A missing GUI is a build error, never a console fallback.
 ; When RequireLicence is baked in, the shell is started with --require-link so a leaked installer
 ; shows a linked-account gate instead of a usable broadcast.
 [Icons]
-#if HasShell
 #if RequireLicence == "1"
 Name: "{group}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game --require-link"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"
 #else
 Name: "{group}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"
 #endif
-#else
-Name: "{group}\SCOUT"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host: the control panel opens at http://127.0.0.1:{code:GetPort}/admin. This build has no overlay shell."
-#endif
-Name: "{group}\SCOUT control panel (in your browser)"; Filename: "http://127.0.0.1:{code:GetPort}/admin"; IconFilename: "{app}\host\scout.ico"; Comment: "The control panel as a browser tab - handy for a second screen or a phone on the same network"
+Name: "{group}\SCOUT control panel (in your browser)"; Filename: "http://127.0.0.1:{code:GetPort}/panel"; IconFilename: "{app}\host\scout.ico"; Comment: "The control panel as a browser tab - handy for a second screen or a phone on the same network"
 Name: "{group}\SCOUT host (advanced: shows the log)"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Run only the SCOUT host, with its console visible. Unnecessary if you start SCOUT from the icon above"
 Name: "{group}\Stop SCOUT"; Filename: "{#DataDir}\scout-stop.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Stop a SCOUT host that is still running (for example one started by the advanced entry above)"
 Name: "{group}\{cm:UninstallProgram,SCOUT}"; Filename: "{uninstallexe}"
-#if HasShell
 #if RequireLicence == "1"
 Name: "{autodesktop}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game --require-link"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"; Tasks: desktopicon
 #else
 Name: "{autodesktop}\SCOUT"; Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; IconFilename: "{app}\host\scout.ico"; Comment: "Start SCOUT: control panel (F9), overlay over CS2 (F8), Ctrl+Shift+F8 quits"; Tasks: desktopicon
 #endif
-#else
-Name: "{autodesktop}\SCOUT"; Filename: "{#DataDir}\scout-host.cmd"; IconFilename: "{app}\host\scout.ico"; Comment: "Start the SCOUT host: the control panel opens at http://127.0.0.1:{code:GetPort}/admin. This build has no overlay shell."; Tasks: desktopicon
-#endif
 
 [Run]
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Installing the Microsoft WebView2 runtime..."; Flags: waituntilterminated skipifdoesntexist; Check: NeedsWebView2 and IsTaskSelected('webview2')
 ; Checked by default and first in the list: the finished installer hands over a running SCOUT, not a
-; console window and a port number to remember. Without the shell the host is started instead, so
-; the panel still opens on the finished page.
-#if HasShell
+; console window and a port number to remember.
 #if RequireLicence == "1"
 Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game --require-link"; Description: "Start SCOUT now (control panel and overlay)"; Flags: postinstall nowait skipifsilent
 #else
 Filename: "{app}\host\scout-shell.exe"; Parameters: "--url http://127.0.0.1:{code:GetPort}/game"; Description: "Start SCOUT now (control panel and overlay)"; Flags: postinstall nowait skipifsilent
 #endif
-#else
-Filename: "{#DataDir}\scout-host.cmd"; Description: "Start the SCOUT host now (control panel in your browser)"; Flags: postinstall nowait skipifsilent
-#endif
-Filename: "http://127.0.0.1:{code:GetPort}/admin"; Description: "Open the control panel in a browser as well"; Flags: postinstall unchecked shellexec nowait skipifsilent
+Filename: "http://127.0.0.1:{code:GetPort}/panel"; Description: "Open the control panel in a browser as well"; Flags: postinstall unchecked shellexec nowait skipifsilent
 Filename: "{#DataDir}\scout-host.cmd"; Description: "Advanced: run only the host, with its console visible"; Flags: postinstall unchecked nowait skipifsilent
 
 [UninstallDelete]

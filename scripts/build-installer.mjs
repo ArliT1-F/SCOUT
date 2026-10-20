@@ -73,7 +73,7 @@ for(let i=0;i<argv.length;i++){
   const [name,inline]=argv[i].split('=');
   if(name in switchFlags){
     if(inline!==undefined) fail(`${name} does not take a value.\n\n${usage}`);
-    options[switchFlags[name]]=false;
+    options[switchFlags[name]]=name==='--keep-stage';
     continue;
   }
   if(name in valueFlags){
@@ -86,6 +86,7 @@ for(let i=0;i<argv.length;i++){
   if(name==='--help'||name==='-h'){console.log(usage); process.exit(0)}
   fail(`Unknown argument ${name}.\n\n${usage}`);
 }
+if(options.installer&&!options.shell) fail('--no-shell is for staging only; use --no-installer too. Windows installers must include the GUI.');
 if(options.keepStage&&!existsSync(options.stage)) fail(`--keep-stage was given but ${options.stage} does not exist.`);
 
 // ---------------------------------------------------------------- helpers -----------------------
@@ -198,23 +199,13 @@ log(`  ${path.relative(repoRoot,compiled)} written`);
 banner('Building the overlay shell (scout-shell.exe)');
 let shellExe='';
 if(options.shell){
-  const built=run(options.tauriCli,['tauri','build'],{cwd:repoRoot,allowFailure:true,quiet:true});
-  if(!built){
-    log('  cargo tauri build did not succeed. Its output was:');
-    // Re-run is too slow; the captured output is gone, so at least say what to run to see it.
-    log('    (run "npm run shell:build" to see the compiler output)');
-  }
+  // Never publish a console-only installer after a failed GUI build. Preserve compiler output.
+  run(options.tauriCli,['tauri','build','--no-bundle'],{cwd:repoRoot});
   shellExe=path.join(repoRoot,'src-tauri','target','release','scout-shell.exe');
-  if(!built||!existsSync(shellExe)){
-    warn('the overlay shell was not built, so the installer will ship without scout-shell.exe. '+
-         'Its shortcuts and postinstall entry then start the host with its console instead, and '+
-         'the OBS browser source still works (run with --no-shell to make this intentional)');
-    shellExe='';
-  }else{
-    log(`  scout-shell.exe ${megabytes(statSync(shellExe).size)}`);
-  }
+  if(!existsSync(shellExe)) fail('GUI build produced no scout-shell.exe. Refusing to package SCOUT.');
+  log(`  scout-shell.exe ${megabytes(statSync(shellExe).size)}`);
 }else{
-  log('  (--no-shell: the installer will have no overlay shell)');
+  log('  (--no-shell: staging without the GUI; an installer cannot be produced)');
 }
 
 // ---------------------------------------------------------------- 4. staging --------------------
@@ -517,6 +508,7 @@ async function smokeTest(stage,hostStage,version){
       NODE_ENV:'production',
       PORT:String(port),
       SCOUT_APP_ROOT:hostStage,
+      SCOUT_SURFACE:'host',
       GSI_TOKEN:token,
       SCOUT_REMOTE:'off',
       SCOUT_PANEL_TOKEN:'smoke-panel-token-0123456789',
@@ -536,16 +528,21 @@ async function smokeTest(stage,hostStage,version){
     while(Date.now()<deadline){
       if(host.exitCode!==null) break;
       try{
-        const response=await fetch(`${base}/admin`);
+        const response=await fetch(`${base}/panel`);
         if(response.ok){panel=await response.text();break}
       }catch{/* not up yet */}
       await new Promise(resolve=>setTimeout(resolve,400));
     }
     if(!panel){
-      fail(`The staged host did not answer on ${base}/admin within 30 seconds.\n\n`+
+      fail(`The staged host did not answer on ${base}/panel within 30 seconds.\n\n`+
            `--- host output ---\n${output||'(nothing)'}\n-------------------\n`);
     }
     if(!panel.includes('<div id="root">')) fail('The staged host answered, but not with the control panel page.');
+
+    const dashboard=await fetch(`${base}/app`);
+    if(!dashboard.ok) fail(`The app dashboard answered ${dashboard.status}.`);
+    const surface=await (await fetch(`${base}/api/surface`)).json();
+    if(surface.surface!=='host') fail('The staged desktop host is incorrectly running in website mode.');
 
     const obs=await fetch(`${base}/obs`);
     if(!obs.ok) fail(`The OBS page answered ${obs.status}.`);
@@ -567,7 +564,7 @@ async function smokeTest(stage,hostStage,version){
     const pidFile=path.join(dataDir,'scout.pid');
     if(!existsSync(pidFile)||!/^\d+$/.test(readFileSync(pidFile,'utf8').trim()))
       fail('The staged host did not write the pid file scout-stop.cmd depends on.');
-    log(`  panel, OBS page, a GSI push and the pid file all answered on port ${port} (host ${version})`);
+    log(`  app dashboard, panel, OBS page, a GSI push and the pid file all answered on port ${port} (host ${version})`);
   }finally{
     host.kill('SIGTERM');
     await new Promise(resolve=>setTimeout(resolve,300));

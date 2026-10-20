@@ -12,5 +12,5 @@
     "sourceMap": false,
     "declaration": false
   },
-  "include": ["server", "src/radar.ts"]
+  "include": ["server", "src/radar.ts", "src/map-rotation.ts"]
 }

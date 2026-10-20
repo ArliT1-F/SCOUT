@@ -1,4 +1,5 @@
 import React,{useCallback,useEffect,useState} from 'react';
+import {DEFAULT_MAP_ROTATION} from './map-rotation';
 import {Check,Loader2,Plus,RefreshCw,Shield,Trash2,Trophy} from 'lucide-react';
 // /admin — the SCOUT platform owner's desk, and the whitelisted user's tournament card.
 // The server decides who the owner is (SCOUT_OWNER_EMAIL, server/platform.ts); these components
@@ -8,37 +9,41 @@ async function api(path:string,init:RequestInit={}){
  return {res,body:await res.json().catch(()=>({}) as any)};
 }
 export function PlatformAdminPage(){
- const [data,setData]=useState<any>(null);const [error,setError]=useState('');const [settings,setSettings]=useState<any>(null);const [busy,setBusy]=useState('');const [notice,setNotice]=useState('');
+ const [data,setData]=useState<any>(null);const [error,setError]=useState('');const [settings,setSettings]=useState<any>(null);const [busy,setBusy]=useState('');const [notice,setNotice]=useState('');const [inviteUrl,setInviteUrl]=useState('');const dirty=React.useRef(false);
  const load=useCallback(async()=>{
   const {res,body}=await api('/api/platform/admin');
   if(!res.ok){setError(body?.error||'The SCOUT owner could not be verified.');setData(null);return}
-  setData(body);setSettings(body.settings);setError('');
+  setData(body);if(!dirty.current)setSettings(body.settings);setError('');
  },[]);
  useEffect(()=>{void load();const t=setInterval(()=>void load(),15000);return()=>clearInterval(t)},[load]);
  async function decide(id:string,decision:'approve'|'reject'){
   setBusy(id);const {res,body}=await api(`/api/beta/applications/${id}`,{method:'POST',body:JSON.stringify({decision})});setBusy('');
-  if(!res.ok){setNotice(body?.error||'That decision could not be saved.');return} setNotice(`${body.application?.email||'Applicant'} ${decision==='approve'?'approved — send them the invite link from the console/panel':'rejected'}.`);void load();
+  if(!res.ok){setNotice(body?.error||'That decision could not be saved.');return} setInviteUrl(body.inviteUrl||'');setNotice(`${body.application?.email||'Applicant'} ${decision==='approve'?'approved — copy the invite link below':'rejected'}.`);void load();
  }
  async function saveSettings(){
   setBusy('settings');const {res,body}=await api('/api/platform/admin/settings',{method:'PUT',body:JSON.stringify(settings)});setBusy('');
-  if(!res.ok){setNotice(body?.error||'Settings could not be saved.');return} setSettings(body.settings);setNotice(`Settings v${body.settings.version} saved — open panels receive them in real time.`);void load();
+  if(!res.ok){setNotice(body?.error||'Settings could not be saved.');return} dirty.current=false;setSettings(body.settings);setNotice(`Settings v${body.settings.version} saved — online linked hosts refresh within 15 seconds; offline hosts keep their last settings.`);void load();
  }
- if(error) return <div className="site"><main className="site-main site-narrow"><section className="site-card site-done"><span className="site-card-icon"><Shield size={17}/></span><h2>SCOUT admin is owner-only</h2><p className="site-card-lead">{error} Sign in with the account named by <code>SCOUT_OWNER_EMAIL</code>, then reload. Whitelisted users host their tournaments inside the SCOUT app instead.</p><div className="site-cta"><a className="button primary" href="/login">Sign in</a><a className="button" href="/download">Download the app</a></div></section></main></div>;
+ if(error) return <div className="site"><main className="site-main site-narrow"><section className="site-card site-done"><span className="site-card-icon"><Shield size={17}/></span><h2>SCOUT admin is owner-only</h2><p className="site-card-lead">{error} Sign in with the account named by <code>SCOUT_OWNER_EMAIL</code>, then reload. Whitelisted users host their tournaments inside the SCOUT app instead.</p><div className="site-cta"><a className="button primary" href="/login?next=/admin">Sign in</a><a className="button" href="/download">Download the app</a></div></section></main></div>;
  if(!data) return <div className="site"><main className="site-main site-narrow"><p className="site-loading"><Loader2 className="spin" size={16}/>Loading the SCOUT admin…</p></main></div>;
  const accounts=data.users||[];
  return <div className="site"><main className="site-main">
-  <div className="site-dash-head"><div><span className="site-section-eyebrow">SCOUT PLATFORM ADMIN</span><h1>Owner desk</h1><p>Whitelisting, per-user tournaments, match-log metrics and settings that reach every open panel in real time.</p></div><button className="button" onClick={()=>void load()}><RefreshCw size={13}/>Refresh</button></div>
-  {notice&&<p className="info-note">{notice}</p>}
+  <a className="site-link" href="/profile">← User profile</a>
+  <div className="site-dash-head"><div><span className="site-section-eyebrow">SCOUT PLATFORM ADMIN</span><h1>Owner desk</h1><p>Whitelisting, per-user tournaments, match-log metrics and settings delivered to online hosts. Offline hosts retain their last downloaded settings.</p></div><button className="button" onClick={()=>void load()}><RefreshCw size={13}/>Refresh</button></div>
+  {notice&&<p className="info-note">{notice}</p>}{inviteUrl&&<label className="field"><span>ONE-TIME INVITE — SEND TO THE APPLICANT</span><input readOnly value={inviteUrl} onFocus={e=>e.target.select()}/></label>}
   <div className="site-dash-grid">
    <section className="site-card"><h3><Trophy size={15}/> Platform totals</h3><div className="feed-counters">
     {[['Kills',data.totals.kills],['Headshots',data.totals.headshots],['Grenades exploded',data.totals.grenades],['Rounds',data.totals.rounds],['Maps',data.totals.maps],['Matches',data.totals.matches],['Tournaments',data.tournaments.length]].map(([l,v]:any)=><div className="feed-counter" key={l}><b>{v}</b><small>{String(l).toUpperCase()}</small></div>)}
    </div><p className="site-fineprint">Aggregated from every user&apos;s tournament match logs. Enable “Public stats” below to show these totals on /welcome.</p></section>
    <section className="site-card"><h3>Platform settings <span className="site-count">v{settings?.version}</span></h3>
-    <label className="field"><span>MAX TOURNAMENTS PER USER (BETA 3 · RELEASE 1)</span><input type="number" min={1} max={25} value={settings?.maxTournamentsPerUser??3} onChange={e=>setSettings({...settings,maxTournamentsPerUser:Number(e.target.value)})}/></label>
-    <label className="field"><span>REVIEW NOTE SHOWN TO APPLICANTS</span><input value={settings?.reviewNote||''} onChange={e=>setSettings({...settings,reviewNote:e.target.value})}/></label>
-    <div className="toggle-row"><div><b>Whitelist applications open</b><small>When off, /apply refuses new applications; existing accounts keep working.</small></div><button className={'toggle '+(settings?.applicationsOpen?'enabled':'')} aria-pressed={!!settings?.applicationsOpen} onClick={()=>setSettings({...settings,applicationsOpen:!settings.applicationsOpen})}><i/></button></div>
-    <div className="toggle-row"><div><b>Public stats on /welcome</b><small>Show the platform totals (kills, headshots, grenades…) publicly.</small></div><button className={'toggle '+(settings?.publicStatsEnabled?'enabled':'')} aria-pressed={!!settings?.publicStatsEnabled} onClick={()=>setSettings({...settings,publicStatsEnabled:!settings.publicStatsEnabled})}><i/></button></div>
-    <button className="button primary" disabled={busy==='settings'} onClick={()=>void saveSettings()}>{busy==='settings'?<Loader2 className="spin" size={13}/>:<Check size={13}/>}Save &amp; push to everyone</button>
+    <label className="field"><span>MAX TOURNAMENTS PER USER (BETA 3 · RELEASE 1)</span><input type="number" min={1} max={25} value={settings?.maxTournamentsPerUser??3} onChange={e=>{dirty.current=true;setSettings({...settings,maxTournamentsPerUser:Number(e.target.value)})}}/></label>
+    <label className="field"><span>REVIEW NOTE SHOWN TO APPLICANTS</span><input value={settings?.reviewNote||''} onChange={e=>{dirty.current=true;setSettings({...settings,reviewNote:e.target.value})}}/></label>
+    <div className="toggle-row"><div><b>Whitelist applications open</b><small>When off, /apply refuses new applications; existing accounts keep working.</small></div><button className={'toggle '+(settings?.applicationsOpen?'enabled':'')} aria-pressed={!!settings?.applicationsOpen} onClick={()=>{dirty.current=true;setSettings({...settings,applicationsOpen:!settings.applicationsOpen})}}><i/></button></div>
+    <div className="toggle-row"><div><b>Public stats on /welcome</b><small>Show the platform totals (kills, headshots, grenades…) publicly.</small></div><button className={'toggle '+(settings?.publicStatsEnabled?'enabled':'')} aria-pressed={!!settings?.publicStatsEnabled} onClick={()=>{dirty.current=true;setSettings({...settings,publicStatsEnabled:!settings.publicStatsEnabled})}}><i/></button></div>
+    <fieldset className="map-rotation-options"><legend>Available map rotation</legend><p className="site-fineprint">Select at least one map. Hosts update their map picker without changing an existing match series.</p>
+     {Array.from(new Set([...DEFAULT_MAP_ROTATION,...(settings?.mapRotation||[])])).map(name=><label key={name}><input type="checkbox" checked={settings?.mapRotation?.includes(name)??true} onChange={e=>{dirty.current=true;const current=settings?.mapRotation||DEFAULT_MAP_ROTATION;setSettings({...settings,mapRotation:e.target.checked?[...current,name]:current.filter((m:string)=>m!==name)})}}/>{name}</label>)}
+    </fieldset>
+    <button className="button primary" disabled={busy==='settings'||settings?.mapRotation?.length===0} onClick={()=>void saveSettings()}>{busy==='settings'?<Loader2 className="spin" size={13}/>:<Check size={13}/>}Save &amp; push to everyone</button>
    </section>
    <section className="site-card site-devices"><h3>Whitelisted users &amp; their tournaments</h3>
     {accounts.length?<ul className="site-device-list">{accounts.map((u:any)=><li key={u.accountId}><div><b>{u.email}</b><small>{u.status} · {u.tournaments} tournament(s) · {u.totals.kills} kills · {u.totals.headshots} HS · {u.totals.grenades} grenades · {u.totals.matches} matches{u.lastActiveAt?` · last active ${new Date(u.lastActiveAt).toLocaleString()}`:''}</small></div></li>)}</ul>:<p className="site-card-lead">No whitelisted user has created a tournament yet.</p>}

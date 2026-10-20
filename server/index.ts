@@ -1,4 +1,5 @@
 import express from 'express';
+import {surfaceFromEnv,websitePathAllowed} from './surface.js';
 import {createServer} from 'node:http';
 import {WebSocketServer,WebSocket} from 'ws';
 import {readFile,writeFile,rename,mkdir,readdir,unlink} from 'node:fs/promises';
@@ -34,10 +35,20 @@ import {loadEnvFile} from './env.js';
 // a missing file is silent. This runs before any setting below is read, so `npm start` needs no shell
 // wrapper on Windows and systemd units can keep using EnvironmentFile=.
 loadEnvFile();
+const surface=surfaceFromEnv();
 const app=express();
 // Routes are matched case-sensitively, like the gate below: otherwise `/API/controls` reaches the handler while
 // the gate, which looks for `/api/`, never sees it (found by the route audit, docs/API-AUDIT.md).
 app.set('case sensitive routing',true);
+app.get('/api/surface',(_req,res)=>res.json({surface}));
+if(surface==='site'){
+ app.use((req,res,next)=>{
+  if(!websitePathAllowed(req.path)){res.status(404).json({error:'Broadcast controls are available only on your SCOUT host.',code:'host-only'});return}
+  if(req.path==='/'){res.redirect(302,'/welcome');return}
+  next();
+ });
+}
+
 const server=createServer(app), store=new MatchStore(), events=new EventTracker(), sides=new SideTracker();
 const port=Number(process.env.PORT)||8080;
 // ---- Operator access from another machine (server/auth.ts). Reads stay open on purpose: the OBS
@@ -385,7 +396,7 @@ const wss=new WebSocketServer({noServer:true});
 server.on('upgrade',(req,socket,head)=>{
  let pathname='';
  try {pathname=new URL(req.url||'/','http://localhost').pathname} catch {}
- if(pathname!=='/ws'){socket.destroy();return}
+ if(surface==='site'||pathname!=='/ws'){socket.destroy();return}
  if(!originTrusted(req.headers.origin,req.headers.host,panel.allowedHosts)){
   console.warn(`[panel] refused a WebSocket handshake with Origin ${req.headers.origin} (host ${req.headers.host}) — add that name to SCOUT_ALLOWED_HOSTS if it is your own panel address.`);
   socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
@@ -400,7 +411,7 @@ function broadcast(){const data=JSON.stringify(snapshot()); for(const client of 
 wss.on('connection',(ws,req)=>ws.send(JSON.stringify(snapshot(req?panel.view({address:req.socket.remoteAddress,host:req.headers.host,cookie:req.headers.cookie,headers:req.headers}):undefined))));
 setInterval(broadcast,1000).unref();
 // Opt-in only: a normal local host never creates an outbox, sync state or polling timer.
-if(platformUrl){
+if(surface==='host'&&platformUrl){
  try{
   const directory=path.dirname(platformFile);
   const outbox=await new SyncOutbox(path.join(directory,'outbox.json')).load();
@@ -828,7 +839,7 @@ const obs=new ObsBridge({
  // planner returns nothing for the latter, and this path never asks OBS to switch back, so it cannot loop.
  onProgramScene:name=>{const next=planObsToScout(obsConfig,name,controls.scene);if(next) saveControls({...controls,scene:next}).catch(()=>{})},
 });
-obs.configure(obsConfig);
+if(surface==='host')obs.configure(obsConfig);
 app.post('/gsi',(req,res)=>{
  if(req.body?.auth?.token!==(process.env.GSI_TOKEN||'CHANGE_ME')){
   // ~20 Hz of rejects would flood the console, so the reason is logged at most once per 10 s.
@@ -1071,4 +1082,9 @@ app.use((err:any,_req:any,res:any,_next:any)=>{
 // sets the variable, so nothing is written next to the sources.
 if(process.env.SCOUT_PID_FILE) await writeFile(process.env.SCOUT_PID_FILE,String(process.pid)).catch(()=>{});
 platformSync?.start();
+// Settings also refresh without a browser open. Keep the last persisted copy during outages.
+if(surface==='host'&&beta.mode==='hosted'){
+ const refresh=()=>refreshPlatformSettings().then(()=>broadcast()).catch(()=>{});
+ void refresh();setInterval(()=>void refresh(),15_000).unref();
+}
 server.listen(port,'0.0.0.0',()=>console.log('SCOUT host ready on port '+port+'\n[gsi] expecting CS2 pushes at '+feed.uri+' · token source: '+tokenSource+(tokenSource==='default'?' (built-in CHANGE_ME — set GSI_TOKEN before using a changed cfg token)':'')));

@@ -15,7 +15,7 @@ Prerequisites, all on the machine that builds (not on the machine that runs SCOU
 | | |
 | --- | --- |
 | **Node.js 20+** | builds the panel and the host; ships as the bundled runtime too |
-| **Rust + `cargo install tauri-cli --version "^2"`** | builds `scout-shell.exe`, the launcher (overlay + operator panel), skip with `--no-shell` |
+| **Rust + `cargo install tauri-cli --version "^2"`** | builds `scout-shell.exe`, the launcher (overlay + operator panel), required for every distributable installer |
 | **[Inno Setup 6.3+](https://jrsoftware.org/isdl.php)** | packs the wizard (`ISCC.exe`) |
 | Internet | to fetch the Node runtime and the WebView2 bootstrapper, both verified/skipped cleanly if absent |
 
@@ -24,7 +24,7 @@ npm run package:windows
 # = node scripts/build-installer.mjs
 
 node scripts/build-installer.mjs --help
-node scripts/build-installer.mjs --no-shell            # no overlay shell in the installer
+node scripts/build-installer.mjs --no-shell            # ERROR: GUI required for an installer
 node scripts/build-installer.mjs --runtime-zip C:\node-v22.20.0-win-x64.zip   # offline runtime
 node scripts/build-installer.mjs --no-installer --no-shell   # just stage and smoke-test the tree
 ```
@@ -57,7 +57,7 @@ dist-stage\
 | Tasks | Desktop shortcut · install the CS2 GSI config · allow the panel/OBS/GSI from another machine (firewall rule) · install WebView2 if missing (only offered when it *is* missing) |
 | Host settings | Port (default 8080), GSI token (generated, editable), panel token. A port that is already taken only raises a warning; a token under 8 characters is replaced and shown |
 | Counter-Strike 2 | The CS2 `cfg` folder — auto-detected from the registry and every Steam library in `libraryfolders.vdf`, overridable with Browse. Skipped when the GSI task is unticked. A folder that does not exist or cannot be written is reported rather than failing the install |
-| Finish | Start the host now · open the control panel |
+| Finish | Start SCOUT now (GUI dashboard and locally hosted panel) · optional browser panel |
 
 At install time it also writes `port.txt`, `gsi_token.txt`, `app-root.txt`, `remote.txt`
 (`panel_token.txt` when remote access is on) into the data directory, generates
@@ -71,7 +71,7 @@ port and token, and adds the firewall rule if that task is ticked.
 | Program files | `%LOCALAPPDATA%\Programs\SCOUT` (per-user default; "install for all users" puts it under `C:\Program Files`) |
 | Data directory | `%APPDATA%\SCOUT` — `config\`, `public\uploads\`, `public\radars\`, `public\thumbs\`, `recordings\`, the launcher and the token/port files. It belongs to the account that ran the installer, so on a shared machine install it while logged in as the operator (the default, per-user install, always does) |
 | CS2 config | `<Steam>\steamapps\common\Counter-Strike Global Offensive\game\csgo\cfg\gamestate_integration_overlay.cfg` (legacy `csgo\cfg` is detected too) |
-| Shortcuts | One primary entry — **SCOUT** — which is the launcher: it starts the host if needed, opens the control panel and shows the overlay over CS2 (F9 panel, F8 overlay, Ctrl+Shift+F8 quit). Below it, for advanced use: *SCOUT control panel (in your browser)*, *SCOUT host (advanced: shows the log)* and *Stop SCOUT*. Desktop: SCOUT (optional). A build without `scout-shell.exe` (`--no-shell`, or a cargo build that failed) makes the primary and desktop entries start `scout-host.cmd` instead, so the host's console is what opens; the wizard checks the staged tree and picks the entry that can actually run. |
+| Shortcuts | One primary entry — **SCOUT** — which is the launcher: it starts the host if needed, opens the control panel and shows the overlay over CS2 (F9 panel, F8 overlay, Ctrl+Shift+F8 quit). Below it, for advanced use: *SCOUT control panel (in your browser)*, *SCOUT host (advanced: shows the log)* and *Stop SCOUT*. Desktop: SCOUT (optional). A failed GUI build now stops packaging with the compiler output. Inno Setup also refuses a staged tree without `scout-shell.exe`. `--no-shell` is permitted only with `--no-installer` for staging tests; a published installer can never silently fall back to `scout-host.cmd`. |
 | Firewall rule | `SCOUT host` — inbound TCP on the chosen port, scoped to `…\SCOUT\runtime\node.exe`, all profiles |
 | Environment settings (optional) | `%APPDATA%\SCOUT\.env` — the launcher starts the host with the data directory as its working directory, so the same `.env` file the checkout uses is read on every start. Copy `.env.example` from the repository and uncomment what you need (`SCOUT_OWNER_EMAIL`, `OBS_WS_PASSWORD`, `SCOUT_BETA_API_KEY`, …). Real environment variables win. `SCOUT_OWNER_EMAIL` is an account **email**, not a password — the owner sets a password through the invite link. |
 

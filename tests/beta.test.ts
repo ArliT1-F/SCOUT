@@ -313,11 +313,11 @@ test('the application form asks for what a review needs',()=>{
  assert.match(html,/Send application/);
 });
 
-test('the login page shows both doors, and names the code a launcher is waiting on',()=>{
+test('the website login stays account-only until a local host is verified, and carries launcher codes',()=>{
  const html=clean(renderToString(createElement(LoginPage,{})));
  assert.match(html,/Welcome back/);
  assert.match(html,/Sign in/);
- assert.match(html,/PANEL TOKEN/,'the operator machine can still be unlocked from here');
+ assert.doesNotMatch(html,/PANEL TOKEN/,'the public website must not offer host controls');
  assert.match(html,/No account yet\?/,'a visitor is pointed at the application form');
  const waiting=clean(renderToString(createElement(LoginPage,{linkCode:'ABCD-EFGH'})));
  assert.match(waiting,/Approve a launcher/);
