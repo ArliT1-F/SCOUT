@@ -259,6 +259,8 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .field{display:grid;gap:6px}
 .field>span{font-size:8px;letter-spacing:1.3px;color:var(--text-faint);font-weight:600}
 .field-error{color:var(--bad);font-size:9px}
+.field-hint{color:var(--text-faint);font-size:9px;line-height:1.6}
+.field :is(input,textarea,select)[aria-invalid="true"]{border-color:var(--bad);outline-color:var(--bad)}
 .color-field{display:flex;gap:7px;align-items:center}
 .color-field input:last-child{flex:1}
 .score-field{display:flex;align-items:center;gap:6px}

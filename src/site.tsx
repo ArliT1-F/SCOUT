@@ -29,9 +29,37 @@ import type {PanelSessionView} from '../server/auth';
 //      shown with a banner that says what it is.
 //   3. The launcher download is behind the account: a pending applicant sees what they are waiting
 //      for, an approved one sees the button.
-export const SITE_ROUTES=['/welcome','/login','/apply','/download','/profile'] as const;
+export const SITE_ROUTES=['/welcome','/login','/apply','/download','/profile','/privacy'] as const;
 export type SiteRoute=typeof SITE_ROUTES[number];
 export const isSiteRoute=(path:string):path is SiteRoute=>(SITE_ROUTES as readonly string[]).includes(path);
+// Per-page document metadata (title, description, canonical, robots). The website is an SPA, so the
+// shell in index.html carries public defaults and this map updates the head per route. Private pages
+// (sign-in, download, profile) are noindex: they hold account state and have nothing for a crawler.
+// Tested by tests/site-public.test.ts — every site route must have an entry, and only genuinely
+// public pages may say index.
+export const PAGE_META:Record<SiteRoute,{title:string;description:string;robots:'index, follow'|'noindex, follow'}>={
+ '/welcome':{title:'SCOUT — A better broadcast for every CS2 tournament',description:'Turn one observer PC into a complete CS2 broadcast: live overlays, nine scenes and one operator panel, built for community tournaments. Apply for the free closed beta.',robots:'index, follow'},
+ '/apply':{title:'Apply for the closed beta — SCOUT',description:'Apply for SCOUT closed-beta access. A human reads every application; approved organisers get a one-time invite link.',robots:'index, follow'},
+ '/login':{title:'Sign in — SCOUT',description:'Sign in to your SCOUT account, set a password from an invite, or approve a launcher link.',robots:'noindex, follow'},
+ '/download':{title:'Download SCOUT — SCOUT',description:'The Windows installer for approved closed-beta accounts.',robots:'noindex, follow'},
+ '/profile':{title:'Your profile — SCOUT',description:'Your SCOUT account, beta status and linked installations.',robots:'noindex, follow'},
+ '/privacy':{title:'Privacy — SCOUT',description:'What SCOUT collects, what never leaves your machine, and how to get your data deleted.',robots:'index, follow'},
+};
+export function useDocumentMeta(meta:{title:string;description:string;robots:string}){
+ useEffect(()=>{
+  document.title=meta.title;
+  const head=document.head;
+  const setMeta=(name:string,content:string)=>{let tag=head.querySelector(`meta[name="${name}"]`);if(!tag){tag=document.createElement('meta');tag.setAttribute('name',name);head.append(tag)}tag.setAttribute('content',content)};
+  setMeta('description',meta.description);setMeta('robots',meta.robots);
+  let canonical=head.querySelector('link[rel="canonical"]');
+  if(!canonical){canonical=document.createElement('link');canonical.setAttribute('rel','canonical');head.append(canonical)}
+  canonical.setAttribute('href',location.origin+location.pathname);
+ },[meta.title,meta.description,meta.robots]);
+}
+// Which server is answering: the venue's broadcast host, or the central website. The pages ask
+// /api/surface (not the hostname in the account status — that is a machine name on both surfaces),
+// so a host-only card or an /app button is never shown on the public website, where it would 404.
+export function useSurface(){const [surface,setSurface]=useState<'host'|'site'|null>(null);useEffect(()=>{void fetch('/api/surface').then(r=>r.json()).then(body=>{if(body?.surface==='host'||body?.surface==='site')setSurface(body.surface)}).catch(()=>{})},[]);return surface}
 type BetaState={status:BetaStatusView|null;offline:boolean;loading:boolean;error:string};
 function useBetaStatus(){
  const [state,setState]=useState<BetaState>({status:null,offline:false,loading:true,error:''});
@@ -88,8 +116,8 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
    {/* Phone-width labels: a nav that does not fit is a nav nobody reads. The long label is the
        desktop one; CSS swaps in the short one under 560px (see "Small screens"). */}
    {account&&<a className="site-ghost-link" href="/profile">Profile</a>}
-   {account?<a className="button primary" href="/download"><Download size={14}/><span className="site-label-long">Get the app</span><span className="site-label-short">Download</span></a>:<a className="site-ghost-link" href="/login"><LogIn size={13}/>Sign in</a>}
-   {!account&&<a className="button primary" href="/apply"><span className="site-label-long">Apply for access</span><span className="site-label-short">Apply</span><ArrowRight size={14}/></a>}
+   {account?<a className="button primary" href="/download"><Download size={14}/><span className="site-label-long">Get SCOUT</span><span className="site-label-short">Download</span></a>:<a className="site-ghost-link" href="/login"><LogIn size={13}/>Sign in</a>}
+   {!account&&<a className="button primary" href="/apply"><span className="site-label-long">Join the Closed Beta</span><span className="site-label-short">Apply</span><ArrowRight size={14}/></a>}
   </div>
   <button type="button" className="site-menu-toggle" aria-expanded={menuOpen} aria-controls={menuId} aria-label={menuOpen?'Close navigation':'Open navigation'} onClick={()=>setMenuOpen(!menuOpen)}>{menuOpen?<X size={20}/>:<Menu size={20}/>}</button>
   {section&&<span className="site-nav-section">{section}</span>}
@@ -101,13 +129,13 @@ export function SiteFooter(){
   <div className="site-footer-cols">
    <div><b>Product</b><a href="/welcome#product">What it does</a><a href="/welcome#scenes">Broadcast scenes</a><a href="/welcome#beta">Closed beta</a></div>
    <div><b>Operators</b><a href="/login">Sign in</a><a href="/download">Download</a><a href="/apply">Apply for access</a></div>
-   <div><b>Account</b><a href="/profile">User profile</a><a href="/admin">Owner dashboard</a></div>
+   <div><b>Account</b><a href="/profile">User profile</a><a href="/admin">Owner dashboard</a><a href="/privacy">Privacy</a></div>
   </div>
-  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><span>GSI only<i/><span className="status-dot"/>No injection<i/>No memory reading</span></div>
+  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><span>GSI only<i/><span className="status-dot"/>No injection<i/>No memory reading</span><a href="/privacy">What we collect, and what we never do</a></div>
  </footer>;
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
-function Notice({tone='bad',children}:{tone?:'bad'|'ok'|'warn';children:React.ReactNode}){return <p className={`site-notice ${tone}`}>{children}</p>}
+function Notice({tone='bad',children}:{tone?:'bad'|'ok'|'warn';children:React.ReactNode}){return <p className={`site-notice ${tone}`} role="alert">{children}</p>}
 // ------------------------------------------------------------------ landing page
 // The product page's rules, in one place:
 //   - it shows the product, not a drawing of it: every frame below is rendered by src/showcase,
@@ -127,8 +155,10 @@ const FEATURES=[
  {icon:Gamepad2,title:'Less setup. More showtime.',body:'One Windows launcher brings the host, panel, overlay and CS2 config together. No separate runtime or build tools to install.'},
 ];
 // Whatever is in public/thumbs/site/ is what the page shows: the same nine included maps the
-// broadcast scenes use, resized once for the web (see public/thumbs/README.txt).
-const MAP_POOL=[
+// broadcast scenes use, resized once for the web (see public/thumbs/README.txt). The showcase is a
+// focused selection first — four tiles and a reveal — so the strip reads as a sample of the pool
+// instead of a wall of nine (exported for tests/site-preview.test.ts).
+export const MAP_POOL=[
  {file:'de_ancient',label:'Ancient'},
  {file:'de_anubis',label:'Anubis'},
  {file:'de_dust2',label:'Dust II'},
@@ -163,10 +193,16 @@ const UNDER_THE_HOOD=[
 ];
 export function LandingPage(){
  const {status,offline}=useBetaStatus();
- const onHost=!offline&&!!status?.host;
+ const surface=useSurface();
+ const account=status?.account??null;
+ // Host-only extras (the "served by your host" card) belong to the venue's own host, never to the
+ // central website — there / and /obs are not the operator's machine and the card would mislead.
+ const onHost=surface==='host'&&!offline&&!!status?.host;
  // The scene the reader picked in the tour. The frame renders it with the product's own renderer,
  // so the page never has to be updated by hand when a scene changes.
  const [scene,setScene]=useState<SceneId>('live');
+ // The map showcase opens as a focused selection; the rest of the pool is one click away.
+ const [showAllMaps,setShowAllMaps]=useState(false);
  const active=SCENE_LIST.find(item=>item.id===scene)??SCENE_LIST[0];
  const liveLayers=DEFAULT_WIDGETS.filter(widget=>widget.showOn.includes('live'));
  const landingRef=React.useRef<HTMLDivElement>(null);
@@ -191,9 +227,13 @@ export function LandingPage(){
     <div className="landing-hero-copy">
      <a className="site-eyebrow" href="/apply"><span className="site-eyebrow-dot"/>THE CLOSED BETA IS OPEN<span className="eyebrow-divider"/><span>Get early access</span><ArrowUpRight size={13}/></a>
      <h1 className="site-h1" id="hero-heading">Small crew.<br/>Big <em>broadcast energy.</em></h1>
-     <p className="site-lead">Your tournament deserves a main-stage production. Turn one observer PC into a complete CS2 broadcast — live overlays, beautiful scenes, and total control.</p>
+     <p className="site-lead"><b>A better broadcast for every CS2 tournament.</b> Turn one observer PC into a complete CS2 broadcast — live overlays, beautiful scenes and total control, working with the CS2 and OBS setup you already have.</p>
      <div className="site-cta">
-      <a className="button primary" href="/apply">Get early access<ArrowUpRight size={17}/></a>
+      {account?.status==='approved'
+       ?<a className="button primary" href="/download">Get SCOUT<ArrowUpRight size={17}/></a>
+       :account
+        ?<a className="button primary" href="/download">Your download page<ArrowUpRight size={17}/></a>
+        :<a className="button primary" href="/apply">Join the Closed Beta<ArrowUpRight size={17}/></a>}
       <a className="button landing-demo-link" href="#scenes"><span className="landing-play"><Play size={12} fill="currentColor"/></span>Explore the live demo</a>
      </div>
      <div className="landing-hero-note"><span><Check size={13}/>Free during closed beta</span><span><Check size={13}/>Built for community organisers</span></div>
@@ -253,10 +293,13 @@ export function LandingPage(){
    <section className="site-section site-maps" id="maps">
     <img loading="lazy" decoding="async" className="site-scatter scatter-m4" src="/assets/m4a1-s.png" alt="" aria-hidden="true"/>
     <div className="site-section-head"><span className="site-section-eyebrow">THE MAP POOL</span><h2>Familiar battlegrounds.<br/>A fresh perspective.</h2><p>From Mirage to Ancient, your map graphics are already in the box. Nine map images and calibrated radars, ready for your next series.</p></div>
-    <div className="site-map-strip">{MAP_POOL.map(map=><figure className="site-map-chip" key={map.file}>
-     <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} loading="lazy" decoding="async"/>
+    <div className={`site-map-strip${showAllMaps?' expanded':''}`}>{MAP_POOL.slice(0,showAllMaps?MAP_POOL.length:4).map(map=><figure className="site-map-chip" key={map.file}>
+     <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} width={640} height={360} loading="lazy" decoding="async"/>
      <figcaption><span><small>{map.file.replace('de_','DE / ').toUpperCase()}</small><b>{map.label}</b></span><ArrowUpRight size={17}/></figcaption>
     </figure>)}</div>
+    <button type="button" className="site-maps-more" aria-expanded={showAllMaps} onClick={()=>setShowAllMaps(value=>!value)}>
+     {showAllMaps?'Show fewer maps':`Show all ${MAP_POOL.length===9?'nine':MAP_POOL.length} maps`}<ChevronDown size={14} className={showAllMaps?'flipped':''}/>
+    </button>
    </section>
    <section className="site-section landing-benefits" id="benefits">
     <div className="site-section-head"><span className="site-section-eyebrow">MADE FOR THE PEOPLE BEHIND THE MATCH</span><h2>You bring the competition.<br/>We’ll bring the production tools.</h2><p>For the organisers, observers and small crews making great Counter-Strike happen. This is your seat at the production desk.</p></div>
@@ -310,22 +353,46 @@ export function LandingPage(){
 }
 // ------------------------------------------------------------------ apply
 const EVENT_OPTIONS=['One-off event','Monthly','Every week','League season','Something else'];
+export type ApplicationForm={name:string;email:string;organisation:string;country:string;useCase:string;events:string};
+// Client-side twin of the server's hard checks (server/beta.ts apply(): name ≥ 2, email shaped).
+// The server stays authoritative; this only keeps an empty form from bouncing with a round trip.
+// Unit-tested in tests/site-public.test.ts so the two cannot drift on the fields that matter.
+export function validateApplication(form:ApplicationForm):Partial<Record<keyof ApplicationForm,string>>{
+ const errors:Partial<Record<keyof ApplicationForm,string>>={};
+ if(form.name.trim().length<2) errors.name='Enter the name we should put on the application.';
+ if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) errors.email='Enter a valid email address — the invite link goes there.';
+ return errors;
+}
 export function ApplyPage(){
  const {status,offline,reload}=useBetaStatus();
- const [form,setForm]=useState({name:'',email:'',organisation:'',country:'',useCase:'',events:EVENT_OPTIONS[1]});
+ const [form,setForm]=useState<ApplicationForm>({name:'',email:'',organisation:'',country:'',useCase:'',events:EVENT_OPTIONS[1]});
  const [busy,setBusy]=useState(false);
  const [error,setError]=useState('');
+ const [fieldErrors,setFieldErrors]=useState<Partial<Record<keyof ApplicationForm,string>>>({});
  const [done,setDone]=useState<{email:string;inviteUrl:string|null}|null>(null);
- const set=(key:keyof typeof form)=>(event:React.ChangeEvent<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>)=>setForm(current=>({...current,[key]:event.target.value}));
+ const set=(key:keyof typeof form)=>(event:React.ChangeEvent<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>)=>{setForm(current=>({...current,[key]:event.target.value}));if(fieldErrors[key])setFieldErrors(current=>({...current,[key]:undefined}))};
  async function submit(event:React.FormEvent){
   event.preventDefault();
+  const errors=validateApplication(form);
+  setFieldErrors(errors);
+  if(Object.keys(errors).length){setError('Check the highlighted fields and try again.');return}
   setBusy(true);setError('');
   const result=await betaRequest('/api/beta/apply',form);
   setBusy(false);
-  if(!result.ok){setError(result.body?.error||'The application could not be sent. Try again.');return}
+  if(!result.ok){
+   // Rate limiting, a dead service and a rejected form are three different things and each gets
+   // its own words — one generic "failed" leaves the applicant with nothing to do next.
+   setError(result.status===429
+    ? 'Too many applications from this connection. Wait about an hour and try again.'
+    : result.status>=500
+     ? 'The account service had a problem, so your application was not sent. Try again shortly.'
+     : result.body?.error||'The application could not be sent. Try again.');
+   return;
+  }
   setDone({email:result.body.application.email,inviteUrl:result.body.inviteUrl??null});
  }
  const account=status?.account??null;
+ const errorId=(key:keyof ApplicationForm)=>fieldErrors[key]?`apply-${key}-error`:undefined;
  return <div className="site">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
@@ -344,18 +411,18 @@ export function ApplyPage(){
    </section>:account?<section className="site-card site-done">
     <h2>You already have an account</h2>
     <p>Signed in as <b>{account.email}</b> — {statusLabel(account.status).toLowerCase()}.</p>
-    <div className="site-cta"><a className="button primary" href="/download">Get the app<ArrowRight size={14}/></a></div>
+    <div className="site-cta"><a className="button primary" href="/download">Get SCOUT<ArrowRight size={14}/></a></div>
    </section>:<div className="site-apply-grid">
-    <form className="site-card site-form" onSubmit={submit}>
-     <label className="field"><span>YOUR NAME</span><input value={form.name} onChange={set('name')} placeholder="Who should we talk to?" autoComplete="name"/></label>
-     <label className="field"><span>EMAIL</span><input type="email" value={form.email} onChange={set('email')} placeholder="you@organisation.gg" autoComplete="email"/></label>
+    <form className="site-card site-form" onSubmit={submit} noValidate>
+     <label className="field"><span>YOUR NAME</span><input value={form.name} onChange={set('name')} placeholder="Who should we talk to?" autoComplete="name" required minLength={2} aria-invalid={fieldErrors.name?true:undefined} aria-describedby={errorId('name')}/>{fieldErrors.name&&<small className="field-error" id="apply-name-error">{fieldErrors.name}</small>}</label>
+     <label className="field"><span>EMAIL</span><input type="email" value={form.email} onChange={set('email')} placeholder="you@organisation.gg" autoComplete="email" required aria-invalid={fieldErrors.email?true:undefined} aria-describedby={errorId('email')}/>{fieldErrors.email&&<small className="field-error" id="apply-email-error">{fieldErrors.email}</small>}</label>
      <div className="site-form-row">
       <label className="field"><span>TEAM OR ORGANISATION</span><input value={form.organisation} onChange={set('organisation')} placeholder="Optional"/></label>
       <label className="field"><span>COUNTRY</span><input value={form.country} onChange={set('country')} placeholder="Optional"/></label>
      </div>
      <label className="field"><span>HOW OFTEN DO YOU BROADCAST?</span><select value={form.events} onChange={set('events')}>{EVENT_OPTIONS.map(option=><option key={option} value={option}>{option}</option>)}</select></label>
-     <label className="field"><span>WHAT WILL YOU BROADCAST?</span><textarea rows={4} value={form.useCase} onChange={set('useCase')} placeholder="Leagues, qualifiers, community cups, LANs…"/></label>
-     <button className="button primary wide" type="submit" disabled={busy||offline}>{busy?<><Loader2 className="spin" size={15}/>Sending…</>:<>Send application<ArrowRight size={14}/></>}</button>
+     <label className="field"><span>WHAT WILL YOU BROADCAST?</span><textarea rows={4} value={form.useCase} onChange={set('useCase')} placeholder="Leagues, qualifiers, community cups, LANs…" aria-describedby="apply-usecase-hint"/><small className="field-hint" id="apply-usecase-hint">Optional, but a sentence about your events helps us review faster.</small></label>
+     <button className="button primary wide" type="submit" disabled={busy||offline} aria-busy={busy||undefined}>{busy?<><Loader2 className="spin" size={15}/>Sending…</>:<>Send application<ArrowRight size={14}/></>}</button>
      {error&&<Notice>{error}</Notice>}
      <p className="site-fineprint">We only use this to review your application and to reach you about the beta. No newsletter, no resale.</p>
     </form>
@@ -457,7 +524,7 @@ export function LoginPage({linkCode,invite,next='/profile'}:{linkCode?:string;in
       {code?<div className="site-device">
        <label className="field"><span>LAUNCHER CODE</span><input value={code} onChange={event=>setCode(event.target.value.toUpperCase())} placeholder="ABCD-EFGH"/></label>
        <div className="site-cta"><button className="button primary" onClick={()=>void approveLauncher(true)} disabled={busy==='device'}><Link2 size={14}/>Link this launcher</button><button className="button" onClick={()=>void approveLauncher(false)} disabled={busy==='device'}><Unplug size={14}/>Refuse</button></div>
-      </div>:<div className="site-cta"><a className="button primary" href={next}>Get the app<ArrowRight size={14}/></a></div>}
+      </div>:<div className="site-cta"><a className="button primary" href={next}>Get SCOUT<ArrowRight size={14}/></a></div>}
      </div>:<form onSubmit={signIn}>
       {code&&<div className="site-device-code"><small>LAUNCHER WAITING</small><b>{code}</b><span>Sign in to approve it.</span></div>}
       <label className="field"><span>EMAIL</span><input type="email" value={email} onChange={event=>setEmail(event.target.value)} autoFocus autoComplete="username" placeholder="you@organisation.gg"/></label>
@@ -497,6 +564,7 @@ export function LoginPage({linkCode,invite,next='/profile'}:{linkCode?:string;in
 // linked launchers, the launcher code, every overlay setting — lives in the app, not here.
 export function DownloadPage(){
  const {status,offline,loading}=useBetaStatus();
+ const surface=useSurface();
  const account=status?.account??null;
  return <div className="site">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
@@ -524,7 +592,11 @@ export function DownloadPage(){
         <li>The control panel and every overlay setting are inside the app too — teams, maps, scenes, OBS and Overlay Studio.</li>
         <li>This website keeps only the landing page, the beta application, sign-in and the owner&apos;s admin desk.</li>
        </ul>
-       <div className="site-cta"><a className="button primary" href="/app">Open the app dashboard<ArrowUpRight size={14}/></a></div>
+       {/* /app only exists on the venue host; on the public website it would 404, so the link is
+           shown only when this page is served by a host. The website keeps access and downloads. */}
+       {surface==='host'
+        ?<div className="site-cta"><a className="button primary" href="/app">Open the app dashboard<ArrowUpRight size={14}/></a></div>
+        :<p className="site-fineprint">The dashboard opens inside the installed app on your observer machine — this website stays for access, downloads and profile.</p>}
        <p className="site-fineprint">Already on the observer machine? The app opens this address itself. On another machine, open the host address SCOUT prints in its launcher.</p>
       </section>
       {account.status!=='approved'&&<section className="site-card">
@@ -540,6 +612,7 @@ export function DownloadPage(){
 // Old bookmarks and the launcher's pre-refactor verification links still point at /dashboard. The
 // page explains where the desk went instead of quietly showing the operator panel.
 export function MovedDashboardPage(){
+ useDocumentMeta({title:'The dashboard moved — SCOUT',description:'The dashboard now lives in the installed SCOUT app.',robots:'noindex, follow'});
  return <div className="site">
   <SiteNav account={null}/>
   <main className="site-main site-narrow">
@@ -730,8 +803,72 @@ export function ProfilePage(){
   </>}
  </main><SiteFooter/></div>;
 }
+// ------------------------------------------------------------------ privacy
+// The one legal page the beta needs: what is collected, why, for how long, and how to get it
+// deleted. It doubles as the analytics policy (INSTRUCTIONS 3.6): no third-party trackers exist,
+// and the first-party event allowlist below is the contract any future telemetry must obey —
+// entries marked "not collected" are promises, not features. tests/site-public.test.ts pins this.
+export const ANALYTICS_EVENT_ALLOWLIST:ReadonlyArray<{event:string;why:string;collected:boolean}>=[
+ {event:'page-visit',why:'Count landing-page visits (aggregate only, no identifiers).',collected:false},
+ {event:'beta-application-submitted',why:'Count applications and rate-limit abuse.',collected:false},
+ {event:'invitation-accepted',why:'Know how many approved applicants activate.',collected:false},
+ {event:'desktop-linked',why:'Know how many installations are linked.',collected:false},
+ {event:'update-success / update-failure',why:'Reliability of installer releases.',collected:false},
+];
+export function PrivacyPage(){
+ return <div className="site">
+  <SiteNav account={null}/>
+  <main className="site-main site-narrow">
+   <div className="site-page-head">
+    <span className="site-section-eyebrow">PRIVACY</span>
+    <h1>What we collect. And what never leaves your machine.</h1>
+    <p>SCOUT is local-first: the broadcast runs on your PC and match data stays there. This page covers the website and account service only. It is written for the current closed beta — no fine print that does not match the software.</p>
+   </div>
+   <section className="site-card"><h2>The short version</h2>
+    <ul className="site-ul">
+     <li>Match data, GSI packets, recordings, uploads and overlay designs <b>never leave the machine that broadcasts</b> — there is no upload path for them in the product.</li>
+     <li>The website stores your application and account so we can run the closed beta.</li>
+     <li><b>No third-party trackers, no advertising scripts, no social pixels.</b> Nothing here is sold or shared with advertisers.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>What the website stores</h2>
+    <ul className="site-ul">
+     <li><b>Application:</b> name, email, organisation, country and what you broadcast — used only to review you for the beta and to reach you about it.</li>
+     <li><b>Account:</b> email, display name and a salted password digest (your password itself is never stored). Session and invite tokens are kept as digests too.</li>
+     <li><b>Linked launchers:</b> a label, platform and last-seen time per installation you approve, so you can see and unlink them on your profile.</li>
+     <li><b>Owner review history:</b> who approved or rejected an application, and when.</li>
+    </ul>
+    <p className="site-fineprint">Retention: while your account exists, plus as long as the operator keeps the beta records. Deletion: ask the operator who approved you (or the deployment owner) to delete your account and application — they can remove the record directly; automated account deletion is on the roadmap but not yet shipped.</p>
+   </section>
+   <section className="site-card"><h2>What the servers record</h2>
+    <ul className="site-ul">
+     <li><b>Request summaries:</b> an in-memory tally of routes and status classes for the last 15 minutes, so the owner can spot failures. It resets with the service and is not written to disk.</li>
+     <li><b>Security counters:</b> failed sign-in attempts per address, rate limits, and an audit line for privileged actions (approve, reject, revoke). Tokens, passwords and invite secrets are excluded from all logs.</li>
+     <li><b>Opt-in platform metrics:</b> only if the owner enables public stats — aggregate game counts (kills, rounds, maps) for tournaments you register. Never GSI payloads, player identities or chat.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>Analytics — first-party only, and barely that</h2>
+    <p className="site-card-lead">There are no analytics scripts on these pages today. If first-party counting is ever switched on, it must stay inside this allowlist, carry no more than the fields named here, and never include emails, names, tokens, or anything about a match:</p>
+    <table className="site-allowlist"><thead><tr><th>Event</th><th>Why</th><th>Status</th></tr></thead><tbody>
+     {ANALYTICS_EVENT_ALLOWLIST.map(row=><tr key={row.event}><td><code>{row.event}</code></td><td>{row.why}</td><td>{row.collected?'collected':'not collected'}</td></tr>)}
+    </tbody></table>
+    <p className="site-fineprint">Cookies: one session cookie when you sign in, one when an operator unlocks a panel. No cross-site identifiers, no fingerprinting.</p>
+   </section>
+   <section className="site-card"><h2>Your controls</h2>
+    <ul className="site-ul">
+     <li>Sign out at any time from your profile.</li>
+     <li>Unlink any launcher from your profile — its credential stops working.</li>
+     <li>Ask for your application/account to be deleted (see above).</li>
+     <li>Everything a broadcast produces stays on your machine and is under your own file system's control.</li>
+    </ul>
+   </section>
+  </main>
+  <SiteFooter/>
+ </div>;
+}
 // ------------------------------------------------------------------ router
 export function SiteRouter({route}:{route:SiteRoute}){
+ useDocumentMeta(PAGE_META[route]);
  const params=new URLSearchParams(location.search);
  const linkCode=params.get('link')||params.get('device')||undefined;
  const invite=params.get('invite')||undefined;
@@ -741,5 +878,6 @@ export function SiteRouter({route}:{route:SiteRoute}){
  if(route==='/apply') return <ApplyPage/>;
  if(route==='/download') return <DownloadPage/>;
  if(route==='/profile') return <ProfilePage/>;
+ if(route==='/privacy') return <PrivacyPage/>;
  return <LoginPage linkCode={linkCode} invite={invite} next={next}/>;
 }

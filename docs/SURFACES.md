@@ -40,6 +40,8 @@ Website responsibilities:
 - `/` redirects to `/welcome`: product landing page and beta application at `/apply`.
 - `/login`: account sign-in, invite activation, and approval of a launcher's device code.
 - `/profile`: account/beta status, linked installations, unlinking and sign-out.
+- `/privacy`: what the website and account service collect, retention, deletion, and the
+  first-party analytics allowlist (no third-party trackers).
 - `/download`: installer access for approved users.
 - `/admin`: owner-only application decisions (including a copyable one-time invite link),
   available map rotation, application availability, account limits and public-stat settings.
