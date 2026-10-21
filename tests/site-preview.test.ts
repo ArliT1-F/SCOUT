@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createElement} from 'react';
 import {renderToString} from 'react-dom/server';
-import {LandingPage} from '../src/site';
+import {LandingPage,MAP_POOL} from '../src/site';
 import {HudStage} from '../src/showcase';
 import {SCENE_IDS,SCENE_TITLES} from '../server/controls';
 import {SCENE_LIST,PANEL_SECTIONS} from '../src/panel-catalog';
@@ -61,10 +61,17 @@ test('the sections and layer names on the page are the panel’s own',()=>{
  for(const widget of DEFAULT_WIDGETS.filter(widget=>widget.showOn.includes('live'))) assert.ok(page.includes(widget.name),`the live HUD layer ${widget.name} is named the way the Overlay Studio names it`);
 });
 
-test('the map pool is one strip of the nine shipped pictures',()=>{
+test('the map showcase is a focused selection with the rest one click away',()=>{
+ // INSTRUCTIONS 3.1: reduce the oversized nine-map showcase to a focused selection, with an
+ // optional way to see more. The default strip shows four real tiles; a disclosure reveals the
+ // whole pool, and every shipped map stays reachable.
  const maps=page.slice(page.indexOf('site-map-strip'),page.indexOf('site-section" id="beta"'));
- assert.equal((maps.match(/class="site-map-chip"/g)||[]).length,9,'nine tiles, one strip — the pool is a checklist, not a feature');
- for(const file of ['de_ancient','de_anubis','de_dust2','de_inferno','de_mirage','de_nuke','de_overpass','de_train','de_vertigo']) assert.ok(maps.includes(`/thumbs/site/${file}.jpg`),file);
+ assert.equal((maps.match(/class="site-map-chip"/g)||[]).length,4,'the strip opens as a focused selection, not a wall of nine');
+ assert.match(maps,/aria-expanded="false"/,'the reveal starts closed');
+ assert.match(maps,/Show all nine maps/,'the optional way to see more is offered by name');
+ assert.equal((page.match(/class="site-map-chip"/g)||[]).length,4,'nothing else on the page dumps the full pool');
+ assert.equal(MAP_POOL.length,9,'the pool itself still covers all nine shipped maps');
+ for(const file of ['de_ancient','de_anubis','de_dust2','de_inferno','de_mirage','de_nuke','de_overpass','de_train','de_vertigo']) assert.ok(MAP_POOL.some(map=>map.file===file),file);
 });
 
 test('the engineering detail sits below the product story',()=>{

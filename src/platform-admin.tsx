@@ -10,6 +10,14 @@ async function api(path:string,init:RequestInit={}){
 }
 export function PlatformAdminPage(){
  const [data,setData]=useState<any>(null);const [error,setError]=useState('');const [settings,setSettings]=useState<any>(null);const [busy,setBusy]=useState('');const [notice,setNotice]=useState('');const [inviteUrl,setInviteUrl]=useState('');const dirty=React.useRef(false);
+ // The owner desk is private: noindex it and give it its own title. Done locally rather than via
+ // src/site.tsx's useDocumentMeta because these two modules already import each other.
+ useEffect(()=>{
+  document.title='Owner desk — SCOUT';
+  let tag=document.head.querySelector('meta[name="robots"]');
+  if(!tag){tag=document.createElement('meta');tag.setAttribute('name','robots');document.head.append(tag)}
+  tag.setAttribute('content','noindex, follow');
+ },[]);
  const load=useCallback(async()=>{
   const {res,body}=await api('/api/platform/admin');
   if(!res.ok){setError(body?.error||'The SCOUT owner could not be verified.');setData(null);return}

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {readFileSync} from 'node:fs';
+import {existsSync, readFileSync} from 'node:fs';
 import {createElement} from 'react';
 import {renderToString} from 'react-dom/server';
 import {surfaceFromEnv,websitePathAllowed} from '../server/surface.js';
@@ -18,6 +18,13 @@ test('website boundary allows account/owner/device sync but not broadcast contro
 });
 
 test('real website redirects root, serves profile/admin, refuses host pages and mutations',async(t)=>{
+ // The "real website" serves the production build (dist/). On a clean checkout `npm test` can run
+ // before `npm run build` ever did, and every page 500s for missing assets — build once on demand
+ // so the suite is self-contained instead of order-dependent (Phase 0 finding D1).
+ if(!existsSync('dist/index.html')){
+  const built=spawnSync(process.execPath,['node_modules/vite/bin/vite.js','build'],{encoding:'utf8'});
+  assert.equal(built.status,0,`surface test needs the production build and it failed:\n${built.stderr||built.stdout}`);
+ }
  const site=await platformHost(t,{SCOUT_SURFACE:'site'});
  const root=await fetch(site.url+'/',{redirect:'manual'});assert.equal(root.status,302);assert.equal(root.headers.get('location'),'/welcome');
  assert.deepEqual((await site.request('/api/surface')).body,{surface:'site'});

@@ -29,6 +29,7 @@ part of the installed app.
 | `/apply` | website | The whitelist application | no |
 | `/login` | website | Account sign-in, invite activation, launcher-code approval, panel-token unlock | no |
 | `/download` | website | The installer, approved accounts only | yes |
+| `/privacy` | website | What is collected, retention, deletion, analytics allowlist | no |
 | `/admin` | website | The SCOUT owner's desk — **Beta applications**, **Operations** (health, releases, requests), platform settings | owner account |
 | `/app` | app | Dashboard: beta status, tournaments, launcher link, linked devices | no (the account cards need one) |
 | `/`, `/panel` | app | Control panel — teams, players, maps, scenes and every overlay setting | panel token / local machine |

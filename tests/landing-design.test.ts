@@ -13,7 +13,13 @@ test('the redesigned page preserves every shipped marketing image and map thumbn
  for(const asset of assets)assert.ok(page.includes(`/assets/${asset}`),asset);
  const images=[...page.matchAll(/src="(\/(?:assets|thumbs\/site)\/[^\"]+)"/g)];
  for(const [,path] of images)await access(new URL(`../public${path}`,import.meta.url));
- assert.ok(images.length>=15,'the real repository artwork is reused, not replaced by external stock');
+ // The map showcase is a focused selection (four tiles + a reveal, INSTRUCTIONS 3.1), so the
+ // rendered page shows four thumbs, not nine — the pool itself is checked against disk here.
+ assert.ok(images.length>=10,'the real repository artwork is reused, not replaced by external stock');
+ for(const file of ['de_ancient','de_anubis','de_dust2','de_inferno','de_mirage','de_nuke','de_overpass','de_train','de_vertigo'])
+  await access(new URL(`../public/thumbs/site/${file}.jpg`,import.meta.url));
+ assert.equal((page.match(/class="site-map-chip"/g)||[]).length,4,'four tiles by default');
+ assert.match(page,/Show all nine maps/,'the rest of the pool is one click away');
 });
 
 test('the landing structure covers discovery, product, benefits, access, pricing and questions',()=>{
