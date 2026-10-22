@@ -923,6 +923,7 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .site-narrow{padding:0 34px}
 .site-offline{display:flex;align-items:center;gap:10px;margin:0;padding:11px 34px;font-size:11px;color:var(--warn);background:#241d13;border-bottom:1px solid #574326}
 .site-link{color:var(--accent-bright);font-weight:600}
+.site-link-button{border:0;padding:0;background:none;color:var(--accent-bright);font:inherit;font-weight:600;text-decoration:underline;cursor:pointer}
 .site-eyebrow{display:inline-flex;align-items:center;gap:9px;font-size:9px;letter-spacing:2.4px;font-weight:700;color:var(--accent);text-transform:uppercase}
 .site-eyebrow-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
 .site-section-eyebrow{display:block;font-size:8.5px;letter-spacing:2.6px;font-weight:700;color:var(--accent);margin-bottom:10px}

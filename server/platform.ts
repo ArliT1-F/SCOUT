@@ -12,13 +12,13 @@ export function sanitizeMapRotation(input:unknown,previous:string[]):string[]{
 export interface PlatformSettings {
  mapRotation:string[];
  maxTournamentsPerUser:number;
- applicationsOpen:boolean; reviewNote:string; publicStatsEnabled:boolean;
+ applicationsOpen:boolean; reviewNote:string; publicStatsEnabled:boolean; betaReviewers:string[];
  version:number; updatedAt:number; updatedBy:string;
 }
 export const DEFAULT_PLATFORM_SETTINGS:PlatformSettings={
  mapRotation:[...DEFAULT_MAP_ROTATION],maxTournamentsPerUser:3,applicationsOpen:true,
- reviewNote:'Applications are reviewed by a human. You will receive an invite link as soon as your operator account is created.',
- publicStatsEnabled:false,version:1,updatedAt:0,updatedBy:'',
+ reviewNote:'Applications are reviewed by a human. If approved, we will email you a single-use invitation.',
+ publicStatsEnabled:false,betaReviewers:[],version:1,updatedAt:0,updatedBy:'',
 };
 export type MetricKind='kill'|'headshot'|'grenade'|'round'|'map'|'match';
 export const METRIC_KINDS:MetricKind[]=['kill','headshot','grenade','round','map','match'];
@@ -48,12 +48,15 @@ export function isPlatformOwner(email:string|null|undefined,env:NodeJS.ProcessEn
 }
 export function sanitizeSettings(input:Partial<PlatformSettings>|undefined,previous:PlatformSettings,by:string,now=Date.now()):PlatformSettings{
  const max=Math.floor(Number(input?.maxTournamentsPerUser));
+ const candidate=Array.isArray(input?.betaReviewers)?input.betaReviewers:previous.betaReviewers??[];
+ const betaReviewers=[...new Set(candidate.filter((email):email is string=>typeof email==='string').map(normalizeEmail).filter(email=>email.length<=254&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))].slice(0,100);
  return {
   mapRotation:sanitizeMapRotation(input?.mapRotation,previous.mapRotation??DEFAULT_MAP_ROTATION),
   maxTournamentsPerUser:Number.isFinite(max)?Math.min(25,Math.max(1,max)):previous.maxTournamentsPerUser,
   applicationsOpen:typeof input?.applicationsOpen==='boolean'?input.applicationsOpen:previous.applicationsOpen,
   reviewNote:typeof input?.reviewNote==='string'?input.reviewNote.slice(0,400):previous.reviewNote,
   publicStatsEnabled:typeof input?.publicStatsEnabled==='boolean'?input.publicStatsEnabled:previous.publicStatsEnabled,
+  betaReviewers,
   version:previous.version+1,updatedAt:now,updatedBy:by,
  };
 }

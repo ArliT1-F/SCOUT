@@ -9,7 +9,7 @@ async function api(path:string,init:RequestInit={}){
  return {res,body:await res.json().catch(()=>({}) as any)};
 }
 export function PlatformAdminPage(){
- const [data,setData]=useState<any>(null);const [error,setError]=useState('');const [settings,setSettings]=useState<any>(null);const [busy,setBusy]=useState('');const [notice,setNotice]=useState('');const [inviteUrl,setInviteUrl]=useState('');const dirty=React.useRef(false);
+ const [data,setData]=useState<any>(null);const [error,setError]=useState('');const [settings,setSettings]=useState<any>(null);const [busy,setBusy]=useState('');const [notice,setNotice]=useState('');const dirty=React.useRef(false);
  // The owner desk is private: noindex it and give it its own title. Done locally rather than via
  // src/site.tsx's useDocumentMeta because these two modules already import each other.
  useEffect(()=>{
@@ -26,7 +26,12 @@ export function PlatformAdminPage(){
  useEffect(()=>{void load();const t=setInterval(()=>void load(),15000);return()=>clearInterval(t)},[load]);
  async function decide(id:string,decision:'approve'|'reject'){
   setBusy(id);const {res,body}=await api(`/api/beta/applications/${id}`,{method:'POST',body:JSON.stringify({decision})});setBusy('');
-  if(!res.ok){setNotice(body?.error||'That decision could not be saved.');return} setInviteUrl(body.inviteUrl||'');setNotice(`${body.application?.email||'Applicant'} ${decision==='approve'?'approved — copy the invite link below':'rejected'}.`);void load();
+  if(!res.ok){setNotice(body?.error||'That decision could not be saved.');return} setNotice(decision==='approve'?`${body.application?.email||'Applicant'} approved — a single-use invitation was emailed${body.invitationDelivery?.status==='pending'?' and is queued for retry':''}.`:`${body.application?.email||'Applicant'} rejected.`);void load();
+ }
+ async function resend(id:string){
+  setBusy(id);const {res,body}=await api(`/api/beta/applications/${id}/resend-invitation`,{method:'POST',body:JSON.stringify({})});setBusy('');
+  if(!res.ok){setNotice(body?.error||'Invitation could not be resent.');return}
+  setNotice(body.invitationDelivery?.status==='pending'?'Replacement invitation queued for delivery.':'Replacement invitation sent by email.');void load();
  }
  async function saveSettings(){
   setBusy('settings');const {res,body}=await api('/api/platform/admin/settings',{method:'PUT',body:JSON.stringify(settings)});setBusy('');
@@ -38,7 +43,7 @@ export function PlatformAdminPage(){
  return <div className="site"><main className="site-main">
   <a className="site-link" href="/profile">← User profile</a>
   <div className="site-dash-head"><div><span className="site-section-eyebrow">SCOUT PLATFORM ADMIN</span><h1>Owner desk</h1><p>Whitelisting, per-user tournaments, match-log metrics and settings delivered to online hosts. Offline hosts retain their last downloaded settings.</p></div><button className="button" onClick={()=>void load()}><RefreshCw size={13}/>Refresh</button></div>
-  {notice&&<p className="info-note">{notice}</p>}{inviteUrl&&<label className="field"><span>ONE-TIME INVITE — SEND TO THE APPLICANT</span><input readOnly value={inviteUrl} onFocus={e=>e.target.select()}/></label>}
+  {notice&&<p className="info-note">{notice}</p>}
   <div className="site-dash-grid">
    <section className="site-card"><h3><Trophy size={15}/> Platform totals</h3><div className="feed-counters">
     {[['Kills',data.totals.kills],['Headshots',data.totals.headshots],['Grenades exploded',data.totals.grenades],['Rounds',data.totals.rounds],['Maps',data.totals.maps],['Matches',data.totals.matches],['Tournaments',data.tournaments.length]].map(([l,v]:any)=><div className="feed-counter" key={l}><b>{v}</b><small>{String(l).toUpperCase()}</small></div>)}
@@ -46,6 +51,8 @@ export function PlatformAdminPage(){
    <section className="site-card"><h3>Platform settings <span className="site-count">v{settings?.version}</span></h3>
     <label className="field"><span>MAX TOURNAMENTS PER USER (BETA 3 · RELEASE 1)</span><input type="number" min={1} max={25} value={settings?.maxTournamentsPerUser??3} onChange={e=>{dirty.current=true;setSettings({...settings,maxTournamentsPerUser:Number(e.target.value)})}}/></label>
     <label className="field"><span>REVIEW NOTE SHOWN TO APPLICANTS</span><input value={settings?.reviewNote||''} onChange={e=>{dirty.current=true;setSettings({...settings,reviewNote:e.target.value})}}/></label>
+    <label className="field"><span>AUTHORIZED BETA REVIEWERS</span><textarea rows={3} value={(settings?.betaReviewers||[]).join(', ')} placeholder="reviewer@organisation.gg" onChange={e=>{dirty.current=true;setSettings({...settings,betaReviewers:e.target.value.split(/[;,\n]/).map((email:string)=>email.trim()).filter(Boolean)})}}/></label>
+    <p className="site-fineprint">Add account email addresses allowed to approve/reject applications and resend invitations. The SCOUT owner is always authorized. Reviewers cannot change platform settings.</p>
     <div className="toggle-row"><div><b>Whitelist applications open</b><small>When off, /apply refuses new applications; existing accounts keep working.</small></div><button className={'toggle '+(settings?.applicationsOpen?'enabled':'')} aria-pressed={!!settings?.applicationsOpen} onClick={()=>{dirty.current=true;setSettings({...settings,applicationsOpen:!settings.applicationsOpen})}}><i/></button></div>
     <div className="toggle-row"><div><b>Public stats on /welcome</b><small>Show the platform totals (kills, headshots, grenades…) publicly.</small></div><button className={'toggle '+(settings?.publicStatsEnabled?'enabled':'')} aria-pressed={!!settings?.publicStatsEnabled} onClick={()=>{dirty.current=true;setSettings({...settings,publicStatsEnabled:!settings.publicStatsEnabled})}}><i/></button></div>
     <fieldset className="map-rotation-options"><legend>Available map rotation</legend><p className="site-fineprint">Select at least one map. Hosts update their map picker without changing an existing match series.</p>
@@ -55,8 +62,8 @@ export function PlatformAdminPage(){
    </section>
    <section className="site-card site-devices"><h3>Whitelisted users &amp; their tournaments</h3>
     {accounts.length?<ul className="site-device-list">{accounts.map((u:any)=><li key={u.accountId}><div><b>{u.email}</b><small>{u.status} · {u.tournaments} tournament(s) · {u.totals.kills} kills · {u.totals.headshots} HS · {u.totals.grenades} grenades · {u.totals.matches} matches{u.lastActiveAt?` · last active ${new Date(u.lastActiveAt).toLocaleString()}`:''}</small></div></li>)}</ul>:<p className="site-card-lead">No whitelisted user has created a tournament yet.</p>}
-    <p className="site-fineprint">Approve/reject applications below (or in the panel&apos;s Beta applications tab — both are owner-only now).</p>
-    <AdminApplications onDecide={decide} busy={busy}/>
+    <p className="site-fineprint">Approve/reject applications below (or in the Beta applications tab). Authorized reviewers are managed above.</p>
+    <AdminApplications onDecide={decide} onResend={resend} busy={busy}/>
    </section>
    <section className="site-card site-devices"><h3>Recent match log</h3>
     {data.recentLogs?.length?<ul className="site-device-list">{data.recentLogs.slice(0,30).map((log:any,i:number)=><li key={i}><div><b>{log.kind} ×{log.count}</b><small>{log.map||''} {log.detail||''} · {new Date(log.at).toLocaleString()}</small></div></li>)}</ul>:<p className="site-card-lead">No match events collected yet. They are recorded automatically from the live GSI feed of whichever tournament is active, and can be posted to <code>/api/platform/tournaments/:id/metrics</code>.</p>}
@@ -64,11 +71,15 @@ export function PlatformAdminPage(){
   </div>
  </main></div>;
 }
-function AdminApplications({onDecide,busy}:{onDecide:(id:string,d:'approve'|'reject')=>void;busy:string}){
- const [apps,setApps]=useState<any[]>([]);
- useEffect(()=>{void (async()=>{const {res,body}=await api('/api/beta/applications');if(res.ok)setApps(body.applications||[])})()},[busy]);
+function AdminApplications({onDecide,onResend,busy}:{onDecide:(id:string,d:'approve'|'reject')=>void;onResend:(id:string)=>void;busy:string}){
+ const [apps,setApps]=useState<any[]>([]);const [invitations,setInvitations]=useState<Record<string,any>>({});
+ useEffect(()=>{void (async()=>{const {res,body}=await api('/api/beta/applications');if(res.ok){setApps(body.applications||[]);setInvitations(body.invitations||{})}})()},[busy]);
  if(!apps.length) return <p className="site-fineprint">No applications waiting or recorded.</p>;
- return <div className="beta-list">{apps.map((a:any)=><article key={a.id} className={'beta-row '+a.status}><div className="beta-who"><b>{a.displayName}</b><small>{a.email}{a.organisation?` · ${a.organisation}`:''}</small></div><span className="site-status">{a.status}</span><div className="beta-actions">{a.status!=='approved'&&<button className="button primary" disabled={busy===a.id} onClick={()=>onDecide(a.id,'approve')}>Approve</button>}{a.status!=='rejected'&&<button className="button danger-button" disabled={busy===a.id} onClick={()=>onDecide(a.id,'reject')}>Reject</button>}</div></article>)}</div>;
+ return <div className="beta-list">{apps.map((a:any)=>{const invitation=invitations[a.id];return <article key={a.id} className={'beta-row '+a.status}>
+  <div className="beta-who"><b>{a.displayName}</b><small>{a.email}{a.organisation?` · ${a.organisation}`:''}</small></div>
+  <span className="site-status">{a.status}{invitation?.activated?' · activated':invitation?.status==='pending'?' · email queued':invitation?.status==='sent'?' · invited':''}</span>
+  <div className="beta-actions">{a.status==='pending'&&<><button className="button primary" disabled={busy===a.id} onClick={()=>onDecide(a.id,'approve')}>Approve</button><button className="button danger-button" disabled={busy===a.id} onClick={()=>onDecide(a.id,'reject')}>Reject</button></>}{a.status==='approved'&&!invitation?.activated&&<button className="button" disabled={busy===a.id} onClick={()=>onResend(a.id)}>Resend invitation</button>}</div>
+ </article>})}</div>;
 }
 // The whitelisted user's own desk, shown in the app dashboard (/app). The website does not
 // render it any more; the panel and the download page are the only other places it is reachable.
