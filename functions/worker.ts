@@ -19,7 +19,10 @@ import {onRequest as platform} from './api/platform/[[path]]';
 export type Env = {
   SCOUT_ACCOUNT_SERVICE_URL?: string;
   SCOUT_BETA_API_KEY?: string;
-  ASSETS: {fetch(request: Request): Promise<Response>};
+  // Provided by `[assets] binding = "ASSETS"` in wrangler.toml. Optional on purpose: a version
+  // uploaded without that block (dashboard quick edit, a Worker created as a plain script) has no
+  // assets binding, and `env.ASSETS.fetch` would then throw an opaque TypeError on every page.
+  ASSETS?: {fetch(request: Request): Promise<Response>};
 };
 
 const json = (body: unknown, status: number, headers?: HeadersInit) =>
@@ -59,6 +62,19 @@ export default {
     }
 
     // Static assets and the SPA fallback, with public/_headers applied by the asset router.
+    // The binding is only present when the deployed version carries the `[assets]` block and its
+    // uploaded files; without it every non-API request would fail as `TypeError: Cannot read
+    // properties of undefined (reading 'fetch')`, which the Cloudflare log shows with no hint of
+    // the cause. Answer with something an operator can act on instead.
+    if (!env.ASSETS) {
+      console.error(
+        'The ASSETS binding is missing from this deployment: redeploy with `npm run build && npx wrangler deploy` so the Worker in functions/worker.ts is uploaded together with the [assets] static assets from dist/.',
+      );
+      return json(
+        {error: 'Static assets are not configured on this deployment.', code: 'assets-unavailable'},
+        500,
+      );
+    }
     return env.ASSETS.fetch(request);
   },
 };

@@ -79,12 +79,57 @@ dashboard under Workers & Pages → scout → Settings → Variables and Secrets
 Build variables (`VITE_*`) are deliberately unused: nothing server-side is inlined into the client
 bundle.
 
+### What the site can do before the account service exists
+
+The Worker deploys fine without `SCOUT_ACCOUNT_SERVICE_URL`, and everything that is not an account
+action works: `/welcome`, `/privacy`, the scenes and maps, the download page's release notes. Only
+the account plane is missing, because the accounts live in the Node service — the website has no
+database of its own:
+
+| Route | Without `SCOUT_ACCOUNT_SERVICE_URL` |
+|---|---|
+| `/apply` | 503 `service-unavailable`; the form says applications are not connected yet |
+| `/login`, password recovery, launcher linking | 503 `service-unavailable`; sign-in says it is not connected yet |
+| `/profile` | 503 `service-unavailable` |
+| `/download` | page renders; the account-holder parts stay hidden |
+
+So an applicant cannot submit anything until the account service runs somewhere reachable over
+HTTPS and its origin is on the Worker. `server/account-service.ts` needs Node (it uses
+`node:sqlite`, which Workers does not provide), so the smallest viable shapes are a container/VM
+(Fly.io, Railway, Render, a VPS) or the machine that also runs the broadcast host; put TLS in front
+of it and keep the SQLite file on a persistent volume. Then set both secrets above and reload
+`/apply` — the banner disappears the moment `/api/beta/status` answers 200.
+
+Verifying the wiring locally, without touching production: run the account service on `:8790`, put
+the two variables in `.dev.vars`, `npx wrangler dev`, then
+
+```sh
+curl -s -X POST -H 'content-type: application/json' \
+  -d '{"name":"Test Applicant","email":"tester@example.com","events":"Monthly"}' \
+  http://127.0.0.1:8787/api/beta/apply   # → 200 with the application, stored in the service's SQLite
+```
+
 ## Health checks
 
 - `GET /api/healthz` — `{ok: true, surface: "site", service: "website"}` for uptime checks
 - `GET /api/surface` — `{surface: "site"}` so the SPA knows it is on the website
 
 The Node host and account service expose their own `/healthz` routes with service-specific detail.
+
+## Troubleshooting what the logs show
+
+Every 5xx is logged by Cloudflare as `"level": "error"` with `"outcome": "ok"` (the Worker did
+answer; the status was a 5xx). Three symptoms account for almost all of the log noise:
+
+| Log line | Cause | Fix |
+|---|---|---|
+| `TypeError: Cannot read properties of undefined (reading 'fetch')` and a 500 on `/` or any page route | The **deployed version has no static-assets binding**. `functions/worker.ts` hands everything that is not `/api/*` to `env.ASSETS`, which comes from `[assets] binding = "ASSETS"` in `wrangler.toml`. A Worker created or edited outside it — dashboard *Quick edit*, a drag-drop upload, `wrangler deploy` run against a config without `[assets]`, or a Worker that predates the assets block — has no such binding, so `env.ASSETS` is `undefined`. | Deploy from a checkout with `npm ci && npm run build && npx wrangler deploy`. The deploy output must mention the assets upload; afterwards Workers & Pages → scout → Settings → Bindings lists `ASSETS` (Static Assets). The Worker now answers `{"code": "assets-unavailable"}` with an operator hint instead of throwing, so this is unambiguous in the logs. |
+| `GET /api/beta/status` → 503 `{"code": "service-unavailable"}` | `SCOUT_ACCOUNT_SERVICE_URL` is not set on the Worker, so the account proxy has nothing to forward to. This is expected until the Node.js account service is deployed; the SPA stays readable and reports "host could not be reached". | Deploy the account service, then `npx wrangler secret put SCOUT_ACCOUNT_SERVICE_URL` (and `SCOUT_BETA_API_KEY` for the owner desk). |
+| `GET /api/platform/status` (or any `/api/platform/*`) → 503 `{"code": "unavailable"}` | The platform desk deliberately lives on the central SCOUT host, not this deployment (`functions/api/platform/[[path]].ts`). The SPA polls it once per page load. | Nothing to fix on the website; it is the documented stub. It only disappears when the SPA stops probing for host-only features. |
+
+`wrangler`'s pinned major (`^3.114`) understands everything `wrangler.toml` uses here —
+`[assets]` with `binding`, `not_found_handling`, `run_worker_first` and `[observability.logs]` —
+so an outdated CLI is not a cause; a version uploaded without the assets config is.
 
 ## Rollback
 

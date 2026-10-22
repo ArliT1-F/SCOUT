@@ -153,3 +153,12 @@ test('the worker keeps the platform stub and serves static assets for everything
   assert.equal(page.status, 200);
   assert.equal(await page.text(), 'asset');
 });
+
+test('a deployment without the ASSETS binding fails visibly, not with a TypeError', async () => {
+  // A version uploaded without `[assets]` in wrangler.toml has no ASSETS binding at all. The
+  // production symptom was an opaque `TypeError: Cannot read properties of undefined (reading
+  // 'fetch')` and a bare 500; the worker now names the cause (docs/CLOUDFLARE.md, Troubleshooting).
+  const page = await worker.fetch(new Request('https://scout.test/welcome'), {});
+  assert.equal(page.status, 500);
+  assert.equal(((await page.json()) as {code: string}).code, 'assets-unavailable');
+});
