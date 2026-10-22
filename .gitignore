@@ -28,3 +28,10 @@ config/account-service/
 
 # Hosted multi-tenant platform: per-user tournaments, settings, metric logs (server/platform.ts)
 config/platform/
+
+# Cloudflare Pages local dev cache
+.wrangler/
+
+# Supabase CLI local state
+.supabase/
+
