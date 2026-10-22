@@ -1,3 +1,0 @@
-# SPA fallback: every path that is not a static file serves the application shell,
-# so client-side routes (/apply, /login, /download, /profile, /privacy) work after a reload.
-/*    /index.html   200

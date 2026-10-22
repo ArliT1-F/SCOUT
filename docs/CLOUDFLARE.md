@@ -1,33 +1,40 @@
 # Cloudflare — public website and API edge for SCOUT
 
 The SCOUT public website (`/welcome`, `/apply`, `/login`, `/download`, `/profile`, `/privacy`,
-`/admin`) is a static Vite SPA hosted on **Cloudflare Pages** on the free tier:
+`/admin`) is a static Vite SPA hosted on **Cloudflare Workers** (static assets) on the free tier:
 
 - Build: `npm run build` (`tsc --noEmit && vite build`) → `dist/`
-- HTTPS, custom domains and certificate management are handled by Pages
-- Security headers: `public/_headers` (copied into `dist/`)
-- SPA fallback: `public/_redirects` → `index.html` for client-side routes
-- Account API routes (`/api/beta/*`) are proxied by Pages functions (`functions/`) to the Node.js
-  account service server-to-server; secrets never reach the browser
+- Deploy: `npx wrangler deploy` → Worker `scout` (`wrangler.toml`), serving `dist/` as static
+  assets with HTTPS, custom domains and certificate management handled by Cloudflare
+- Security headers: `public/_headers` (copied into `dist/` by Vite; applied by the asset router)
+- SPA fallback: `not_found_handling = "single-page-application"` in `wrangler.toml`, so
+  client-side routes (`/apply`, `/login`, …) work after a reload
+- API routes (`/api/*`) run through the Worker (`functions/worker.ts`): account API routes
+  (`/api/beta/*`) are proxied to the Node.js account service server-to-server; secrets never
+  reach the browser
 
-## Why the backend is not on Cloudflare Workers
+## Why the backend is not on the edge
 
 The broadcast host (`server/index.ts`) and the account service (`server/account-service.ts`) use
 `node:sqlite`, `node:fs/promises` and a `ws` WebSocket server, and the host serves the local
 broadcast UI (`/app`, `/panel`, `/obs`, `/gsi`, `/ws`). None of that runs on Workers, and none of
 it belongs on the public edge: match state, GSI and OBS never leave the venue machine. Per the
 migration plan, that backend is **preserved on Node** and documented here rather than rewritten.
-The website's account calls reach it through the functions proxy.
+The website's account calls reach it through the worker's proxy.
 
 ## Project layout
 
-- `wrangler.toml` — Pages build configuration (`npm run build` → `dist/`)
+- `wrangler.toml` — Worker `scout`: `npm run build` → `dist/` served as static assets, SPA
+  fallback, `/api/*` routed to the worker first
+- `functions/worker.ts` — request router: `/api/*` to the handlers below, everything else to
+  the static assets
 - `functions/api/beta/[[path]].ts` — proxies `/api/beta/*` to `SCOUT_ACCOUNT_SERVICE_URL`
 - `functions/api/platform/[[path]].ts` — 503 stub (platform features live on the central host)
 - `functions/api/surface.ts` — `{surface: "site"}` capability probe
 - `functions/api/healthz.ts` — `{ok: true}` liveness check
 - `public/_headers` — security headers
-- `public/_redirects` — SPA fallback
+- `wrangler.toml` `not_found_handling` — SPA fallback (replaces the Pages-style `_redirects`
+  rule, which Workers reject as an infinite redirect loop)
 
 ## Local development (no production credentials)
 
@@ -39,11 +46,14 @@ npm run build
 PORT=8790 HOST=127.0.0.1 SCOUT_ACCOUNT_BASE_URL=http://127.0.0.1:8790 \
   npx tsx server/account-service.ts
 
-# 3. Run Pages locally with the local account service bound to functions
-npx wrangler pages dev \
-  -b SCOUT_ACCOUNT_SERVICE_URL=http://127.0.0.1:8790 \
-  -b SCOUT_BETA_API_KEY=dev-key-only \
-  --ip 0.0.0.0 --port 3000
+# 3. Put the dev secrets in .dev.vars (gitignored)
+cat > .dev.vars <<'EOF'
+SCOUT_ACCOUNT_SERVICE_URL=http://127.0.0.1:8790
+SCOUT_BETA_API_KEY=dev-key-only
+EOF
+
+# 4. Run the Worker and the site locally
+npx wrangler dev --ip 0.0.0.0 --port 3000
 ```
 
 No Cloudflare login, real Resend key or production database is required for local development.
@@ -52,14 +62,19 @@ correct local behavior.
 
 ## Deployment
 
-Connect the GitHub repository to Cloudflare Pages (or deploy with `wrangler pages deploy dist`).
-Production and preview environment variables are set in the Cloudflare dashboard (or via
-`wrangler secret put`) and are **not** in the repository:
+The build pipeline runs `npm run build` and deploys with `npx wrangler deploy` (see
+`wrangler.toml`: Worker `scout`, `main = "functions/worker.ts"`, assets from `dist/`). You can
+also deploy from a checkout: `npm run build && npx wrangler deploy`. Production secrets are set
+once per environment and are **not** in the repository:
 
 | Secret | Meaning |
 |---|---|
 | `SCOUT_ACCOUNT_SERVICE_URL` | Origin of the Node.js account service (https) |
 | `SCOUT_BETA_API_KEY` | Service key for owner-only `/api/beta/applications*` routes |
+
+Set them with `npx wrangler secret put SCOUT_ACCOUNT_SERVICE_URL` (and
+`npx wrangler secret put SCOUT_BETA_API_KEY`) against worker `scout`, or in the Cloudflare
+dashboard under Workers & Pages → scout → Settings → Variables and Secrets.
 
 Build variables (`VITE_*`) are deliberately unused: nothing server-side is inlined into the client
 bundle.
@@ -73,12 +88,12 @@ The Node host and account service expose their own `/healthz` routes with servic
 
 ## Rollback
 
-Cloudflare Pages keeps every deployment. To roll back:
+Cloudflare Workers keeps every deployment. To roll back:
 
-1. Cloudflare dashboard → the Pages project → Deployments → select the previous deployment →
-   "Retry deployment" (instant rollback, no build).
-2. Or redeploy a known build: `wrangler pages deploy dist --project-name scout --branch main`
-   from the commit you want to restore (`git checkout <previous-commit> && npm run build`).
+1. Cloudflare dashboard → Workers & Pages → scout → Deployments → select the previous deployment
+   → Rollback.
+2. Or from a checkout: `npx wrangler rollback` (previous deployment) or redeploy a known build:
+   `git checkout <previous-commit> && npm run build && npx wrangler deploy`.
 
 Because database writes go to the account service (Node/SQLite or Supabase) and the website is
 stateless, rolling back the website never requires a database migration.

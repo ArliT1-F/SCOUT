@@ -9,10 +9,10 @@ Resend (transactional email). No product features were added and no existing API
 changed.
 
 ```
-   Public internet                           Cloudflare Pages (edge, HTTPS)
+   Public internet                        Cloudflare Workers (edge, HTTPS)
    ┌─────────────┐      SPA + static assets   ┌─────────────────────────────┐
    │  Browser    │◄───────────────────────────│  dist/  (Vite build)        │
-   │             │  /api/beta/* proxy          │  functions/                 │
+   │             │  /api/beta/* proxy          │  functions/worker.ts        │
    └──────┬──────┘  cookies (HttpOnly)        │  - api/beta/[[path]]  ─────┐
           │                                   │  - api/platform/[[path]]   │
           │  HTTPS (operator-listed origins)  │  - api/surface · api/healthz│
@@ -42,14 +42,16 @@ changed.
 
 ### Cloudflare (website)
 
-- `wrangler.toml` builds `dist/` via `npm run build` and deploys to Cloudflare Pages.
-- Pages functions proxy browser-safe `/api/beta/*` routes to the Node account service; the
-  service URL and owner service key are Pages secrets, never in the client bundle.
+- `wrangler.toml` builds `dist/` via `npm run build` and deploys worker `scout` to Cloudflare
+  Workers (`npx wrangler deploy`), serving `dist/` as static assets.
+- The worker (`functions/worker.ts`) answers `/api/*`: it proxies browser-safe `/api/beta/*`
+  routes to the Node account service; the service URL and owner service key are Worker secrets,
+  never in the client bundle.
 - `public/_headers`: `nosniff`, `DENY` framing, `no-referrer`, HSTS, CSP.
-- `public/_redirects`: SPA fallback to `index.html`.
+- SPA fallback to `index.html` via `not_found_handling` in `wrangler.toml`.
 - Health checks: `/api/healthz`, `/api/surface`.
-- Local development works with `wrangler pages dev` against a local account service — no
-  production credentials (verified).
+- Local development works with `wrangler dev` (secrets in `.dev.vars`) against a local account
+  service — no production credentials (verified).
 
 ### Backend (preserved on Node)
 
@@ -100,7 +102,7 @@ prints secret values.
 
 ## Data flow summary
 
-1. Applicant applies on the website → Pages function proxies to the account service → account
+1. Applicant applies on the website → the edge worker proxies to the account service → account
    stored with `pending` status.
 2. Owner approves (service-key route via proxy) → invite token minted, stored as digest,
    encrypted outbox entry queued → Resend delivers the single-use invite link.
@@ -117,6 +119,6 @@ prints secret values.
 | 3 | **Cut the account service over to Supabase** (PostgreSQL build) after staging validation; keep the SQLite file as rollback artifact. | The runtime storage adapter for Supabase is not part of this migration (SQLite `node:sqlite` layer preserved); the operator performs the cutover. |
 | 4 | **Verify RLS as `anon`** (default deny) on all account tables in the staging project. | Requires a live Supabase project. |
 | 5 | **Verify a Resend sender domain** and set `SCOUT_EMAIL_FROM` / `SCOUT_EMAIL_API_KEY` (live key) for production. Test mode (`re_test_*`) does not deliver. | Resend requires a verified domain for real delivery. |
-| 6 | **Connect the GitHub repo to Cloudflare Pages** and set Pages secrets `SCOUT_ACCOUNT_SERVICE_URL` and `SCOUT_BETA_API_KEY`. | Requires a Cloudflare account; local Pages dev was verified, production deployment was not. |
+| 6 | **Connect the repo to Cloudflare Workers Builds** (build `npm run build`, deploy `npx wrangler deploy`) and set Worker secrets `SCOUT_ACCOUNT_SERVICE_URL` and `SCOUT_BETA_API_KEY`. | Requires a Cloudflare account; local `wrangler dev` was verified, production deployment was not. |
 | 7 | **Optionally configure R2** for desktop release artifacts and `SCOUT_DOWNLOAD_URL`. | Optional; release signing remains a build-machine step. |
 | 8 | **Windows installer / Rust toolchain** not present in this sandbox, so `cargo test` and the Tauri build were not executed here; CI runs them on Windows/macOS runners. | No desktop code changed; host regression tests passed. |
