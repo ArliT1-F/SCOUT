@@ -91,6 +91,7 @@ after(async()=>{
 test('the panel reports a local session for this machine and none for another',async()=>{
  const local=await call('/api/session');
  assert.equal(local.status,200);
+ assert.match(String(local.headers['x-request-id']||''),/^[0-9a-f-]{36}$/,'the host issues a request correlation ID');
  assert.deepEqual([local.json.local,local.json.authenticated,local.json.via,local.json.remoteEnabled],[true,true,'local',true]);
  assert.equal(local.json.tokenSource,'env');
  assert.equal(JSON.stringify(local.json).includes(TOKEN),false,'the view never contains the token');
@@ -133,6 +134,7 @@ test('another machine cannot change the broadcast without the token',async()=>{
  const refused=await call('/api/controls',{host:REMOTE,method:'PUT',headers:{Origin:`http://${REMOTE}:${port}`},body:{...before,scene:'break'}});
  assert.equal(refused.status,401);
  assert.equal(refused.json.code,'no-session');
+ assert.equal(refused.json.requestId,refused.headers['x-request-id'],'request IDs are additive to the established gate error');
  assert.equal((await call('/api/status')).json.controls.scene,before.scene,'nothing was written');
  // A cross-site page is refused even when it does hold the token: Origin and Host disagree.
  const crossSite=await call('/api/controls',{host:REMOTE,method:'PUT',headers:{Origin:'https://evil.example.com','X-Scout-Token':TOKEN},body:{...before,scene:'break'}});

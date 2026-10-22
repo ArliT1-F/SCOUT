@@ -21,7 +21,7 @@ async function harness(t:{after:(fn:()=>Promise<void>)=>void}){
  const root=await mkdtemp(path.join(tmpdir(),'scout-sync-'));t.after(()=>rm(root,{recursive:true,force:true}));
  let clock=1_000_000;
  const now=()=>clock;
- const beta=await new LocalBetaService({dir:path.join(root,'accounts'),autoApprove:true,now}).load();
+ const beta=await new LocalBetaService({dir:path.join(root,'accounts'),autoApprove:true,now,emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async()=>{}}).load();
  const context={address:'127.0.0.1',userAgent:'test',origin:'http://platform.test',secure:false};
  const account=value(await beta.apply({name:'Ada Operator',email:'ada@example.com',organisation:'LAN',country:'AL',useCase:'Cups',events:'weekly'},context));
  const signed=value(await beta.activate({invite:account.invite!,password:'long-enough-password'},context));
@@ -195,7 +195,8 @@ test('version skew defaults missing versions, ignores future fields/kinds, and b
 test('real standalone HTTP saves and pack imports save back, closing applications is immediate, and sync stays off',async(t)=>{
  const host=await platformHost(t,{SCOUT_BETA_AUTO_APPROVE:'1'});
  const applied=await host.request('/api/beta/apply',{name:'Owner',email:'owner@example.com'});assert.equal(applied.status,200);
- const activated=await host.request('/api/beta/activate',{invite:new URL(applied.body.inviteUrl).searchParams.get('invite'),password:'long-enough-password'});assert.equal(activated.status,200);const cookie=activated.cookie;
+ const invitation=host.emails.find((email:any)=>email.to?.includes('owner@example.com')&&email.subject==='Your SCOUT closed-beta invitation');assert.ok(invitation);
+ const activated=await host.request('/api/beta/activate',{invite:new URL(invitation.text.match(/https?:\/\/[^\s]+/)![0]).searchParams.get('invite'),password:'long-enough-password'});assert.equal(activated.status,200);const cookie=activated.cookie;
  const created=await host.request('/api/platform/tournaments',{name:'Cup',config:hostConfig()},{cookie});assert.equal(created.status,200);const id=created.body.tournament.id;
  assert.equal((await host.request(`/api/platform/tournaments/${id}/activate`,{},{cookie})).status,200);
  const edited=hostConfig();edited.teams[0].name='Producer’s roster';
@@ -211,7 +212,7 @@ test('real standalone HTTP saves and pack imports save back, closing application
 
 test('real hosted routes share one settings desk and a linked venue sends config saves and derived GSI metrics uphill', {timeout:60_000},async(t)=>{
  const key='hosted-platform-test-service-key';
- const accounts=await createAccountService({file:':memory:',apiKey:key,ownerEmail:'owner@example.com',applicationsOpen:true,reviewNote:'Seeded wave',port:0,host:'127.0.0.1',log:()=>{}});t.after(()=>accounts.close());
+ const accounts=await createAccountService({file:':memory:',apiKey:key,ownerEmail:'owner@example.com',applicationsOpen:true,reviewNote:'Seeded wave',emailBaseUrl:'https://scout.test',emailEncryptionKey:Buffer.alloc(32,3),emailTransport:async()=>{},port:0,host:'127.0.0.1',log:()=>{}});t.after(()=>accounts.close());
  const accountRequest=async(route:string,body:unknown,cookie='')=>fetch(accounts.url+route,{method:'POST',headers:{'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(body)});
  assert.equal((await accountRequest('/apply',{name:'Owner',email:'owner@example.com'})).status,200);const owner=accounts.db.list()[0];const approved=accounts.db.decide(owner.id,'approve','Test owner')!;
  const activated=await accountRequest('/activate',{invite:approved.invite,password:'long-enough-password'});assert.equal(activated.status,200);const cookie=(activated.headers.getSetCookie?.()??[]).map(c=>c.split(';')[0]).join('; ');

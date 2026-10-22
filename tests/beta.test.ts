@@ -23,7 +23,7 @@ const context=(address=HOME):BetaContext=>({address,userAgent:'node-test',origin
 let dir='';
 let service:LocalBetaService;
 let clock:number;
-async function fresh(){dir=await mkdtemp(path.join(tmpdir(),'scout-beta-'));clock=1_700_000_000_000;service=await new LocalBetaService({dir,download:{url:'https://example.test/Setup.exe',version:'SCOUT-Setup-9.9.9.exe',notes:'test build'},now:()=>clock}).load();return service}
+async function fresh(){dir=await mkdtemp(path.join(tmpdir(),'scout-beta-'));clock=1_700_000_000_000;service=await new LocalBetaService({dir,emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async()=>{},download:{url:'https://example.test/Setup.exe',version:'SCOUT-Setup-9.9.9.exe',notes:'test build'},now:()=>clock}).load();return service}
 const application={name:'Ada Operator',email:'Ada@Example.com',organisation:'Durres LAN',country:'AL',useCase:'weekly cups',events:'Every week'};
 
 test('a stranger can apply, and only apply',async()=>{
@@ -66,7 +66,12 @@ test('only an approval mints an invite, and only the invite sets a password',asy
  assert.equal(pending.ok,true);
  if(pending.ok){assert.equal(pending.value.account.status,'rejected');assert.equal(pending.value.invite,null)}
  assert.equal((await service.signIn({email:'ada@example.com',password:'a-long-enough-password'},context(HOME))).ok,false);
- const approved=await service.decide(id,'approve','owner');
+ const cannotReopen=await service.decide(id,'approve','owner');
+ assert.equal(cannotReopen.ok,false,'rejected is a terminal decision');
+ if(!cannotReopen.ok)assert.equal(cannotReopen.code,'already-decided');
+ const replacement=await service.apply({...application,email:'replacement@example.com'},context('192.0.2.44'));
+ assert.equal(replacement.ok,true);
+ const approved=await service.decide(replacement.ok?replacement.value.account.id:'','approve','owner');
  assert.equal(approved.ok,true,JSON.stringify(approved));
  const invite=approved.ok?approved.value.invite:'';
  assert.ok(invite&&invite.length>20,'an approval returns the one-time invite');
@@ -210,7 +215,7 @@ test('one account is one account: a second application for an approved address i
 
 test('auto-approval is opt-in and hands back the invite',async()=>{
  const dirAuto=await mkdtemp(path.join(tmpdir(),'scout-beta-auto-'));
- const auto=await new LocalBetaService({dir:dirAuto,autoApprove:true}).load();
+ const auto=await new LocalBetaService({dir:dirAuto,autoApprove:true,emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async()=>{}}).load();
  const created=await auto.apply(application,context(STRANGER));
  assert.equal(created.ok,true);
  if(created.ok){assert.equal(created.value.account.status,'approved');assert.ok(created.value.invite)}

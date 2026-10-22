@@ -1,7 +1,8 @@
-import {createHash,randomBytes,scryptSync,timingSafeEqual} from 'node:crypto';
+import {createHash,randomBytes,randomUUID,scryptSync,timingSafeEqual} from 'node:crypto';
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import type {PlatformSettings} from './platform.js';
+import {emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport,type EncryptedEmail} from './email.js';
 // The closed beta: who may download the launcher, and which installation belongs to whom.
 //
 // SCOUT is a local-first program — the host runs on the observer's machine and the overlay is a
@@ -17,9 +18,8 @@ import type {PlatformSettings} from './platform.js';
 //                     it, so the panel, the landing page and the launcher all keep the same
 //                     `/api/beta/*` paths, and moving to production is one environment variable.
 //
-// What is deliberately *not* here: sending email. Local mode hands the operator the invite link on
-// the console, exactly like the panel token, because a host with no mail server must still be able
-// to approve somebody. A hosted deployment adds SMTP behind the same `/applications/:id` decision.
+// Invitations and password recovery use a local or hosted encrypted outbox. An approval is refused
+// visibly if mail is not configured; no invite URL is printed or returned to a browser.
 //
 // Secrets are stored as digests (SHA-256 or scrypt), never as values: not passwords, not session
 // ids, not invite tokens, not installation tokens. The one exception is the installation token the
@@ -55,8 +55,12 @@ export interface BetaGrant {
  userCode:string;deviceCode:string;label:string;platform:string;createdAt:number;expiresAt:number;
  status:'pending'|'approved'|'denied';accountId:string|null;deviceId:string|null;installationToken:string|null;
 }
-export interface BetaStore {version:1;accounts:BetaAccount[];sessions:BetaSession[];grants:BetaGrant[]}
+export interface LocalOutboxEntry extends EncryptedEmail {id:string;template:'invitation'|'password_recovery';recipientDigest:string;createdAt:number;nextAttemptAt:number;attempts:number;sentAt:number|null;lastErrorCode:string|null}
+export interface LocalRecoveryToken {digest:string;accountId:string;createdAt:number;expiresAt:number;usedAt:number|null}
+export interface BetaStore {version:1;accounts:BetaAccount[];sessions:BetaSession[];grants:BetaGrant[];emailOutbox?:LocalOutboxEntry[];recoveries?:LocalRecoveryToken[];audit?:Array<{at:number;action:string;accountId:string|null}>}
 export interface LinkedDeviceView {id:string;label:string;platform:string;createdAt:number;lastSeenAt:number}
+export interface InvitationDeliveryView {status:'sent'|'pending'|'manual'|'none';activated?:boolean;expiresAt?:number|null;sentAt?:number|null;attempts?:number;errorCode?:string|null}
+export interface ApplicationReviewView {applications:AccountView[];invitations:Record<string,InvitationDeliveryView>}
 export interface AccountView {
  id:string;email:string;displayName:string;organisation:string;country:string;status:ApplicationStatus;
  // The applicant's own words, kept so the owner can review without a second lookup. The view only
@@ -83,6 +87,8 @@ export interface SiteBetaService {
  signIn(input:{email:string;password:string},context:BetaContext):Promise<BetaResult<{cookieId:string;account:AccountView}>>;
  signOut(cookieId:string|undefined):Promise<void>;
  activate(input:{invite:string;password:string},context:BetaContext):Promise<BetaResult<{cookieId:string;account:AccountView}>>;
+ requestPasswordRecovery(email:string,context:BetaContext):Promise<BetaResult<{ok:true}>>;
+ completePasswordRecovery(input:{token:string;password:string},context:BetaContext):Promise<BetaResult<{ok:true}>>;
 }
 export interface LicenceCheck {status:'active'|'revoked'|'unknown';email?:string;displayName?:string;accountId?:string} // accountId is service-only, never a licence/browser view
 export interface LauncherBetaService {
@@ -97,7 +103,9 @@ export interface LauncherBetaService {
  // The panel's own two operations, so a hosted deployment can still review applications from the
  // observer machine: in local mode they are the store, in hosted mode they carry the service key.
  applications():Promise<AccountView[]>;
- decide(id:string,decision:'approve'|'reject',decidedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null}>>;
+ applicationReview?():Promise<ApplicationReviewView>;
+ decide(id:string,decision:'approve'|'reject',decidedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
+ resendInvitation?(id:string,requestedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
 }
 export interface BetaService extends SiteBetaService,LauncherBetaService {
  readonly mode:BetaMode;
@@ -113,6 +121,11 @@ export interface BetaServiceOptions {
  reviewNote?:string;
  now?:()=>number;
  host?:string;
+ emailTransport?:EmailTransport;
+ emailEncryptionKey?:Buffer;
+ emailBaseUrl?:string;
+ invitationTtlMs?:number;
+ recoveryTtlMs?:number;
 }
 export const hashToken=(value:string)=>createHash('sha256').update(value).digest('hex');
 export const newToken=(bytes=24)=>randomBytes(bytes).toString('base64url');
@@ -143,7 +156,7 @@ export function accountView(account:BetaAccount):AccountView {
 // behind, and it is loaded once at startup.
 export class LocalBetaService implements BetaService {
  readonly mode:BetaMode='local';
- private store:BetaStore={version:1,accounts:[],sessions:[],grants:[]};
+ private store:BetaStore={version:1,accounts:[],sessions:[],grants:[],emailOutbox:[],recoveries:[],audit:[]};
  private writes:Promise<void>=Promise.resolve();
  private readonly dir:string;
  private readonly download:DownloadView;
@@ -151,22 +164,62 @@ export class LocalBetaService implements BetaService {
  private readonly reviewNote:string;
  private readonly now:()=>number;
  private readonly host:string;
+ private readonly mailKey:Buffer|null;
+ private readonly mailBaseUrl:string;
+ private readonly mailTransport:EmailTransport|null;
+ private readonly invitationTtl:number;
+ private readonly recoveryTtl:number;
  private stamps:Map<string,number[]>=new Map();
  private failures:Map<string,{count:number;first:number}>=new Map();
+ private recoveryStamps:Map<string,number[]>=new Map();
  constructor(options:BetaServiceOptions){
   this.dir=options.dir;this.now=options.now??Date.now;
   this.download={url:options.download?.url||DEFAULT_DOWNLOAD_URL,version:options.download?.version||DEFAULT_DOWNLOAD_VERSION,notes:options.download?.notes||''};
   this.autoApprove=options.autoApprove===true;
-  this.reviewNote=options.reviewNote||'Applications are reviewed by a human. You will receive an invite link as soon as your operator account is created.';
+  this.reviewNote=options.reviewNote||'Applications are reviewed by a human. If approved, we will email you a single-use invitation.';
   this.host=options.host||'';
+  const mail=emailConfiguration();
+  this.mailKey=options.emailEncryptionKey??mail?.encryptionKey??null;
+  this.mailBaseUrl=(options.emailBaseUrl??mail?.publicBaseUrl??'').replace(/\/$/,'');
+  this.mailTransport=options.emailTransport??(mail?resendTransport(mail):null);
+  this.invitationTtl=options.invitationTtlMs??24*60*60*1000;
+  this.recoveryTtl=options.recoveryTtlMs??60*60*1000;
  }
  get storeFile(){return path.join(this.dir,'store.json')}
  async load(){
   await mkdir(this.dir,{recursive:true});
-  try{const parsed=JSON.parse(await readFile(this.storeFile,'utf8'));if(parsed&&Array.isArray(parsed.accounts))this.store={version:1,accounts:parsed.accounts,sessions:parsed.sessions||[],grants:parsed.grants||[]}}
+  try{const parsed=JSON.parse(await readFile(this.storeFile,'utf8'));if(parsed&&Array.isArray(parsed.accounts))this.store={version:1,accounts:parsed.accounts,sessions:parsed.sessions||[],grants:parsed.grants||[],emailOutbox:parsed.emailOutbox||[],recoveries:parsed.recoveries||[],audit:parsed.audit||[]}}
   catch(error:any){if(error?.code!=='ENOENT')console.warn('[beta] config/beta/store.json is unreadable — starting from an empty beta:',error.message)}
   this.reap();
   return this;
+ }
+ private mailReady(){return Boolean(this.mailKey&&this.mailBaseUrl&&this.mailTransport)}
+ private emailUnavailable():BetaResult<never>{return {ok:false,status:503,code:'email-not-configured',message:'Email delivery is not configured. Set SCOUT_EMAIL_API_KEY, SCOUT_EMAIL_FROM, SCOUT_EMAIL_ENCRYPTION_KEY, and SCOUT_ACCOUNT_BASE_URL before approving or resending invitations.'}}
+ private recordAudit(action:string,accountId:string|null){
+  this.store.audit??=[];this.store.audit.push({at:this.now(),action,accountId});if(this.store.audit.length>2000)this.store.audit.splice(0,this.store.audit.length-2000);
+ }
+ private queueEmail(template:LocalOutboxEntry['template'],email:string,message:ReturnType<typeof invitationEmail>|ReturnType<typeof recoveryEmail>){
+  const encrypted=sealEmail(message,this.mailKey!);
+  const entry:LocalOutboxEntry={id:randomUUID(),template,recipientDigest:hashToken(normalizeEmail(email)),...encrypted,createdAt:this.now(),nextAttemptAt:this.now(),attempts:0,sentAt:null,lastErrorCode:null};
+  this.store.emailOutbox??=[];this.store.emailOutbox.push(entry);return entry;
+ }
+ private delivery(account:BetaAccount):InvitationDeliveryView{
+  const latest=(this.store.emailOutbox??[]).filter(entry=>entry.template==='invitation'&&entry.recipientDigest===hashToken(account.email)).sort((a,b)=>b.createdAt-a.createdAt)[0];
+  if(!latest)return {status:'none',activated:!!account.password};
+  return {status:latest.sentAt===null?'pending':'sent',activated:!!account.password,expiresAt:account.invite?.expiresAt??null,sentAt:latest.sentAt,attempts:latest.attempts,errorCode:latest.lastErrorCode};
+ }
+ async deliverPending(){
+  if(!this.mailReady())return;
+  for(const entry of [...(this.store.emailOutbox??[])].filter(row=>row.sentAt===null&&row.nextAttemptAt<=this.now()).slice(0,20)){
+   try{
+    await this.mailTransport!(openEmail(entry,this.mailKey!),entry.id);
+    entry.sentAt=this.now();entry.ciphertext='';entry.iv='';entry.tag='';entry.lastErrorCode=null;
+   }catch(error){
+    entry.attempts++;entry.nextAttemptAt=this.now()+[60_000,5*60_000,15*60_000,60*60_000,6*60*60_000][Math.min(entry.attempts-1,4)];
+    const status=Number((error as {status?:unknown})?.status||0);entry.lastErrorCode=status>=400&&status<500&&status!==429?'provider-rejected':'transient';
+   }
+   await this.save();
+  }
  }
  async save(){
   const snapshot=JSON.stringify(this.store,null,2);
@@ -234,18 +287,23 @@ export class LocalBetaService implements BetaService {
    status:'pending',createdAt:this.now(),decidedAt:null,decidedBy:'',password:null,invite:null,devices:[],
   };
   let invite:string|null=null;
+  if(this.autoApprove&&!this.mailReady())return this.emailUnavailable();
   this.store.accounts.push(account);
   stamps.push(this.now());this.stamps.set(context.address,stamps);
+  this.recordAudit('application.submitted',account.id);
   if(this.autoApprove) invite=this.grantInvite(account,'automatic approval (SCOUT_BETA_AUTO_APPROVE=1)');
   await this.save();
+  if(invite)await this.deliverPending();
   return {ok:true,value:{account:accountView(account),invite}};
  }
  // Approval mints a one-time invite; the applicant sets their own password through it, so no
  // password ever travels through a channel the operator — or the host console — can read.
- private grantInvite(account:BetaAccount,decidedBy:string){
-  const invite=newToken(24);
-  account.status='approved';account.decidedAt=this.now();account.decidedBy=decidedBy;
-  account.invite={digest:hashToken(invite),expiresAt:this.now()+14*24*60*60*1000};
+ private grantInvite(account:BetaAccount,decidedBy:string,renewal=false){
+  const invite=newToken(32),expiresAt=this.now()+this.invitationTtl;
+  if(!renewal){account.status='approved';account.decidedAt=this.now();account.decidedBy=decidedBy}
+  account.invite={digest:hashToken(invite),expiresAt};
+  this.store.emailOutbox=(this.store.emailOutbox??[]).filter(entry=>entry.template!=='invitation'||entry.recipientDigest!==hashToken(account.email)||entry.sentAt!==null);
+  this.queueEmail('invitation',account.email,invitationEmail(account.email,account.displayName,`${this.mailBaseUrl}/login?invite=${encodeURIComponent(invite)}`,expiresAt));
   return invite;
  }
  async signIn(input:{email:string;password:string},context:BetaContext):Promise<BetaResult<{cookieId:string;account:AccountView}>>{
@@ -259,7 +317,7 @@ export class LocalBetaService implements BetaService {
    this.failures.set(context.address,next);
    return {ok:false,status:401,code:'bad-credentials',message:'That email address and password do not match an account.'};
   }
-  if(account.status!=='approved') return {ok:false,status:403,code:account.status==='pending'?'pending-review':'rejected',message:account.status==='pending'?'This application is still in review. You will get an invite link as soon as it is approved.':'This application was not approved for the closed beta.'};
+  if(account.status!=='approved') return {ok:false,status:403,code:account.status==='pending'?'pending-review':'rejected',message:account.status==='pending'?'This application is still in review. We will email you if it is approved.':'This application was not approved for the closed beta.'};
   this.failures.delete(context.address);
   const cookieId=this.issueSession(account,context);
   await this.save();
@@ -276,21 +334,63 @@ export class LocalBetaService implements BetaService {
   account.password=digestSecret(input.password);
   account.invite=null;
   const cookieId=this.issueSession(account,context);
+  this.recordAudit('account.activated',account.id);
   await this.save();
   return {ok:true,value:{cookieId,account:accountView(account)}};
  }
- async decide(id:string,decision:'approve'|'reject',decidedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null}>>{
+ async requestPasswordRecovery(email:string,context:BetaContext):Promise<BetaResult<{ok:true}>>{
+  if(!this.mailReady())return this.emailUnavailable();
+  const stamps=(this.recoveryStamps.get(context.address)||[]).filter(stamp=>this.now()-stamp<60*60*1000);
+  if(stamps.length>=5)return {ok:false,status:429,code:'throttled',message:'Too many password recovery requests. Wait before trying again.'};
+  stamps.push(this.now());this.recoveryStamps.set(context.address,stamps);
+  const account=this.find(email);
+  if(account?.status==='approved'&&account.password){
+   const token=newToken(32),expiresAt=this.now()+this.recoveryTtl;
+   this.store.recoveries=(this.store.recoveries??[]).filter(row=>row.accountId!==account.id);
+   this.store.recoveries!.push({digest:hashToken(token),accountId:account.id,createdAt:this.now(),expiresAt,usedAt:null});
+   this.queueEmail('password_recovery',account.email,recoveryEmail(account.email,account.displayName,`${this.mailBaseUrl}/login?reset=${encodeURIComponent(token)}`,expiresAt));
+   this.recordAudit('password-recovery.issued',account.id);await this.save();void this.deliverPending();
+  }
+  return {ok:true,value:{ok:true}};
+ }
+ async completePasswordRecovery(input:{token:string;password:string},_context:BetaContext):Promise<BetaResult<{ok:true}>>{
+  if(input.password.length<MIN_PASSWORD)return {ok:false,status:400,code:'weak-password',message:`Choose a password of at least ${MIN_PASSWORD} characters.`};
+  const token=this.store.recoveries?.find(row=>row.digest===hashToken(input.token.trim())&&row.usedAt===null);
+  if(!token||token.expiresAt<this.now())return {ok:false,status:400,code:'invalid-recovery-token',message:'That password reset link is invalid or has expired. Request a new one.'};
+  const account=this.store.accounts.find(row=>row.id===token.accountId&&row.status==='approved');
+  if(!account)return {ok:false,status:400,code:'invalid-recovery-token',message:'That password reset link is invalid or has expired. Request a new one.'};
+  account.password=digestSecret(input.password);account.invite=null;token.usedAt=this.now();
+  this.store.recoveries=this.store.recoveries?.filter(row=>row.accountId!==account.id&&row.usedAt===null)||[];
+  this.store.sessions=this.store.sessions.filter(session=>session.accountId!==account.id);
+  this.recordAudit('password-recovery.completed',account.id);await this.save();
+  return {ok:true,value:{ok:true}};
+ }
+ async decide(id:string,decision:'approve'|'reject',decidedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>{
   const account=this.store.accounts.find(entry=>entry.id===id);
   if(!account) return {ok:false,status:404,code:'not-found',message:'That application no longer exists.'};
-  const invite=decision==='approve'?this.grantInvite(account,decidedBy):null;
-  if(decision==='reject'){account.status='rejected';account.decidedAt=this.now();account.decidedBy=decidedBy;account.invite=null}
+  if(decision==='reject'&&account.status==='rejected')return {ok:false,status:409,code:'already-decided',message:'A rejected application is terminal. A new application is required.'};
+  if(decision==='approve'&&account.status==='rejected')return {ok:false,status:409,code:'already-decided',message:'A rejected application is terminal. A new application is required.'};
+  if(decision==='approve'&&account.password)return {ok:false,status:409,code:'invitation-not-available',message:'Only pending applications or approved accounts that have not activated can receive an invitation.'};
+  if(decision==='approve'&&!this.mailReady())return this.emailUnavailable();
+  const renewal=decision==='approve'&&account.status==='approved';
+  const invite=decision==='approve'?this.grantInvite(account,decidedBy,renewal):null;
+  if(decision==='reject'){account.status='rejected';account.decidedAt=this.now();account.decidedBy=decidedBy;account.invite=null;this.store.sessions=this.store.sessions.filter(session=>session.accountId!==account.id)}
+  this.recordAudit(renewal?'invitation.resent':`application.${decision}`,account.id);
   await this.save();
-  return {ok:true,value:{account:accountView(account),invite}};
+  if(decision==='approve')await this.deliverPending();
+  return {ok:true,value:{account:accountView(account),invite,invitationDelivery:decision==='approve'?this.delivery(account):undefined}};
  }
  async applications():Promise<AccountView[]>{
   this.reap();
   return [...this.store.accounts].sort((a,b)=>b.createdAt-a.createdAt).map(accountView);
  }
+ async applicationReview():Promise<ApplicationReviewView>{
+  this.reap();
+  const invitations:ApplicationReviewView['invitations']={};
+  for(const account of this.store.accounts)if(account.status==='approved')invitations[account.id]=this.delivery(account);
+  return {applications:await this.applications(),invitations};
+ }
+ async resendInvitation(id:string,requestedBy:string){return this.decide(id,'approve',requestedBy)}
  // The device flow, RFC 8628 style: the launcher shows a short code, the operator approves it in a
  // browser they are already signed in to, and only then does the launcher receive its token. No
  // password is ever typed into the launcher, and a code alone is useless without the account.
@@ -397,8 +497,10 @@ export class HostedBetaService implements LauncherBetaService {
  // The site half is deliberately absent here: in hosted mode the browser's /api/beta requests are
  // proxied verbatim to this service (cookies included), so a second implementation of them would
  // only be a copy that drifts. What the host itself needs is the launcher half below.
- async decide(id:string,decision:'approve'|'reject',decidedBy:string){return this.call<{account:AccountView;invite:string|null}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy})}
- async applications(){const result=await this.call<{applications:AccountView[]}>('/applications','GET');return result.ok?result.value.applications:[]}
+ async decide(id:string,decision:'approve'|'reject',decidedBy:string){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy})}
+ async resendInvitation(id:string,requestedBy:string){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id)+'/resend-invitation','POST',{requestedBy})}
+ async applicationReview(){const result=await this.call<ApplicationReviewView>('/applications','GET');return result.ok?result.value:{applications:[],invitations:{}}}
+ async applications(){return (await this.applicationReview()).applications}
  async installationStatus(input:{deviceId:string;installationId:string;token:string},options?:{includeAccountId?:boolean}){return this.call<LicenceCheck>('/license/check','POST',{deviceId:input.deviceId,installationId:input.installationId,token:input.token,...(options?.includeAccountId?{resolveAccount:true}:{})})}
  async settings(){return this.call<{settings:PlatformSettings}>('/settings','GET')}
  async updateSettings(input:Partial<PlatformSettings>,cookie:string){return this.call<{settings:PlatformSettings}>('/settings','PUT',input,{Cookie:cookie})}

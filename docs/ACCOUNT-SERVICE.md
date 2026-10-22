@@ -36,9 +36,7 @@ once instead: `cp .env.example .env` and fill it in. Real environment variables 
 `PORT` is shared by the host and this service — when both run on one machine, give the service its
 own port on the command line (`PORT=8790 npm run account-service`) rather than in a shared `.env`.
 
-`SCOUT_OWNER_EMAIL` names the account that may write `/settings`; it is **not** a password. The owner
-signs in with a password set through the normal one-time invite link (`--approve` prints it). There is
-no password setting in the file or the environment.
+`SCOUT_OWNER_EMAIL` names the account that may write `/settings`; it is **not** a password. The owner signs in with a password set through the normal one-time invitation email. There is no password setting in the file or the environment.
 
 The host proxies the browser's `/api/beta/*` calls to the service, cookies included, so there is no
 CORS configuration anywhere and the pages keep talking to their own origin. `SCOUT_BETA_API_KEY` is
@@ -56,7 +54,11 @@ refuses those routes outright when no key is configured.
 | `SCOUT_ACCOUNT_APPLICATIONS` | open | **Initial seed only:** `closed` seeds `applicationsOpen:false`. After first start, change applications-open in `/admin` or `PUT /settings`, not this variable. Existing accounts keep working. |
 | `SCOUT_ACCOUNT_REVIEW_NOTE` | empty | **Initial seed only:** the review note shown to applicants and in the app's dashboard. Subsequent edits come from the persisted settings desk. |
 | `SCOUT_ACCOUNT_NAME` | `SCOUT account service` | The name `/status` reports as the host behind the beta. |
-| `SCOUT_ACCOUNT_BASE_URL` | — | Only for the CLI: the address used to print a full invite link. |
+| `SCOUT_ACCOUNT_BASE_URL` | — | Public HTTPS origin used to construct invitation and password-recovery links. Required for delivery. |
+| `SCOUT_EMAIL_API_KEY` | — | Resend API key (or key accepted by a compatible configured endpoint). |
+| `SCOUT_EMAIL_FROM` | — | Verified sender address, optionally `SCOUT <mail@example.com>`. |
+| `SCOUT_EMAIL_ENCRYPTION_KEY` | — | 32 random bytes, base64 or 64 hex chars. Protect separately from the SQLite backup; required to decrypt queued messages. |
+| `SCOUT_EMAIL_API_URL` | `https://api.resend.com/emails` | Provider endpoint; HTTPS in production, loopback HTTP allowed for development/tests. |
 
 ## Persisted platform settings
 
@@ -76,7 +78,7 @@ from `/admin` when moving an existing central JSON settings desk to the hosted d
   the owner's email/time. Cross-site requests are refused.
 
 The central host reads this row for its platform desk and application flow, and forwards
-`PUT /api/platform/admin/settings` with the owner's cookie. `/status` and `/apply` on this
+`PUT /api/platform/admin/settings` with the owner's cookie. The owner's `betaReviewers` list is normalized and synchronized transactionally to `account_roles`; new activations receive the configured role too. Only the owner may edit the list; reviewers may access the application review routes, not platform settings. `/status` and `/apply` on this
 service also read it directly: closing applications refuses the **very next** application,
 without a restart, including callers that bypass the host. The browser's generic account
 proxy does not expose `/settings` or the internal device identity lookup.
@@ -119,39 +121,29 @@ The service has a small CLI for a deployment nobody is watching:
 
 ```sh
 npm run account-service -- --list                 # status, address, date and organisation per application
-npm run account-service -- --approve ada@example.com
-# [accounts] approved ada@example.com
-# [accounts] send them this one-time invite link:
-# [accounts]   https://accounts.example.com/login?invite=…
+npm run account-service -- --approve ada@example.com  # queues and attempts invitation delivery
 ```
 
-Approving prints the invite link because this service deliberately does not send email. The operator
-who ran the command sends it — the same division of labour the local flow uses when it prints the link
-to the panel console. Wiring an SMTP sender in is the deployment's business; the invite value is the
-only thing it needs.
+Approval requires complete email configuration and fails without changing the pending application if any required setting is absent. The encrypted outbox retries transient delivery failures with bounded backoff. The command reports that delivery was attempted, not that the recipient has read the message; use the admin delivery status and `/healthz` to monitor retries. Invite URLs and tokens are never printed.
 
-`GET /healthz` answers `{ok,accounts,pending,devices}` for a supervisor or an uptime check.
+`GET /healthz` answers `{ok,accounts,pending,devices,emailDeliveryConfigured,emailOutboxPending}` for a supervisor or an uptime check.
 
 ## What it stores, and what it will never store
 
 The digest table is `docs/BETA.md`'s: passwords as salted scrypt digests, sessions, invites, device
 codes and installation tokens as SHA-256 digests. The only plaintext secrets that exist at all are
 
-- the invite token, between the approval and the moment the applicant sets a password (14-day expiry),
+- the invitation or recovery email while queued, encrypted using AES-256-GCM and erased after successful delivery,
+- the invite token, between the approval and the moment the applicant sets a password (24-hour default expiry),
 - the installation token, between the approval and the launcher's **first** poll — after that the row
   holds nothing but its digest, and a launcher that missed the pickup starts a new link.
 
-`tests/account-service.test.ts` drives the whole flow over a socket and then reads the database file
-to assert that the password, the invite, the device code and the installation token do not appear in
-it.
+`tests/account-service.test.ts` drives the flow over a socket and inspects the database file to verify that password, invite, recovery token, device code, installation token and queued-email plaintext are not stored as usable values.
 
-Events (applications, sign-ins, activations, launcher link/revoke) are appended to an `events` table;
-nothing else is logged about an account, and nothing about a broadcast is ever sent here.
+Legacy events (applications, sign-ins, activations, launcher link/revoke) continue to be appended to the existing `events` table for compatibility. Phase 2 also records actor/action/target/request ID in the dedicated indexed `audit_logs` table; each new audit row and its legacy `events` counterpart commit together. Audit metadata excludes the legacy free-form details, email addresses, user codes, tokens and request bodies. No broadcast state is sent here. HTTP logs use generated request IDs and safe error classes rather than exception/request text.
 
 ## What is still missing
 
-- **Email** for invite links and password resets. `--approve` prints the link; a real deployment mails
-  it.
 - **Account deletion.** `DELETE /account` and the paperwork around it (`docs/BETA.md` lists the terms
   and privacy gap). Until then, a rejected applicant's row can be removed by hand:
   `sqlite3 accounts.sqlite "DELETE FROM accounts WHERE email = '…';"`.
@@ -160,9 +152,26 @@ nothing else is logged about an account, and nothing about a broadcast is ever s
   `config/beta/installation.json` is unchanged by the move, but the installation is *unlinked* on the
   service's side until somebody approves a new code in the app's dashboard (or at the website's `/login?link=`).
 
-## Upgrading
+## Upgrading and recovery
 
-The schema (including the settings row's table) is created with `CREATE TABLE IF NOT EXISTS` on every start, and adding a column is a
-one-line migration to apply before the new build starts. There is no separate migration step and no
-version table yet; if the schema grows, that is the first thing to add (and it belongs in this
-document, not in a commit message).
+At startup, `server/account-migrations.ts` applies forward-only SQLite migrations in an immediate
+transaction and records the version in `PRAGMA user_version`. There is no separate CLI migration
+command: take a verified SQLite backup first, deploy the compatible server binary, and let startup
+apply any pending migration. A failed migration rolls back and prevents the service from listening;
+restore the backup or correct the reported precondition before retrying.
+
+Version 1 adopts the previous schema with idempotent `CREATE TABLE IF NOT EXISTS`; it does not rebuild
+or delete existing tables. Version 2 adds case-insensitive unique email enforcement, query indexes and
+the dedicated `audit_logs` table while preserving the legacy `events` table. If V2 reports duplicate emails after trimming and case normalization, back up the database, resolve those duplicates with the account owner, then restart.
+No rows are automatically merged or deleted. Migrations are forward-only; recovery is restore-from-
+backup, not an automatic down migration.
+
+To inspect the current version:
+
+```sh
+sqlite3 config/account-service/accounts.sqlite 'PRAGMA user_version;'
+```
+
+A representative migration-and-restart path is covered by `tests/account-service.test.ts` using a
+pre-migration database file and an existing account row. The backup/restore command above is the
+operational recovery path; production restoration should be rehearsed before launch.

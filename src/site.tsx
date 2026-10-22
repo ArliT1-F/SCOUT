@@ -39,7 +39,7 @@ export const isSiteRoute=(path:string):path is SiteRoute=>(SITE_ROUTES as readon
 // public pages may say index.
 export const PAGE_META:Record<SiteRoute,{title:string;description:string;robots:'index, follow'|'noindex, follow'}>={
  '/welcome':{title:'SCOUT — A better broadcast for every CS2 tournament',description:'Turn one observer PC into a complete CS2 broadcast: live overlays, nine scenes and one operator panel, built for community tournaments. Apply for the free closed beta.',robots:'index, follow'},
- '/apply':{title:'Apply for the closed beta — SCOUT',description:'Apply for SCOUT closed-beta access. A human reads every application; approved organisers get a one-time invite link.',robots:'index, follow'},
+ '/apply':{title:'Apply for the closed beta — SCOUT',description:'Apply for SCOUT closed-beta access. A human reads every application; approved organisers receive a single-use email invitation.',robots:'index, follow'},
  '/login':{title:'Sign in — SCOUT',description:'Sign in to your SCOUT account, set a password from an invite, or approve a launcher link.',robots:'noindex, follow'},
  '/download':{title:'Download SCOUT — SCOUT',description:'The Windows installer for approved closed-beta accounts.',robots:'noindex, follow'},
  '/profile':{title:'Your profile — SCOUT',description:'Your SCOUT account, beta status and linked installations.',robots:'noindex, follow'},
@@ -171,7 +171,7 @@ export const MAP_POOL=[
 ];
 const STEPS=[
  {title:'Apply',body:'Tell us who you are and what you broadcast. The application takes about a minute.'},
- {title:'We review it',body:'A human reads every application. Approved accounts get a one-time invite link that lets them set a password.'},
+ {title:'We review it',body:'A human reads every application. Approved applicants receive a single-use email invitation to set a password.'},
  {title:'Download the app',body:'Your download page carries the Windows installer: host, dashboard, overlay settings and the GSI config, with its own bundled runtime.'},
  {title:'Link it and go live',body:'The launcher shows an 8-character code. Approve it in the SCOUT app once, then paste its /obs address into OBS.'},
 ];
@@ -369,7 +369,7 @@ export function ApplyPage(){
  const [busy,setBusy]=useState(false);
  const [error,setError]=useState('');
  const [fieldErrors,setFieldErrors]=useState<Partial<Record<keyof ApplicationForm,string>>>({});
- const [done,setDone]=useState<{email:string;inviteUrl:string|null}|null>(null);
+ const [done,setDone]=useState<{email:string}|null>(null);
  const set=(key:keyof typeof form)=>(event:React.ChangeEvent<HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement>)=>{setForm(current=>({...current,[key]:event.target.value}));if(fieldErrors[key])setFieldErrors(current=>({...current,[key]:undefined}))};
  async function submit(event:React.FormEvent){
   event.preventDefault();
@@ -389,7 +389,7 @@ export function ApplyPage(){
      : result.body?.error||'The application could not be sent. Try again.');
    return;
   }
-  setDone({email:result.body.application.email,inviteUrl:result.body.inviteUrl??null});
+  setDone({email:result.body.application.email});
  }
  const account=status?.account??null;
  const errorId=(key:keyof ApplicationForm)=>fieldErrors[key]?`apply-${key}-error`:undefined;
@@ -400,13 +400,12 @@ export function ApplyPage(){
    <div className="site-page-head">
     <span className="site-section-eyebrow">CLOSED BETA</span>
     <h1>Apply for access</h1>
-    <p>Tell us who you are and what you broadcast. If it is a fit, you get a one-time invite link that creates your operator account — the installer is then on your download page, and the dashboard lives inside the app.</p>
+    <p>Tell us who you are and what you broadcast. A reviewer reads every application. If approved, you will receive a single-use invitation by email to create your account.</p>
    </div>
    {done?<section className="site-card site-done">
     <span className="site-done-mark"><CircleCheck size={22}/></span>
     <h2>Application received</h2>
-    <p>We have <b>{done.email}</b> on the list. When it is approved you will get an invite link at that address; opening it lets you set a password. Until then, nothing else is needed from you.</p>
-    {done.inviteUrl&&<p className="site-inline-invite">This host is in development mode, so your account was approved immediately: <a href={done.inviteUrl}>open your invite link</a>.</p>}
+    <p>We have <b>{done.email}</b> on the list. If your application is approved, a single-use invitation will be emailed to that address. Until then, nothing else is needed from you.</p>
     <div className="site-cta"><a className="button" href="/welcome">Back to the overview</a><a className="button primary" href="/login">Go to sign in<ArrowRight size={14}/></a></div>
    </section>:account?<section className="site-card site-done">
     <h2>You already have an account</h2>
@@ -440,12 +439,14 @@ export function ApplyPage(){
 // Two doors, one page: the SCOUT account (the website) and the panel token (this machine's host).
 // The device-approval flow lands here too — an invite link, or a launcher code — so an operator who
 // is not signed in yet meets one screen instead of three.
-export function LoginPage({linkCode,invite,next='/profile'}:{linkCode?:string;invite?:string;next?:string}){
+export function LoginPage({linkCode,invite,reset,next='/profile'}:{linkCode?:string;invite?:string;reset?:string;next?:string}){
  const {status,offline,reload}=useBetaStatus();
  const session=usePanelSession();
  const account=status?.account??null;
  const [email,setEmail]=useState('');const [password,setPassword]=useState('');
  const [invitePassword,setInvitePassword]=useState('');const [inviteConfirm,setInviteConfirm]=useState('');
+ const [recoveryPassword,setRecoveryPassword]=useState('');const [recoveryConfirm,setRecoveryConfirm]=useState('');
+ const [recover,setRecover]=useState(false);
  const [token,setToken]=useState('');
  const [busy,setBusy]=useState<string|null>(null);
  const [error,setError]=useState('');const [notice,setNotice]=useState('');
@@ -476,6 +477,21 @@ export function LoginPage({linkCode,invite,next='/profile'}:{linkCode?:string;in
   setNotice('Password set. Welcome aboard.');
   setTimeout(()=>location.assign(next),600);
  }
+ async function requestRecovery(event:React.FormEvent){
+  event.preventDefault();setBusy('recovery');setError('');
+  const result=await betaRequest('/api/beta/password-recovery',{email});setBusy(null);
+  if(!result.ok){setError(result.body?.error||'Password recovery is temporarily unavailable.');return}
+  setNotice(result.body?.message||'If that address belongs to an activated account, a reset email will be sent.');setRecover(false);
+ }
+ async function completeRecovery(event:React.FormEvent){
+  event.preventDefault();setError('');
+  if(recoveryPassword!==recoveryConfirm){setError('The two passwords do not match.');return}
+  setBusy('reset');
+  const result=await betaRequest('/api/beta/password-recovery/complete',{token:reset,password:recoveryPassword});setBusy(null);
+  if(!result.ok){setError(result.body?.error||'That reset link could not be used.');return}
+  setNotice('Your password has been reset. Sign in with your new password.');
+  setTimeout(()=>location.assign('/login'),800);
+ }
  async function unlockWithToken(event:React.FormEvent){
   event.preventDefault();setBusy('token');setError('');
   try{
@@ -503,9 +519,10 @@ export function LoginPage({linkCode,invite,next='/profile'}:{linkCode?:string;in
   <main className="site-main site-narrow">
    {offline&&<OfflineBanner>The SCOUT host is not reachable on this address, so signing in is not possible. Start the launcher (or open the host address) and try again.</OfflineBanner>}
    <div className="site-page-head">
-    <span className="site-section-eyebrow">{invite?'INVITE':linkCode?'LAUNCHER LINK':'SIGN IN'}</span>
-    <h1>{invite?'Set your password':linkCode?'Approve a launcher':'Welcome back'}</h1>
-    <p>{invite?'Your application was approved. Choose the password for your SCOUT account — the invite link stops working the moment it is used.'
+    <span className="site-section-eyebrow">{invite?'INVITE':reset?'PASSWORD RESET':linkCode?'LAUNCHER LINK':'SIGN IN'}</span>
+    <h1>{invite?'Set your password':reset?'Reset your password':linkCode?'Approve a launcher':'Welcome back'}</h1>
+    <p>{invite?'Your application was approved. Choose the password for your SCOUT account — this invitation is single-use and expires soon.'
+      :reset?'Choose a new password. This single-use reset link expires soon.'
       :linkCode?'A launcher is asking to be linked to your account. Confirm the code you see in the launcher window, then approve it.'
       :'Sign in to manage your profile, download SCOUT and approve a launcher. Broadcast controls live in the desktop app.'}</p>
    </div>
@@ -513,10 +530,19 @@ export function LoginPage({linkCode,invite,next='/profile'}:{linkCode?:string;in
     <div className="site-card site-form">
      {notice&&<Notice tone="ok">{notice}</Notice>}
      {error&&<Notice>{error}</Notice>}
-     {invite?<form onSubmit={activate}>
+     {reset?<form onSubmit={completeRecovery}>
+      <label className="field"><span>NEW PASSWORD</span><input type="password" value={recoveryPassword} onChange={event=>setRecoveryPassword(event.target.value)} autoFocus autoComplete="new-password" placeholder="at least 10 characters"/></label>
+      <label className="field"><span>REPEAT PASSWORD</span><input type="password" value={recoveryConfirm} onChange={event=>setRecoveryConfirm(event.target.value)} autoComplete="new-password"/></label>
+      <button className="button primary wide" type="submit" disabled={busy==='reset'}>{busy==='reset'?<><Loader2 className="spin" size={15}/>Resetting…</>:<>Reset password<ArrowRight size={14}/></>}</button>
+     </form>:invite?<form onSubmit={activate}>
       <label className="field"><span>NEW PASSWORD</span><input type="password" value={invitePassword} onChange={event=>setInvitePassword(event.target.value)} autoFocus autoComplete="new-password" placeholder="at least 10 characters"/></label>
       <label className="field"><span>REPEAT PASSWORD</span><input type="password" value={inviteConfirm} onChange={event=>setInviteConfirm(event.target.value)} autoComplete="new-password"/></label>
       <button className="button primary wide" type="submit" disabled={busy==='invite'}>{busy==='invite'?<><Loader2 className="spin" size={15}/>Saving…</>:<>Set password<ArrowRight size={14}/></>}</button>
+     </form>:recover?<form onSubmit={requestRecovery}>
+      <p className="site-fineprint">Enter the email on your SCOUT account. If it is eligible, we will send a single-use reset link.</p>
+      <label className="field"><span>EMAIL</span><input type="email" value={email} onChange={event=>setEmail(event.target.value)} autoFocus autoComplete="email" placeholder="you@organisation.gg"/></label>
+      <button className="button primary wide" type="submit" disabled={busy==='recovery'||offline}>{busy==='recovery'?<><Loader2 className="spin" size={15}/>Sending…</>:<>Send reset email<ArrowRight size={14}/></>}</button>
+      <button className="button wide" type="button" onClick={()=>setRecover(false)}>Back to sign in</button>
      </form>:account?<div className="site-signed-in">
       <span className="site-done-mark"><CircleCheck size={20}/></span>
       <h3>Already signed in</h3>
@@ -531,7 +557,7 @@ export function LoginPage({linkCode,invite,next='/profile'}:{linkCode?:string;in
       <label className="field"><span>PASSWORD</span><input type="password" value={password} onChange={event=>setPassword(event.target.value)} autoComplete="current-password"/></label>
       <button className="button primary wide" type="submit" disabled={busy==='account'||offline}>{busy==='account'?<><Loader2 className="spin" size={15}/>Signing in…</>:<><LogIn size={15}/>Sign in</>}</button>
       {code&&<button className="button wide" type="button" onClick={()=>void approveLauncher(true)} disabled={busy==='device'}><Link2 size={14}/>Link launcher {code}</button>}
-      <p className="site-fineprint">No account yet? <a className="site-link" href="/apply">Apply for the closed beta</a>. Forgot your password? Ask the operator who approved you for a new invite link — the beta has no mail server yet.</p>
+      <p className="site-fineprint">No account yet? <a className="site-link" href="/apply">Apply for the closed beta</a>.{' '}<button type="button" className="site-link-button" onClick={()=>{setRecover(true);setError('');setNotice('')}}>Forgot your password?</button></p>
      </form>}
     </div>
     <aside className="site-login-aside">
@@ -733,54 +759,47 @@ function LicenceLine({licence}:{licence:LicenceView|null}){
   {runnable?<Check size={11}/>:<ShieldCheck size={11}/>}LICENCE {licence.state.toUpperCase()}{licence.enforced?' · ENFORCED':' · REPORTED'}
  </span>;
 }
-// ------------------------------------------------------------------ the owner's review desk
-// Applications arrive from the landing page. This is where an owner decides: approve mints the
-// one-time invite link and shows it once, ready to copy into whatever channel the organiser used to
-// reach out. The link is never listed again, and rejecting says so plainly.
+// ------------------------------------------------------------------ the review desk
+// Authorized beta reviewers decide applications; invitation links are delivered to applicants by
+// email and are never displayed or copied into the reviewer browser.
 export function BetaApplicationsPanel(){
- const [state,setState]=useState<{mode:string;applications:AccountView[];link:InstallationView}|null>(null);
- const [busy,setBusy]=useState('');
- const [error,setError]=useState('');
- const [invite,setInvite]=useState<{email:string;url:string}|null>(null);
- const [notice,setNotice]=useState('');
+ const [state,setState]=useState<{mode:string;applications:AccountView[];invitations:Record<string,any>;link:InstallationView}|null>(null);
+ const [busy,setBusy]=useState('');const [error,setError]=useState('');const [notice,setNotice]=useState('');
  const load=React.useCallback(async()=>{
   const res=await apiFetch('/api/beta/applications');
-  if(!res.ok){setError('Only an owner can review beta applications.');return}
-  setState(await res.json());
+  if(!res.ok){setError('Sign in with an authorized SCOUT beta reviewer account to review applications.');return}
+  setState(await res.json());setError('');
  },[]);
  useEffect(()=>{void load()},[load]);
- async function decide(id:string,decision:'approve'|'reject'){
+ async function action(id:string,path:string,body:unknown){
   setBusy(id);setError('');setNotice('');
-  const res=await apiFetch(`/api/beta/applications/${id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision})});
-  const body=await res.json().catch(()=>({}) as any);
-  setBusy('');
-  if(!res.ok){setError(body?.error||'That decision could not be saved.');return}
-  if(decision==='approve') setInvite({email:body.application.email,url:body.inviteUrl||''});
-  else setNotice(`${body.application.email} was rejected.`);
-  void load();
+  const res=await apiFetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const response=await res.json().catch(()=>({}) as any);setBusy('');
+  if(!res.ok){setError(response?.error||'That action could not be saved.');return}
+  if(path.endsWith('/resend-invitation'))setNotice(response.invitationDelivery?.status==='pending'?'Invitation is queued for delivery; the service will retry automatically.':'A replacement invitation was sent by email.');
+  else if(body&&typeof body==='object'&&(body as any).decision==='approve')setNotice(response.invitationDelivery?.status==='pending'?'Application approved. Invitation queued; delivery will retry automatically.':'Application approved. A single-use invitation was emailed to the applicant.');
+  else setNotice(`${response.application?.email||'Application'} was rejected.`);
+  await load();
  }
- const applications=state?.applications??[];
+ const applications=state?.applications??[],invitations=state?.invitations??{};
  const pending=applications.filter(entry=>entry.status==='pending').length;
  return <section className="panel detail-panel beta-applications">
   <div className="panel-heading"><h2>Beta applications <span className="subtle-pill">{pending} WAITING</span></h2><button className="text-button" onClick={()=>void load()}>Refresh<RefreshCw size={13}/></button></div>
-  <p className="info-note">Applications are stored {state?.mode==='hosted'?'by the hosted account service':'on this machine, in config/beta/store.json'}. Approving mints a one-time invite link that lets the applicant set their own password — send it however you already talk to them; the link stops working once used.</p>
-  {error&&<Notice>{error}</Notice>}
-  {notice&&<Notice tone="ok">{notice}</Notice>}
-  {invite&&<div className="invite-slip">
-   <div><b>Invite link for {invite.email}</b><small>Shown once. The applicant sets their password through it, then signs in at /login.</small></div>
-   <code>{invite.url}</code>
-   <button className="mini-button" onClick={()=>navigator.clipboard?.writeText(invite.url).catch(()=>{})}><Copy size={11}/>Copy link</button>
-  </div>}
-  {applications.length?<div className="beta-list">{applications.map(entry=><article key={entry.id} className={'beta-row '+entry.status}>
-   <div className="beta-who"><b>{entry.displayName}</b><small>{entry.email}{entry.organisation?` · ${entry.organisation}`:''}{entry.country?` · ${entry.country}`:''}</small></div>
-   <p className="beta-use">{entry.useCase||'No note supplied.'}</p>
-   <span className={`site-status ${statusTone(entry.status)}`}><span className="status-dot"/>{statusLabel(entry.status)}</span>
-   <div className="beta-actions">
-    {entry.status!=='approved'&&<button className="button primary" disabled={busy===entry.id} onClick={()=>void decide(entry.id,'approve')}>{busy===entry.id?<Loader2 className="spin" size={13}/>:<Check size={13}/>}Approve</button>}
-    {entry.status!=='rejected'&&<button className="button danger-button" disabled={busy===entry.id} onClick={()=>void decide(entry.id,'reject')}>Reject</button>}
-    {(entry.status==='approved')&&<button className="button" disabled={busy===entry.id} onClick={()=>void decide(entry.id,'approve')}>New invite link</button>}
-   </div>
-  </article>)}</div>:<p className="beta-empty">No applications yet. They appear here the moment somebody applies at <code>/apply</code>.</p>}
+  <p className="info-note">Approving an application sends a single-use invitation to its email address. If delivery is temporarily unavailable, the encrypted outbox retries automatically. Never ask applicants to send you their password.</p>
+  {error&&<Notice>{error}</Notice>}{notice&&<Notice tone="ok">{notice}</Notice>}
+  {applications.length?<div className="beta-list">{applications.map(entry=>{
+   const invitation=invitations[entry.id];
+   const delivery=invitation?.activated?'Account activated':invitation?.status==='sent'?'Invitation emailed':invitation?.status==='pending'?'Email queued for retry':null;
+   return <article key={entry.id} className={'beta-row '+entry.status}>
+    <div className="beta-who"><b>{entry.displayName}</b><small>{entry.email}{entry.organisation?` · ${entry.organisation}`:''}{entry.country?` · ${entry.country}`:''}</small></div>
+    <p className="beta-use">{entry.useCase||'No note supplied.'}{delivery&&<small className="beta-delivery">{delivery}{invitation?.expiresAt&&!invitation.activated?` · expires ${new Date(invitation.expiresAt).toLocaleString()}`:''}</small>}</p>
+    <span className={`site-status ${statusTone(entry.status)}`}><span className="status-dot"/>{statusLabel(entry.status)}</span>
+    <div className="beta-actions">
+     {entry.status==='pending'&&<><button className="button primary" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'approve'})}>{busy===entry.id?<Loader2 className="spin" size={13}/>:<Check size={13}/>}Approve</button><button className="button danger-button" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'reject'})}>Reject</button></>}
+     {entry.status==='approved'&&!invitation?.activated&&<button className="button" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}/resend-invitation`,{})}>{busy===entry.id?<Loader2 className="spin" size={13}/>:<RefreshCw size={13}/>}Resend invitation</button>}
+    </div>
+   </article>;
+  })}</div>:<p className="beta-empty">No applications yet. They appear here the moment somebody applies at <code>/apply</code>.</p>}
  </section>;
 }
 // The website owns identity and launcher approvals, not any live broadcast controls.
@@ -872,6 +891,7 @@ export function SiteRouter({route}:{route:SiteRoute}){
  const params=new URLSearchParams(location.search);
  const linkCode=params.get('link')||params.get('device')||undefined;
  const invite=params.get('invite')||undefined;
+ const reset=params.get('reset')||undefined;
  // Only known same-origin account/app destinations are accepted.
  const next=params.get('next')==='/app'?'/app':params.get('next')==='/admin'?'/admin':'/profile';
  if(route==='/welcome') return <LandingPage/>;
@@ -879,5 +899,5 @@ export function SiteRouter({route}:{route:SiteRoute}){
  if(route==='/download') return <DownloadPage/>;
  if(route==='/profile') return <ProfilePage/>;
  if(route==='/privacy') return <PrivacyPage/>;
- return <LoginPage linkCode={linkCode} invite={invite} next={next}/>;
+ return <LoginPage linkCode={linkCode} invite={invite} reset={reset} next={next}/>;
 }

@@ -15,7 +15,7 @@ const context=(address='127.0.0.1'):BetaContext=>({address,userAgent:'node-test'
 let clock=1_700_000_000_000;
 async function linkedInstallation(){
  const dir=await mkdtemp(path.join(tmpdir(),'scout-licence-'));
- const beta=await new LocalBetaService({dir,now:()=>clock}).load();
+ const beta=await new LocalBetaService({dir,now:()=>clock,emailBaseUrl:'https://scout.test',emailEncryptionKey:Buffer.alloc(32,4),emailTransport:async()=>{}}).load();
  const created=await beta.apply(application,context('203.0.113.9'));
  const id=created.ok?created.value.account.id:'';
  const approved=await beta.decide(id,'approve','owner');

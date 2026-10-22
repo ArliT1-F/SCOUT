@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import {createAccountService,type AccountService} from '../server/account-service';
+import {ACCOUNT_DB_SCHEMA_VERSION} from '../server/account-migrations';
 import {HostedBetaService,LocalBetaService,createBetaService,type BetaContext,type BetaResult} from '../server/beta';
 
 // The hosted account service (server/account-service.ts), driven the way a deployment is driven:
@@ -25,7 +27,8 @@ async function stopAll(){
 async function start(options:Parameters<typeof createAccountService>[0]={},t?:{after:(fn:()=>Promise<void>)=>void}){
  const dir=await mkdtemp(path.join(tmpdir(),'scout-account-'));
  file=path.join(dir,'accounts.sqlite');
- service=await createAccountService({file,apiKey:KEY,port:0,host:'127.0.0.1',serviceName:'SCOUT accounts (test)',...options});
+ const emails:Array<{to:string;subject:string;text:string;html:string}>=[];
+ service=await createAccountService({file,apiKey:KEY,port:0,host:'127.0.0.1',serviceName:'SCOUT accounts (test)',emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async message=>{emails.push(message)},...options});
  base=service.url;
  // A cookie jar, because fetch in Node does not keep one and the flow is cookie-based on purpose.
  const jar=new Map<string,string>();
@@ -44,9 +47,26 @@ async function start(options:Parameters<typeof createAccountService>[0]={},t?:{a
    if(value) jar.set(name,value);else jar.delete(name);
   }
   const text=await res.text();
-  return {status:res.status,body:text?JSON.parse(text):null,setCookie,jar};
+  return {status:res.status,body:text?JSON.parse(text):null,setCookie,jar,requestId:res.headers.get('x-request-id')};
  };
- return {call,dir,jar};
+ return {call,dir,jar,emails};
+}
+function seedPreMigrationDatabase(database:string,emails=['ada@example.com']){
+ const legacy=new DatabaseSync(database);
+ legacy.exec(`
+  CREATE TABLE accounts (
+   id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, organisation TEXT NOT NULL,
+   country TEXT NOT NULL, use_case TEXT NOT NULL, events TEXT NOT NULL, status TEXT NOT NULL,
+   password TEXT, created_at INTEGER NOT NULL, decided_at INTEGER, decided_by TEXT NOT NULL DEFAULT '',
+   invite_digest TEXT, invite_expires_at INTEGER, last_login_at INTEGER
+  );
+  CREATE TABLE events (at INTEGER NOT NULL, kind TEXT NOT NULL, account_id TEXT, detail TEXT NOT NULL DEFAULT '');
+ `);
+ const insert=legacy.prepare(`INSERT INTO accounts (id,email,display_name,organisation,country,use_case,events,status,password,created_at,decided_at,decided_by)
+  VALUES (?,?,?,?,?,?,?,?,NULL,?,NULL,'')`);
+ emails.forEach((email,index)=>insert.run(`legacy-${index}`,email,`Legacy ${index}`,'Old org','','','', 'pending',index+1));
+ legacy.prepare('INSERT INTO events (at,kind,account_id,detail) VALUES (?,?,?,?)').run(1,'application','legacy-0','legacy detail');
+ legacy.close();
 }
 
 
@@ -186,7 +206,7 @@ test('the launcher half works through the host client, unchanged',async(t)=>{
 
 test('the answers have the same shape as the local store — field for field',async(t)=>{
  const dir=await mkdtemp(path.join(tmpdir(),'scout-parity-'));
- const local=new LocalBetaService({dir,now:Date.now,host:'local',download:{url:'https://example.test/setup.exe',version:'SCOUT-Setup-0.1.0.exe',notes:'n'}}).load();
+ const local=new LocalBetaService({dir,now:Date.now,host:'local',emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async()=>{},download:{url:'https://example.test/setup.exe',version:'SCOUT-Setup-0.1.0.exe',notes:'n'}}).load();
  const localService=await local;
  const {call}=await start({download:{url:'https://example.test/setup.exe',version:'SCOUT-Setup-0.1.0.exe',notes:'n'}},t);
  const shape=(value:unknown):string=>{
@@ -311,8 +331,9 @@ test('the owner settings desk drives the very next apply and env values are only
  const listed=await call('/applications',{key:true});const approved=await call(`/applications/${listed.body.applications[0].id}`,{key:true,body:{decision:'approve',decidedBy:'Owner'}});
  await call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'},cookie:true});
  const crossSite=await call('/settings',{method:'PUT',cookie:true,body:{applicationsOpen:false},headers:{Origin:'https://evil.test'}});assert.equal(crossSite.status,403);
- const saved=await call('/settings',{method:'PUT',cookie:true,body:{applicationsOpen:false,reviewNote:'Wave closed',maxTournamentsPerUser:1,futureSetting:true}});
+ const saved=await call('/settings',{method:'PUT',cookie:true,body:{applicationsOpen:false,reviewNote:'Wave closed',maxTournamentsPerUser:1,betaReviewers:['ada@example.com'],futureSetting:true}});
  assert.equal(saved.status,200);assert.equal(saved.body.settings.version,2);assert.equal(saved.body.settings.updatedBy,'ada@example.com');
+ const rolesDb=new DatabaseSync(originalFile);try{assert.equal(Number((rolesDb.prepare("SELECT COUNT(*) AS n FROM account_roles WHERE account_id = ? AND role = 'beta_reviewer'").get(listed.body.applications[0].id) as any).n),1,'reviewer settings synchronize transactionally to account roles')}finally{rolesDb.close()}
  const status=await call('/status',{cookie:true});assert.equal(status.body.applicationsOpen,false);assert.equal(status.body.reviewNote,'Wave closed');
  const refused=await call('/apply',{body:{...application,email:'next@example.com',address:'203.0.113.8'}});assert.equal(refused.status,403);assert.equal(refused.body.code,'applications-closed');
  assert.equal((await call('/login',{body:{email:'ada@example.com',password:'a-long-enough-password'}})).status,200,'closing applications never closes existing accounts');
@@ -327,4 +348,141 @@ test('an approved non-owner session cannot write the account service settings',a
  await call('/apply',{body:{...application,address:'203.0.113.7'}});const apps=await call('/applications',{key:true});const approved=await call(`/applications/${apps.body.applications[0].id}`,{key:true,body:{decision:'approve',decidedBy:'Owner'}});
  await call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'},cookie:true});
  const denied=await call('/settings',{method:'PUT',cookie:true,body:{applicationsOpen:false}});assert.equal(denied.status,403);assert.equal(denied.body.code,'not-platform-owner');assert.equal((await call('/settings',{key:true})).body.settings.applicationsOpen,true);
+});
+
+test('account migrations adopt legacy data, add audit foundations and apply once',async(t)=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'scout-account-'));
+ const database=path.join(dir,'accounts.sqlite');
+ seedPreMigrationDatabase(database);
+ service=await createAccountService({file:database,apiKey:KEY,port:0,host:'127.0.0.1'});
+ live.push({service,dir});t.after(stopAll);
+ const rows=service.db.list();
+ assert.equal(rows.length,1,'legacy account survives migration');
+ assert.equal(rows[0].email,'ada@example.com');
+ const check=new DatabaseSync(database);
+ try{
+  assert.equal(Number((check.prepare('PRAGMA user_version').get() as any).user_version),ACCOUNT_DB_SCHEMA_VERSION);
+  for(const table of ['account_roles','password_recovery_tokens','email_outbox'])assert.equal(Number((check.prepare('SELECT COUNT(*) AS n FROM sqlite_master WHERE type=\'table\' AND name=?').get(table) as any).n),1,`${table} added by migration 3`);
+  assert.equal(Number((check.prepare('SELECT COUNT(*) AS n FROM audit_logs').get() as any).n),0,'legacy event history is preserved in events; migration does not fabricate audit actors retroactively');
+  assert.equal(Number((check.prepare('SELECT COUNT(*) AS n FROM events').get() as any).n),1,'legacy event history remains intact');
+  assert.equal(Number((check.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='index' AND name='accounts_email_normalized'").get() as any).n),1);
+  assert.equal(check.prepare('SELECT normalized_email FROM accounts WHERE id = ?').get('legacy-0')?.normalized_email,'ada@example.com','migration backfills the API-normalized email value');
+ }finally{check.close()}
+ // Idempotent startup: no duplicate schema or data and the migration version stays put.
+ await service.close();
+ service=await createAccountService({file:database,apiKey:KEY,port:0,host:'127.0.0.1'});
+ live.push({service,dir});
+ assert.equal(service.db.list().length,1);
+});
+
+test('API errors carry a generated request ID without breaking the legacy error contract',async(t)=>{
+ const {call}=await start({},t);
+ const invalid=await call('/apply',{body:{...application,email:'invalid',address:'203.0.113.7'},headers:{'X-Request-Id':'attacker-controlled'}});
+ assert.equal(invalid.status,400);
+ assert.equal(invalid.body.code,'bad-email');
+ assert.equal(invalid.body.error,'That does not look like an email address.');
+ assert.match(invalid.requestId||'',/^[0-9a-f-]{36}$/);
+ assert.equal(invalid.body.requestId,invalid.requestId);
+ assert.notEqual(invalid.requestId,'attacker-controlled','request IDs are generated by the service');
+ const healthy=await call('/healthz');
+ assert.match(healthy.requestId||'',/^[0-9a-f-]{36}$/);
+});
+
+test('audit records are durable, attributable and exclude free-form PII details',async(t)=>{
+ const {call,dir}=await start({},t);
+ const submitted=await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=submitted.body.account.id;
+ const database=new DatabaseSync(path.join(dir,'accounts.sqlite'));
+ try{
+  const row=database.prepare('SELECT * FROM audit_logs WHERE action = ?').get('application') as any;
+  assert.ok(row);
+  assert.equal(row.actor_type,'anonymous');
+  assert.equal(row.actor_id,null);
+  assert.equal(row.target_type,'account');
+  assert.equal(row.target_id,id);
+  assert.equal(row.request_id,submitted.requestId);
+  assert.equal(row.metadata,'{}');
+  assert.equal(JSON.stringify(row).includes('ada@example.com'),false,'audit metadata never copies email or legacy event details');
+ }finally{database.close()}
+});
+
+test('a normalized-email migration conflict fails closed and rolls back without deleting accounts',async(t)=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'scout-account-'));
+ const database=path.join(dir,'accounts.sqlite');
+ seedPreMigrationDatabase(database,['ada@example.com','ADA@example.com']);
+ t.after(async()=>rm(dir,{recursive:true,force:true}));
+ await assert.rejects(()=>createAccountService({file:database,apiKey:KEY,port:0,host:'127.0.0.1'}),/resolve duplicate emails after trimming and case normalization/);
+ const unchanged=new DatabaseSync(database);
+ try{
+  assert.equal(Number((unchanged.prepare('PRAGMA user_version').get() as any).user_version),1,'failed migration version was not committed');
+  assert.equal(Number((unchanged.prepare('SELECT COUNT(*) AS n FROM accounts').get() as any).n),2,'no legacy account was removed');
+  assert.equal(Number((unchanged.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='audit_logs'").get() as any).n),0,'the failed migration transaction created no partial audit schema');
+ }finally{unchanged.close()}
+});
+
+test('approval fails visibly without mail configuration and leaves the application pending',async(t)=>{
+ const {call}=await start({emailTransport:undefined,emailEncryptionKey:undefined,emailBaseUrl:undefined},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const listed=await call('/applications',{key:true}),id=listed.body.applications[0].id;
+ const denied=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ assert.equal(denied.status,503);assert.equal(denied.body.code,'email-not-configured');
+ const remains=await call('/applications',{key:true});
+ assert.equal(remains.body.applications[0].status,'pending');
+ assert.equal(Object.keys(remains.body.invitations).length,0,'no fake invite or outbox delivery was recorded');
+});
+
+test('expired invitations can be replaced, but the old token remains unusable',async(t)=>{
+ let clock=1_700_000_000_000;
+ const {call}=await start({now:()=>clock,invitationTtlMs:1_000},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=(await call('/applications',{key:true})).body.applications[0].id;
+ const approved=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ assert.equal(approved.body.invitationDelivery.status,'sent');
+ const oldInvite=approved.body.invite;
+ clock+=1_001;
+ const expired=await call('/activate',{body:{invite:oldInvite,password:'a-long-enough-password'}});
+ assert.equal(expired.status,401);assert.equal(expired.body.code,'expired-invite');
+ const resent=await call(`/applications/${id}/resend-invitation`,{key:true,body:{requestedBy:'owner@example.com'}});
+ assert.equal(resent.status,200);assert.notEqual(resent.body.invite,oldInvite);assert.equal(resent.body.invitationDelivery.status,'sent');
+ const oldAgain=await call('/activate',{body:{invite:oldInvite,password:'a-long-enough-password'}});
+ assert.equal(oldAgain.body.code,'bad-invite');
+ const accepted=await call('/activate',{body:{invite:resent.body.invite,password:'a-long-enough-password'}});
+ assert.equal(accepted.status,200);
+});
+
+test('concurrent acceptance of one invitation activates exactly once',async(t)=>{
+ const {call}=await start({},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=(await call('/applications',{key:true})).body.applications[0].id;
+ const approved=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ const attempts=await Promise.all([
+  call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'}}),
+  call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'}}),
+ ]);
+ assert.deepEqual(attempts.map(result=>result.status).sort(),[200,401]);
+ assert.equal((await call('/applications',{key:true})).body.invitations[id].activated,true);
+});
+
+test('password recovery is non-enumerating, expires, is single-use, and revokes old sessions',async(t)=>{
+ const delivered:Array<{to:string;subject:string;text:string;html:string}>=[];let blockDelivery=false,deliveryEntered=false,releaseDelivery=()=>{};
+ const {call}=await start({emailTransport:async message=>{delivered.push(message);if(blockDelivery)await new Promise<void>(resolve=>{deliveryEntered=true;releaseDelivery=resolve})}},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=(await call('/applications',{key:true})).body.applications[0].id;
+ const approved=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ await call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'},cookie:true});
+ const unknown=await call('/password-recovery',{body:{email:'unknown@example.com'}});
+ blockDelivery=true;
+ const known=await call('/password-recovery',{body:{email:'ada@example.com'}});
+ assert.equal(unknown.status,200);assert.deepEqual(unknown.body,known.body,'known and unknown accounts receive byte-for-byte equivalent responses');
+ assert.equal(deliveryEntered,true,'the API returns without waiting for the mail provider');releaseDelivery();await new Promise<void>(resolve=>setImmediate(resolve));
+ const email=delivered.find(message=>message.subject==='Reset your SCOUT password');assert.ok(email);
+ const resetLink=email.text.match(/https?:\/\/[^\s]+/)?.[0];assert.ok(resetLink);
+ const token=new URL(resetLink!).searchParams.get('reset');assert.ok(token);
+ const changed=await call('/password-recovery/complete',{body:{token,password:'a-new-long-password'}});
+ assert.equal(changed.status,200);
+ const reused=await call('/password-recovery/complete',{body:{token,password:'another-long-password'}});
+ assert.equal(reused.status,400);assert.equal(reused.body.code,'invalid-recovery-token');
+ assert.equal((await call('/status',{cookie:true})).body.signedIn,false,'reset revokes all old sessions');
+ assert.equal((await call('/login',{body:{email:'ada@example.com',password:'a-long-enough-password'}})).status,401);
+ assert.equal((await call('/login',{body:{email:'ada@example.com',password:'a-new-long-password'}})).status,200);
 });

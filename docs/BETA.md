@@ -20,7 +20,7 @@ and moving to a hosted service later changes no page and no route.
 
 ## What the pages are
 
-The website carries the public pages and the owner's desk; the dashboard and every overlay setting are
+The website carries the public pages and an owner/reviewer-only application desk; the dashboard and every overlay setting are
 part of the installed app.
 
 | Route | Where | Purpose | Needs an account? |
@@ -30,7 +30,7 @@ part of the installed app.
 | `/login` | website | Account sign-in, invite activation, launcher-code approval, panel-token unlock | no |
 | `/download` | website | The installer, approved accounts only | yes |
 | `/privacy` | website | What is collected, retention, deletion, analytics allowlist | no |
-| `/admin` | website | The SCOUT owner's desk — **Beta applications**, **Operations** (health, releases, requests), platform settings | owner account |
+| `/admin` | website | The SCOUT owner's desk — **Beta applications**, **Operations** (health, releases, requests), platform settings | owner account; configured reviewers see applications only |
 | `/app` | app | Dashboard: beta status, tournaments, launcher link, linked devices | no (the account cards need one) |
 | `/`, `/panel` | app | Control panel — teams, players, maps, scenes and every overlay setting | panel token / local machine |
 | `/obs`, `/game` | app | Public broadcast output | no |
@@ -45,12 +45,8 @@ CORS configuration anywhere.
    Rate limited per address (3/hour). A duplicate address is refused with `already-applied`
    (`already-approved` once it is approved), and the answer never confirms whether an address is
    known beyond telling the applicant to sign in.
-2. **Review** — the panel's **Beta applications** tab (owner only) lists them. Approving mints a
-   one-time invite; the host prints the link:
-   `[beta] approved ada@example.com — send them this one-time invite link: http://…/login?invite=…`.
-   In hosted mode this is where an email would be sent instead.
-3. **Set a password** — the applicant opens `/login?invite=…`, chooses a password (≥10 characters) and
-   is signed in. The invite is stored as a digest, expires after 14 days, and stops working on first use.
+2. **Review** — the website's **Beta applications** desk is available to the configured owner and explicitly configured beta reviewers; on a local host, the panel owner remains supported. Approving mints a one-time invite and queues an email. The browser receives delivery status only, never the invite URL or token. If outbound email is not configured, approval fails visibly with an actionable setup error and remains pending.
+3. **Set a password** — the applicant opens the emailed `/login?invite=…` link, chooses a password (≥10 characters) and is signed in. The token is stored as a digest, expires after 24 hours by default, and stops working on first use. Reviewers may resend a fresh invitation to approved, not-yet-activated accounts; previous tokens are invalidated.
 4. **Download** — `/download` shows the installer only while the account is `approved`. The URL comes
    from `SCOUT_DOWNLOAD_URL` (default: this repository's GitHub releases) so it can move to a CDN
    without a code change.
@@ -85,7 +81,9 @@ account's session cookie.
 | --- | --- |
 | account password | scrypt digest + salt (never the password) |
 | account session | SHA-256 digest of the cookie value, plus address/UA/timestamps |
-| invite token | SHA-256 digest + 14-day expiry |
+| invite token | SHA-256 digest + 24-hour default expiry; single use |
+| outbound email | AES-256-GCM encrypted outbox payload, cleared after successful delivery |
+| password recovery token | SHA-256 digest, one-hour default expiry, single use |
 | device code | SHA-256 digest, 10-minute expiry |
 | installation token | SHA-256 digest after it has been collected once; handed to the launcher exactly once |
 | user code | plain (`ABCD-EFGH`): it is the half a human reads and types, and it is worthless without the session that approves it |
@@ -94,8 +92,7 @@ account's session cookie.
 device id, the account it was linked to and the token it presents. It lives under the operator data
 directory, so an installer update never loses it and an uninstall can remove it deliberately.
 
-Rate limits: 3 applications per address per hour, 8 failed sign-ins per address per 15 minutes, and at
-most 20 pending launcher codes at a time. They live in memory and reset with the host.
+Rate limits: 3 applications per address per hour, 8 failed sign-ins per address per 15 minutes, 5 password-recovery requests per address per hour and 5 per normalized account address per hour, and at most 20 pending launcher codes at a time. They live in memory and reset with the service.
 
 ## The REST contract a hosted service has to implement
 
@@ -106,12 +103,16 @@ value. The host proxies `GET|POST /api/beta/<path>` to `${SCOUT_BETA_API_URL}/<p
 | Method | Path | Body | Answer |
 | --- | --- | --- | --- |
 | GET | `/status` | — | `BetaStatusView` |
-| POST | `/apply` | `ApplicationInput` + `address` | `{account, invite}` |
+| POST | `/apply` | `ApplicationInput` + `address` | `{account, invite:null}`; invitation is never returned to browser |
 | POST | `/login` | `{email, password, address, userAgent}` | `{account}` + `Set-Cookie: scout_account=…` |
 | POST | `/logout` | — (cookie) | `{ok:true}` + cleared cookie |
 | POST | `/activate` | `{invite, password, address}` | `{account}` + cookie |
-| GET | `/applications` | — (service key) | `{applications: AccountView[]}` |
-| POST | `/applications/:id` | `{decision, decidedBy}` | `{account, invite}` — `invite` is the one-time value |
+| GET | `/applications` | — (service key) | `{applications, invitations}` delivery metadata |
+| POST | `/applications/:id` | `{decision, decidedBy}` | `{account, invite, invitationDelivery}`; service-key-only backend response, not exposed to browser |
+| POST | `/applications/:id/resend-invitation` | `{requestedBy}` | account and invitation delivery metadata |
+| POST | `/password-recovery` | `{email}` | generic non-enumerating acknowledgement |
+| POST | `/password-recovery/complete` | `{token, password}` | `{ok:true}`; revokes existing sessions |
+| PUT | `/settings` | partial settings + owner cookie | persisted platform settings and reviewer roles |
 | POST | `/device/start` | `{label, platform, origin}` | `DeviceGrantView` |
 | POST | `/device/poll` | `{deviceCode}` | `DevicePollView` |
 | POST | `/device/approve` \| `/device/deny` | `{userCode}` + cookie | `{account}` |
@@ -139,11 +140,10 @@ are never proxied: they are about *this* installation.
 `SCOUT_BETA_API_KEY` is sent as `Authorization: Bearer …` on the calls the host makes itself
 (listing and deciding applications in hosted mode).
 
-### What a hosted service still has to add
+### Remaining operational work
 
-- **Email.** Invite links and password resets. The beta hands the link to the operator because a host
-  with no mail server must still work; a real deployment sends it.
-- **Password reset.** The local flow deliberately has none beyond "ask for a new invite".
+- **Terms, privacy and a deletion path.** The application form collects a name, an address and a use
+  case; a public deployment needs the paperwork and a `DELETE /account` behind it.
 - **Enforcement in the launcher.** The link is now also a licence — `GET /api/beta/license` on the
   host, `/license/check` on the account service, and the shell refuses to draw the overlay when the
   answer is an explicit refusal *and* the deployment asked for enforcement
@@ -151,18 +151,7 @@ are never proxied: they are about *this* installation.
   default on purpose: a broadcast tool that stops working because a licence server is unreachable
   would be a worse failure than a licence that is not enforced. The broadcast itself — panel, output,
   GSI, recording — is never gated, in any mode.
-- **Terms, privacy and a deletion path.** The application form collects a name, an address and a use
-  case; a public deployment needs the paperwork and a `DELETE /account` behind it.
 
 ## Verified here
 
-`tests/beta.test.ts` pins the behaviour rather than the prose — and so does
-`tests/licensing.test.ts` for the licence states, the grace window and the release registry, and
-`tests/account-service.test.ts` for the hosted service (driven over a socket by the same client the
-host uses, with the local store's answers compared field for field): a stranger can apply and nothing else,
-applications are rate limited, only an approval mints an invite, an invite works once, sign-in is
-throttled, a launcher code needs the account session, the installation token is handed over exactly
-once, an expired code stops working, the store survives a restart with sessions intact, the on-disk
-file contains no plaintext password/invite/device-code/installation-token, and the page components
-render the states they claim (visitor vs. signed in, pending vs. approved download). The whole flow was
-also driven over HTTP against a running host, with the resulting store inspected by hand.
+`tests/beta.test.ts` pins the local state machine and legacy workflows; `tests/account-service.test.ts` drives the hosted service over HTTP, including encrypted-email delivery, missing mail configuration, expiry/replacement, concurrent single-use activation, recovery expiry/reuse/session revocation and stored-secret checks. `tests/surface.test.ts` exercises the real website's owner/reviewer access, denial for anonymous and ordinary accounts, invite-secret non-disclosure, and activation from delivered mail. `tests/platform-sync.test.ts` and `tests/licensing.test.ts` retain the hosted/local broadcast and entitlement regression coverage.

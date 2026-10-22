@@ -1,6 +1,7 @@
 import express from 'express';
 import {surfaceFromEnv,websitePathAllowed} from './surface.js';
 import {createServer} from 'node:http';
+import {randomUUID} from 'node:crypto';
 import {WebSocketServer,WebSocket} from 'ws';
 import {readFile,writeFile,rename,mkdir,readdir,unlink} from 'node:fs/promises';
 import path from 'node:path';
@@ -27,7 +28,7 @@ import {appPath,resolveDistDir,readInstalledEnv} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
-import {PlatformStore,isPlatformOwner,platformOwnerEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash} from './platform.js';
+import {PlatformStore,isPlatformOwner,platformOwnerEmail,normalizeEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash} from './platform.js';
 import {PlatformDeviceService,PlatformSyncAgent,SyncOutbox} from './platform-sync.js';
 import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
 import {loadEnvFile} from './env.js';
@@ -37,9 +38,23 @@ import {loadEnvFile} from './env.js';
 loadEnvFile();
 const surface=surfaceFromEnv();
 const app=express();
-// Routes are matched case-sensitively, like the gate below: otherwise `/API/controls` reaches the handler while
-// the gate, which looks for `/api/`, never sees it (found by the route audit, docs/API-AUDIT.md).
+// Route matching is exact, including path case; configure before the first middleware initializes Express's router.
 app.set('case sensitive routing',true);
+// Give every HTTP response a server-generated correlation ID. Preserve all established response
+// fields; error JSON gains only an additive requestId so existing local clients remain compatible.
+app.use((req,res,next)=>{
+ const requestId=randomUUID();
+ res.setHeader('X-Request-Id',requestId);
+ res.setHeader('Referrer-Policy','no-referrer');
+ const sendJson=res.json.bind(res);
+ res.json=((body:any)=>{
+  if(res.statusCode>=400&&body&&typeof body==='object'&&!Array.isArray(body)&&'error'in body&&!('requestId'in body))
+   body={...body,requestId};
+  return sendJson(body);
+ }) as typeof res.json;
+ next();
+});
+// Routes are matched case-sensitively, like the gate below, so case aliases cannot route around it.
 app.get('/api/surface',(_req,res)=>res.json({surface}));
 if(surface==='site'){
  app.use((req,res,next)=>{
@@ -87,7 +102,10 @@ const beta:BetaRuntime=createBetaService({
  host:hostname(),
  download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION,notes:process.env.SCOUT_DOWNLOAD_NOTES||''},
 });
-if(beta.local) await beta.local.load();
+if(beta.local){
+ await beta.local.load();
+ const localMailTimer=setInterval(()=>{void beta.local!.deliverPending()},30_000);localMailTimer.unref();
+}
 const installation=new Installation(path.join(betaDir,'installation.json'));await installation.load();
 // Is this installation entitled to run? Local installs are their own authority; a hosted account
 // service is asked at most every 15 minutes and its answer is cached (server/licensing.ts). The
@@ -226,7 +244,7 @@ async function saveTournamentConfig(next:ScoutConfig){
 // POST /gsi is CS2's own feed and authenticates with the GSI token inside its body, and POST/DELETE
 // /api/session is the way in and the way out.
 const PUBLIC_BETA_PATHS=new Set([
- '/api/beta/apply','/api/beta/login','/api/beta/logout','/api/beta/activate',
+ '/api/beta/apply','/api/beta/login','/api/beta/logout','/api/beta/activate','/api/beta/password-recovery','/api/beta/password-recovery/complete',
  '/api/beta/device/start','/api/beta/device/poll','/api/beta/device/approve','/api/beta/device/deny',
  '/api/beta/devices/revoke',
 ]);
@@ -241,6 +259,7 @@ function isProtected(req:express.Request){
  // Everything else under /api/beta (the owner's application list, the launcher link) stays behind
  // the panel gate like every other mutation.
  if(routePath.startsWith('/api/platform/')) return false; // own account-session auth (above)
+ if(req.method==='POST'&&routePath.startsWith('/api/beta/applications/'))return false; // account reviewer auth is enforced by the route
  return !PUBLIC_BETA_PATHS.has(routePath);
 }
 // Same-origin as well as token: a browser page on another site must not be able to drive the panel,
@@ -437,6 +456,26 @@ async function currentAccount(req:express.Request){
  if(beta.site){const v=await beta.site.status(accountCookieId(req));return v.account}
  try{const r=await fetch((betaApiUrl||'').replace(/\/$/,'')+'/status',{headers:{...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{})}});const v:any=await r.json().catch(()=>null);return v?.account??null}catch{return null}
 }
+async function betaReviewAccess(req:express.Request,res:express.Response):Promise<{id:string;email:string}|null>{
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site reviewer requests are refused.',code:'untrusted-origin'});return null}
+ const account:any=await currentAccount(req).catch(()=>null);
+ const email=account?.status==='approved'?normalizeEmail(String(account.email||'')):'';
+ if(email&&(isPlatformOwner(email)||platform.settings.betaReviewers.includes(email))){
+  res.locals.betaReviewer={id:String(account.id),email};
+  return res.locals.betaReviewer;
+ }
+ // Preserve the per-machine owner workflow for local/hosted installations. The public website has
+ // no panel-token authority: it requires a signed-in, explicitly configured account reviewer.
+ if(surface==='host'){
+  const decision=panel.authorize(panelRequest(req));
+  if(decision.ok&&decision.principal.role==='owner'){
+   res.locals.access=decision;
+   return {id:decision.principal.id,email:decision.principal.name};
+  }
+ }
+ res.status(account?403:401).json({error:account?'Only an authorized SCOUT beta reviewer may review applications.':'Sign in with an authorized SCOUT reviewer account.',code:account?'not-beta-reviewer':'no-account'});
+ return null;
+}
 async function requireAccount(req:express.Request,res:express.Response){
  if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return null}
  const account:any=await currentAccount(req);
@@ -593,26 +632,35 @@ app.post('/api/beta/link/apply',async(req,res)=>{
  if(sync.state!=='synced'){res.status(409).json({error:sync.message,code:sync.state,sync});return}
  audit.record(accessPrincipal(res),'platform.config.apply',sync.tournament?.name||'');res.json({sync});
 });
-// The owner's side of the applications. Approving mints the one-time invite link, which is printed
-// here exactly like the panel token is: this host may have no mail server, so the console (and the
-// response) is how the operator hands it over. The invite value is never written to the audit trail.
+// Reviewer-only application desk. Invite secrets are delivered by the account service's encrypted
+// outbox; they are never returned to the browser, printed, or copied into the operator console.
 app.get('/api/beta/applications',async(req,res)=>{
- if(!privateRead(req,res,'view-audit'))return;
- if(platformOwnerEmail()&&!isPlatformOwner((await currentAccount(req))?.email)){res.status(403).json({error:'Only the SCOUT owner may review whitelist applications.',code:'not-platform-owner'});return}
- void beta.launcher.applications().then(applications=>res.json({mode:beta.mode,applications,link:installation.view(),download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION}}));
+ await refreshPlatformSettings();
+ const reviewer=await betaReviewAccess(req,res);if(!reviewer)return;
+ const review=beta.launcher.applicationReview?await beta.launcher.applicationReview().catch(()=>null):null;
+ const applications=review?.applications||await beta.launcher.applications().catch(()=>[]);
+ res.json({mode:beta.mode,applications,invitations:review?.invitations||{},link:installation.view(),download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION}});
 });
 app.post('/api/beta/applications/:id',async(req,res)=>{
- if(!sameOrigin(req)){res.sendStatus(403);return}
- if(!ownerOnly(res))return;
- if(platformOwnerEmail()&&!isPlatformOwner((await currentAccount(req))?.email)){res.status(403).json({error:'Only the SCOUT owner may decide whitelist applications.',code:'not-platform-owner'});return}
+ await refreshPlatformSettings();
+ const reviewer=await betaReviewAccess(req,res);if(!reviewer)return;
  const decision=req.body?.decision==='approve'?'approve':req.body?.decision==='reject'?'reject':null;
  if(!decision){res.status(400).json({error:'Choose approve or reject.',code:'invalid-decision'});return}
- const result=await beta.launcher.decide(String(req.params.id),decision,accessPrincipal(res).name);
+ const result=await beta.launcher.decide(String(req.params.id),decision,reviewer.email);
  sendBetaResult(res,result,value=>{
-  const inviteUrl=value.invite?`${betaOrigin(req)}/login?invite=${encodeURIComponent(value.invite)}`:null;
-  audit.record(accessPrincipal(res),`beta.application.${decision}`,value.account.email);
-  if(inviteUrl) console.log(`[beta] approved ${value.account.email} — send them this one-time invite link:\n[beta]   ${inviteUrl}`);
-  res.json({application:value.account,inviteUrl});
+  audit.record({id:reviewer.id,name:reviewer.email,role:'owner'},`beta.application.${decision}`,value.account.email);
+  res.json({application:value.account,inviteUrl:null,invitationDelivery:(value as any).invitationDelivery||{status:decision==='approve'?'sent':'none'}});
+ });
+});
+app.post('/api/beta/applications/:id/resend-invitation',async(req,res)=>{
+ await refreshPlatformSettings();
+ const reviewer=await betaReviewAccess(req,res);if(!reviewer)return;
+ const result=beta.launcher.resendInvitation
+  ?await beta.launcher.resendInvitation(String(req.params.id),reviewer.email)
+  :await beta.launcher.decide(String(req.params.id),'approve',reviewer.email);
+ sendBetaResult(res,result,value=>{
+  audit.record({id:reviewer.id,name:reviewer.email,role:'owner'},'beta.invitation.resend',value.account.email);
+  res.json({application:value.account,invitationDelivery:(value as any).invitationDelivery||{status:'sent'}});
  });
 });
 // ---- Operations (server/operations.ts): the deployment's own desk. Owner-only, because publishing
@@ -664,12 +712,10 @@ if(beta.site){
   useCase:z.string().trim().max(600).optional().default(''),events:z.string().trim().max(80).optional().default('')});
  const credentialsSchema=z.object({email:z.string().trim().min(5).max(160),password:z.string().min(1).max(200)}).strip();
  const activateSchema=z.object({invite:z.string().trim().min(10).max(200),password:z.string().min(1).max(200)}).strip();
+ const recoverySchema=z.object({email:z.string().trim().max(254)}).strip();
+ const recoveryCompleteSchema=z.object({token:z.string().trim().min(10).max(200),password:z.string().min(1).max(200)}).strip();
  const raiseSchema=z.object({userCode:z.string().trim().min(4).max(16)}).strip();
  const deviceStartSchema=z.object({deviceCode:z.string().trim().min(10).max(200)}).strip();
- const notify=(req:express.Request,value:{account:{email:string;organisation:string};invite:string|null})=>{
-  if(value.invite) console.log(`[beta] ${value.account.email} was approved on the spot (SCOUT_BETA_AUTO_APPROVE=1) — invite link:\n[beta]   ${betaOrigin(req)}/login?invite=${encodeURIComponent(value.invite)}`);
-  else console.log(`[beta] application from ${value.account.email} (${value.account.organisation||'no organisation'}) is waiting for review — approve it in the panel, or with POST /api/beta/applications/:id`);
- };
  app.get('/api/beta/status',async(req,res)=>{
   const view=await site.status(accountCookieId(req));
   view.applicationsOpen=platform.settings.applicationsOpen;view.reviewNote=platform.settings.reviewNote;
@@ -685,8 +731,7 @@ if(beta.site){
   if(!parsed.success){res.status(400).json({error:'Tell us your name and an email address we can reach you at.',code:'invalid-application'});return}
   const result=await site.apply(parsed.data,betaContext(req));
   sendBetaResult(res,result,value=>{
-   notify(req,value);
-   res.json({application:value.account,inviteUrl:value.invite?`${betaOrigin(req)}/login?invite=${encodeURIComponent(value.invite)}`:null});
+   res.json({application:value.account,inviteUrl:null});
   });
  });
  app.post('/api/beta/login',async(req,res)=>{
@@ -717,6 +762,18 @@ if(beta.site){
    res.setHeader('Set-Cookie',accountCookie(value.cookieId,ACCOUNT_TTL_MS,requestIsSecure(req.headers)));
    res.json({account:value.account});
   });
+ });
+ app.post('/api/beta/password-recovery',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=recoverySchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Enter the email address on your SCOUT account.',code:'invalid-email'});return}
+  sendBetaResult(res,await site.requestPasswordRecovery(parsed.data.email,betaContext(req)),()=>res.json({ok:true,message:'If the address belongs to an activated SCOUT account, a password reset email will be sent.'}));
+ });
+ app.post('/api/beta/password-recovery/complete',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=recoveryCompleteSchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Choose a password of at least 10 characters and use a valid reset link.',code:'invalid-recovery'});return}
+  sendBetaResult(res,await site.completePasswordRecovery(parsed.data,betaContext(req)),()=>res.json({ok:true,message:'Your password has been reset. Sign in with your new password.'}));
  });
  // Launcher side of the device flow: the installer shows a code (start), then waits (poll) until the
  // account owner approves it in a browser. Both are rate limited in server/beta.ts.
@@ -762,7 +819,7 @@ if(beta.site){
   if(!sameOrigin(req)){res.sendStatus(403);return}
   const route=req.originalUrl.replace(/^\/api\/beta/,'').split('?')[0];
   // Never proxy service-only identity/settings routes with the host's service key for a browser.
-  if(!new Set(['/status','/apply','/login','/logout','/activate','/device/start','/device/poll','/device/approve','/device/deny','/devices/revoke']).has(route)){res.status(404).json({error:'Unknown account route.',code:'not-found'});return}
+  if(!new Set(['/status','/apply','/login','/logout','/activate','/password-recovery','/password-recovery/complete','/device/start','/device/poll','/device/approve','/device/deny','/devices/revoke']).has(route)){res.status(404).json({error:'Unknown account route.',code:'not-found'});return}
   try{
    if(route==='/status'||route==='/apply')await refreshPlatformSettings();
    if(route==='/apply'&&!platform.settings.applicationsOpen){res.status(403).json({error:'The closed beta is not taking new applications right now.',code:'applications-closed'});return}
