@@ -86,6 +86,21 @@ bundle.
 
 The Node host and account service expose their own `/healthz` routes with service-specific detail.
 
+## Troubleshooting what the logs show
+
+Every 5xx is logged by Cloudflare as `"level": "error"` with `"outcome": "ok"` (the Worker did
+answer; the status was a 5xx). Three symptoms account for almost all of the log noise:
+
+| Log line | Cause | Fix |
+|---|---|---|
+| `TypeError: Cannot read properties of undefined (reading 'fetch')` and a 500 on `/` or any page route | The **deployed version has no static-assets binding**. `functions/worker.ts` hands everything that is not `/api/*` to `env.ASSETS`, which comes from `[assets] binding = "ASSETS"` in `wrangler.toml`. A Worker created or edited outside it — dashboard *Quick edit*, a drag-drop upload, `wrangler deploy` run against a config without `[assets]`, or a Worker that predates the assets block — has no such binding, so `env.ASSETS` is `undefined`. | Deploy from a checkout with `npm ci && npm run build && npx wrangler deploy`. The deploy output must mention the assets upload; afterwards Workers & Pages → scout → Settings → Bindings lists `ASSETS` (Static Assets). The Worker now answers `{"code": "assets-unavailable"}` with an operator hint instead of throwing, so this is unambiguous in the logs. |
+| `GET /api/beta/status` → 503 `{"code": "service-unavailable"}` | `SCOUT_ACCOUNT_SERVICE_URL` is not set on the Worker, so the account proxy has nothing to forward to. This is expected until the Node.js account service is deployed; the SPA stays readable and reports "host could not be reached". | Deploy the account service, then `npx wrangler secret put SCOUT_ACCOUNT_SERVICE_URL` (and `SCOUT_BETA_API_KEY` for the owner desk). |
+| `GET /api/platform/status` (or any `/api/platform/*`) → 503 `{"code": "unavailable"}` | The platform desk deliberately lives on the central SCOUT host, not this deployment (`functions/api/platform/[[path]].ts`). The SPA polls it once per page load. | Nothing to fix on the website; it is the documented stub. It only disappears when the SPA stops probing for host-only features. |
+
+`wrangler`'s pinned major (`^3.114`) understands everything `wrangler.toml` uses here —
+`[assets]` with `binding`, `not_found_handling`, `run_worker_first` and `[observability.logs]` —
+so an outdated CLI is not a cause; a version uploaded without the assets config is.
+
 ## Rollback
 
 Cloudflare Workers keeps every deployment. To roll back:
