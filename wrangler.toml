@@ -22,6 +22,10 @@ main = "functions/worker.ts"
 [build]
 command = "npm run build"
 
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 [assets]
 directory = "./dist"
 # The worker hands non-API requests to the asset router via this binding.
