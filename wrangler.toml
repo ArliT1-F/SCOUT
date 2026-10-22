@@ -1,0 +1,35 @@
+# Cloudflare Pages configuration for the SCOUT public website.
+#
+# The website is a static Vite SPA: `npm run build` type-checks and builds it into `dist/`,
+# which Cloudflare Pages serves at the domain's edge with HTTPS and automatic certificate
+# management. Pages falls back to `dist/index.html` for SPA routes (see public/_redirects).
+#
+# Compatibility note: the SCOUT broadcast host (`server/index.ts`, `npm run dev` / `npm start`)
+# and the hosted account service (`server/account-service.ts`) use node:sqlite, node:fs and a
+# `ws` WebSocket server. None of those run on Cloudflare Workers, so they are deliberately NOT
+# moved to Workers. The website talks to the account service through the Pages functions in
+# `functions/`, which proxy `/api/beta/*` server-to-server. The Node backend keeps running
+# wherever the operator hosts it (same machine as the host, or a small VM/container).
+# See docs/CLOUDFLARE.md and docs/ARCHITECTURE.md.
+
+[build]
+command = "npm run build"
+dist_dir = "dist"
+
+# The functions directory is auto-detected at the project root (`functions/`).
+compatibility_date = "2025-07-18"
+
+# Pages production/preview secrets (never in the client bundle; set in the Cloudflare dashboard
+# or with `wrangler secret put`):
+#   SCOUT_ACCOUNT_SERVICE_URL  https://accounts.example.com   (Node.js account service)
+#   SCOUT_BETA_API_KEY         service key for owner-only /api/beta/applications* routes
+
+# Local development (no production credentials required):
+#
+#   1. Start the account service locally:
+#      PORT=8790 HOST=127.0.0.1 SCOUT_ACCOUNT_BASE_URL=http://127.0.0.1:8790 \
+#        npx tsx server/account-service.ts
+#   2. Build the site: npm run build
+#   3. npx wrangler pages dev \
+#        -b SCOUT_ACCOUNT_SERVICE_URL=http://127.0.0.1:8790 \
+#        -b SCOUT_BETA_API_KEY=dev-key-only

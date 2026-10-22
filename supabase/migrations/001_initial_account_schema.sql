@@ -1,0 +1,197 @@
+-- SCOUT account service schema for Supabase PostgreSQL.
+--
+-- This migration mirrors the SQLite schema managed by server/account-migrations.ts (versions 1-3)
+-- so a hosted account service can run on Supabase's managed PostgreSQL instead of a local SQLite
+-- file. Column names, types and constraints are kept consistent with the SQLite store so the
+-- account API contract (docs/BETA.md) does not change between the two backends.
+--
+-- Times are epoch milliseconds (integers), exactly as in SQLite. Passwords, invite tokens,
+-- recovery tokens, device codes and installation tokens are stored as SHA-256 or scrypt digests
+-- only -- never as plaintext.
+--
+-- Apply once to a Supabase project:
+--   supabase db push   (Supabase CLI, linked project)
+-- or paste into the Supabase SQL Editor. Run against a staging project and verify record counts
+-- against the SQLite backup before any production cutover (docs/SUPABASE.md).
+--
+-- Row Level Security is enabled on every table with no permissive policies for the public/anon
+-- role: access is denied by default. The account service connects with the Supabase service-role
+-- key (server-side only, never in the frontend), which bypasses RLS and enforces authorization
+-- in application code exactly as the SQLite build does.
+
+-- --------------------------------------------------------------------------- accounts
+CREATE TABLE accounts (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  normalized_email TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  organisation TEXT NOT NULL,
+  country TEXT NOT NULL,
+  use_case TEXT NOT NULL,
+  events TEXT NOT NULL,                 -- JSON string, same shape as the SQLite store
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
+  password TEXT,                        -- "salt:digest" scrypt digest, or NULL
+  created_at INTEGER NOT NULL,
+  decided_at INTEGER,
+  decided_by TEXT NOT NULL DEFAULT '',
+  invite_digest TEXT,
+  invite_expires_at INTEGER,
+  last_login_at INTEGER,
+  activated_at INTEGER
+);
+
+CREATE INDEX accounts_status ON accounts (status);
+
+-- --------------------------------------------------------------------------- sessions
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,                  -- SHA-256 digest of the cookie value (never the value itself)
+  account_id TEXT NOT NULL REFERENCES accounts (id),
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  address TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX sessions_account ON sessions (account_id);
+CREATE INDEX sessions_expiry ON sessions (created_at, last_seen_at);
+
+-- --------------------------------------------------------------------------- devices
+CREATE TABLE devices (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts (id),
+  label TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  token_digest TEXT NOT NULL            -- SHA-256 of the installation token
+);
+
+CREATE INDEX devices_account ON devices (account_id);
+CREATE INDEX devices_active_account ON devices (account_id, created_at) WHERE revoked_at IS NULL;
+
+-- --------------------------------------------------------------------------- grants (launcher device links)
+CREATE TABLE grants (
+  device_code TEXT PRIMARY KEY,         -- SHA-256 digest of the user-facing code
+  user_code TEXT NOT NULL,              -- plain "ABCD-EFGH", human-typed half
+  label TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'denied')),
+  account_id TEXT REFERENCES accounts (id),
+  device_id TEXT REFERENCES devices (id),
+  pending_token TEXT,                   -- handed to the launcher exactly once, then nulled
+  claimed_at INTEGER
+);
+
+CREATE INDEX grants_user_code ON grants (user_code);
+CREATE INDEX grants_status_expiry ON grants (status, expires_at);
+
+-- --------------------------------------------------------------------------- platform settings
+CREATE TABLE platform_settings (
+  id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+  data JSONB NOT NULL DEFAULT '{}'
+);
+
+-- --------------------------------------------------------------------------- events (legacy, kept for compatibility)
+CREATE TABLE events (
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  account_id TEXT,
+  detail TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX events_account ON events (account_id);
+
+-- --------------------------------------------------------------------------- audit log (privacy-minimized)
+CREATE TABLE audit_logs (
+  id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+  occurred_at INTEGER NOT NULL,
+  request_id TEXT,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('anonymous', 'account', 'service')),
+  actor_id TEXT,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX audit_logs_time ON audit_logs (occurred_at DESC, id DESC);
+CREATE INDEX audit_logs_actor ON audit_logs (actor_type, actor_id, occurred_at DESC);
+CREATE INDEX audit_logs_target ON audit_logs (target_type, target_id, occurred_at DESC);
+CREATE INDEX audit_logs_request ON audit_logs (request_id) WHERE request_id IS NOT NULL;
+
+-- --------------------------------------------------------------------------- account roles
+CREATE TABLE account_roles (
+  account_id TEXT NOT NULL REFERENCES accounts (id),
+  role TEXT NOT NULL CHECK (role IN ('user', 'beta_reviewer')),
+  granted_at INTEGER NOT NULL,
+  granted_by TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (account_id, role)
+);
+
+CREATE INDEX account_roles_role ON account_roles (role, account_id);
+
+-- --------------------------------------------------------------------------- password recovery tokens
+CREATE TABLE password_recovery_tokens (
+  token_digest TEXT PRIMARY KEY,        -- SHA-256 of the single-use token
+  account_id TEXT NOT NULL REFERENCES accounts (id),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
+
+CREATE INDEX recovery_account_expiry ON password_recovery_tokens (account_id, expires_at);
+
+-- --------------------------------------------------------------------------- encrypted email outbox
+CREATE TABLE email_outbox (
+  id TEXT PRIMARY KEY,
+  template TEXT NOT NULL CHECK (template IN ('invitation', 'password_recovery')),
+  recipient_digest TEXT NOT NULL,       -- SHA-256 of the normalized recipient address
+  payload_ciphertext TEXT NOT NULL,     -- AES-256-GCM ciphertext, base64
+  payload_iv TEXT NOT NULL,
+  payload_tag TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  next_attempt_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  sent_at INTEGER,
+  last_error_code TEXT
+);
+
+CREATE INDEX email_outbox_pending ON email_outbox (next_attempt_at, created_at) WHERE sent_at IS NULL;
+
+-- --------------------------------------------------------------------------- row level security
+--
+-- Deny by default for every front-facing role. No SELECT/INSERT/UPDATE/DELETE policy is granted
+-- to `anon` or `authenticated`, so a Supabase client in the browser (or a leaked anon key) cannot
+-- read or write account data. All access goes through the Node.js account service, which connects
+-- with the service-role key and performs its own authorization (sessions, service key, ownership).
+ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE devices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE platform_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE account_roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE password_recovery_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_outbox ENABLE ROW LEVEL SECURITY;
+
+-- Explicitly empty policies make the default-deny stance visible in the Supabase dashboard:
+CREATE POLICY "Deny all anon access to accounts" ON accounts FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to sessions" ON sessions FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to devices" ON devices FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to grants" ON grants FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to platform_settings" ON platform_settings FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to events" ON events FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to audit_logs" ON audit_logs FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to account_roles" ON account_roles FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to password_recovery_tokens" ON password_recovery_tokens FOR ALL TO anon USING (false) WITH CHECK (false);
+CREATE POLICY "Deny all anon access to email_outbox" ON email_outbox FOR ALL TO anon USING (false) WITH CHECK (false);
+
+-- A locked-down role for read-only health checks, if the operator wants one:
+--   CREATE ROLE scout_reader;
+--   GRANT USAGE ON SCHEMA public TO scout_reader;
+--   GRANT SELECT ON healthz_read_only TO scout_reader;   -- (a view the operator may add later)

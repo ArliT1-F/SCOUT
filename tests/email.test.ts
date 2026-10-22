@@ -1,0 +1,90 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  emailConfiguration,
+  invitationEmail,
+  recoveryEmail,
+  resendTransport,
+  type EmailConfiguration,
+} from '../server/email.js';
+
+const transportConfig: EmailConfiguration = {
+  apiKey: 're_test_1234567890abcdef',
+  from: 'SCOUT <no-reply@example.test>',
+  publicBaseUrl: 'https://accounts.example.test',
+  encryptionKey: Buffer.alloc(32, 7),
+  apiUrl: 'http://127.0.0.1:1/emails',
+};
+
+const baseEnv = {
+  SCOUT_EMAIL_API_KEY: 're_test_1234567890abcdef',
+  SCOUT_EMAIL_FROM: 'SCOUT <no-reply@example.test>',
+  SCOUT_ACCOUNT_BASE_URL: 'https://accounts.example.test',
+  SCOUT_EMAIL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+  SCOUT_EMAIL_API_URL: 'https://api.resend.com/emails',
+};
+
+test('emailConfiguration returns null when settings are missing', () => {
+  assert.equal(emailConfiguration({}), null);
+});
+
+test('emailConfiguration rejects http origins outside localhost and never reveals the key', () => {
+  assert.throws(
+    () => emailConfiguration({...baseEnv, SCOUT_ACCOUNT_BASE_URL: 'http://example.test'}),
+    /HTTPS/,
+  );
+});
+
+test('resendTransport reports provider failure without returning the body', async () => {
+  const body = JSON.stringify({message: 'you sent a secret token in here', data: {to: 'ada@example.com'}});
+  let captured: string | null = null;
+  const orig = console.error;
+  console.error = (message: string) => { captured = message; };
+  try {
+    const transport = resendTransport(transportConfig, async () => ({
+      status: 400,
+      ok: false,
+      statusText: 'Bad Request',
+      body: null as any,
+      json: async () => JSON.parse(body),
+      text: async () => body,
+      headers: new Headers(),
+    } as any));
+    await assert.rejects(
+      transport({to: 'ada@example.com', subject: 's', text: 't', html: '<p>t</p>'}, 'idempotency-key'),
+      /Email provider refused the request\./,
+    );
+    assert.equal(captured, null, 'the provider response body must not be logged');
+  } finally {
+    console.error = orig;
+  }
+});
+
+test('resendTransport delivers on a successful response', async () => {
+  let sent: any = null;
+  const transport = resendTransport(transportConfig, async (_url, init) => {
+    sent = init;
+    return new Response(null, {status: 200});
+  });
+  await transport({to: 'ada@example.com', subject: 's', text: 't', html: '<p>t</p>'}, 'idem');
+  assert.equal(sent.headers.Authorization, 'Bearer re_test_1234567890abcdef');
+  assert.equal(sent.headers['Idempotency-Key'], 'idem');
+  const payload = JSON.parse(String(sent.body));
+  assert.equal(payload.from, 'SCOUT <no-reply@example.test>');
+  assert.equal(payload.to[0], 'ada@example.com');
+});
+
+test('invitation and recovery emails never carry provider credentials', () => {
+  const invite = invitationEmail('ada@example.test', 'Ada', 'https://accounts.example.test/login?invite=abc', 1_700_000_000_000);
+  const recovery = recoveryEmail('ada@example.test', 'Ada', 'https://accounts.example.test/login?recovery=xyz', 1_700_000_000_000);
+  for (const message of [invite, recovery]) {
+    assert.ok(typeof message.to === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(message.to));
+    assert.ok(typeof message.subject === 'string' && message.subject.length > 0);
+    assert.ok(typeof message.text === 'string' && message.text.length > 0);
+    assert.ok(typeof message.html === 'string' && message.html.length > 0);
+    assert.ok(!/Bearer|re_/.test(message.subject));
+    assert.ok(!/Bearer|re_/.test(message.text));
+  }
+  assert.ok(invite.text.includes('/login?invite='));
+  assert.ok(recovery.text.includes('/login?recovery='));
+});
