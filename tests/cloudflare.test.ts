@@ -12,9 +12,11 @@ async function read(relative: string) {
 
 test('wrangler.toml configures Pages to build the Vite site', async () => {
   const wrangler = await read('wrangler.toml');
+  assert.match(wrangler, /name\s*=\s*"scout-website"/);
   assert.match(wrangler, /\[build\]/);
   assert.match(wrangler, /command\s*=\s*"npm run build"/);
-  assert.match(wrangler, /dist_dir\s*=\s*"dist"/);
+  assert.match(wrangler, /\[assets\]/);
+  assert.match(wrangler, /directory\s*=\s*"\.\/dist"/);
   assert.match(wrangler, /compatibility_date/);
   // No real credentials in version control.
   assert.ok(!/[re_]_[A-Za-z0-9]{20,}/.test(wrangler));

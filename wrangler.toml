@@ -12,12 +12,17 @@
 # wherever the operator hosts it (same machine as the host, or a small VM/container).
 # See docs/CLOUDFLARE.md and docs/ARCHITECTURE.md.
 
+name = "scout-website"
+compatibility_date = "2025-07-18"
+
 [build]
 command = "npm run build"
-dist_dir = "dist"
 
-# The functions directory is auto-detected at the project root (`functions/`).
-compatibility_date = "2025-07-18"
+# Static assets directory for `wrangler deploy` (Worker-style static asset deploy).
+# For full Pages functionality (functions, custom domains), use `wrangler pages deploy`
+# or connect the repo to Cloudflare Pages in the dashboard.
+[assets]
+directory = "./dist"
 
 # Pages production/preview secrets (never in the client bundle; set in the Cloudflare dashboard
 # or with `wrangler secret put`):
