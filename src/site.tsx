@@ -60,18 +60,41 @@ export function useDocumentMeta(meta:{title:string;description:string;robots:str
 // /api/surface (not the hostname in the account status — that is a machine name on both surfaces),
 // so a host-only card or an /app button is never shown on the public website, where it would 404.
 export function useSurface(){const [surface,setSurface]=useState<'host'|'site'|null>(null);useEffect(()=>{void fetch('/api/surface').then(r=>r.json()).then(body=>{if(body?.surface==='host'||body?.surface==='site')setSurface(body.surface)}).catch(()=>{})},[]);return surface}
-type BetaState={status:BetaStatusView|null;offline:boolean;loading:boolean;error:string};
+// Why the account calls are not answering, when they are not. The website deployment reports its own
+// reason and the applicant can only act on the one that is theirs.
+export type AccountFailure='not-configured'|'unreachable'|'network';
+// Which failure the edge reported, from the body functions/api/beta/[[path]].ts sends: the Worker
+// answers 503 service-unavailable when SCOUT_ACCOUNT_SERVICE_URL is unset, and 502
+// upstream-unreachable when the account service cannot be dialled. Anything else here is a network
+// failure on the visitor's side (offline, DNS, a blocked request).
+export function classifyAccountFailure(status:number,code?:string):AccountFailure{
+ if(status===503&&code==='service-unavailable') return 'not-configured';
+ if(status===502||code==='upstream-unreachable') return 'unreachable';
+ return 'network';
+}
+type BetaState={status:BetaStatusView|null;offline:boolean;loading:boolean;error:string;failure:AccountFailure|null};
 function useBetaStatus(){
- const [state,setState]=useState<BetaState>({status:null,offline:false,loading:true,error:''});
+ const [state,setState]=useState<BetaState>({status:null,offline:false,loading:true,error:'',failure:null});
  const load=React.useCallback(async()=>{
   try{
    const res=await fetch('/api/beta/status',{headers:{Accept:'application/json'}});
-   if(!res.ok) throw Error(`The host answered ${res.status}`);
-   setState({status:await res.json(),offline:false,loading:false,error:''});
+   if(!res.ok){
+    // The edge names the cause in the body (functions/api/beta/[[path]].ts): `service-unavailable`
+    // means the Worker has no SCOUT_ACCOUNT_SERVICE_URL yet — an operator fix, not something the
+    // visitor can retry — while `upstream-unreachable` means the account service is down.
+    const body=await res.json().catch(()=>null) as {code?:string;error?:string}|null;
+    setState({
+     status:null,offline:true,loading:false,
+     failure:classifyAccountFailure(res.status,body?.code),
+     error:body?.error||`The host answered ${res.status}`,
+    });
+    return;
+   }
+   setState({status:await res.json(),offline:false,loading:false,error:'',failure:null});
   }catch(reason:any){
    // No host on this address (the marketing site served statically, or the launcher not running).
    // The pages stay readable and say so; they never pretend to be signed in.
-   setState({status:null,offline:true,loading:false,error:reason?.message||'The SCOUT host could not be reached.'});
+   setState({status:null,offline:true,loading:false,failure:'network',error:reason?.message||'The SCOUT host could not be reached.'});
   }
  },[]);
  useEffect(()=>{void load()},[load]);
@@ -135,6 +158,22 @@ export function SiteFooter(){
  </footer>;
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
+// The offline message, said in terms of what the visitor can do. On the website deployment the
+// account service is reached through the Worker's `/api/beta` proxy, so `failure` distinguishes "this
+// deployment has no account service attached yet" (nothing to retry) from "it is down" (try later) and
+// from "there is no host on this address at all" (start the launcher).
+export function accountOfflineText(failure:AccountFailure|null,what:AccountNeed){
+ if(failure==='not-configured') return what==='apply'
+  ? 'Applications cannot be accepted yet: this deployment is not connected to the SCOUT account service. Nothing on your side will fix that — try again once the beta reopens.'
+  : 'Accounts are not connected on this deployment yet, so signing in is not possible. Try again once the beta reopens.';
+ if(failure==='unreachable') return what==='apply'
+  ? 'The SCOUT account service is not answering right now, so applications cannot be submitted. Try again in a few minutes.'
+  : 'The SCOUT account service is not answering right now, so signing in is not possible. Try again in a few minutes.';
+ return what==='apply'
+  ? 'The SCOUT host is not reachable on this address, so applications cannot be submitted right now. Start the launcher to apply, or open the host address.'
+  : 'The SCOUT host is not reachable on this address, so signing in is not possible. Start the launcher (or open the host address) and try again.';
+}
+type AccountNeed='apply'|'signin';
 function Notice({tone='bad',children}:{tone?:'bad'|'ok'|'warn';children:React.ReactNode}){return <p className={`site-notice ${tone}`} role="alert">{children}</p>}
 // ------------------------------------------------------------------ landing page
 // The product page's rules, in one place:
@@ -192,7 +231,7 @@ const UNDER_THE_HOOD=[
  {icon:ArchiveIcon,title:'Recording, archives and replay',body:'GSI recording, round-by-round archives and replay previews, stored on the observer machine. Nothing is uploaded to us.'},
 ];
 export function LandingPage(){
- const {status,offline}=useBetaStatus();
+ const {status,offline,failure}=useBetaStatus();
  const surface=useSurface();
  const account=status?.account??null;
  // Host-only extras (the "served by your host" card) belong to the venue's own host, never to the
@@ -220,7 +259,7 @@ export function LandingPage(){
   <a className="landing-skip" href="#main-content">Skip to content</a>
   <SiteNav account={status?.account??null} onHost={onHost}/>
   <main className="site-main" id="main-content" tabIndex={-1}>
-   {offline&&<OfflineBanner>The SCOUT host is not reachable on this address, so account actions are unavailable. The product pages work anyway — start the launcher to sign in or apply.</OfflineBanner>}
+   {offline&&<OfflineBanner>Account actions are unavailable: {accountOfflineText(failure,'signin')} The product pages work anyway.</OfflineBanner>}
    <section className="site-hero" aria-labelledby="hero-heading">
     <div className="landing-hero-aura" aria-hidden="true"/>
     <img className="site-hero-bg" src="/assets/cs2.png" alt="" aria-hidden="true"/>
@@ -364,7 +403,7 @@ export function validateApplication(form:ApplicationForm):Partial<Record<keyof A
  return errors;
 }
 export function ApplyPage(){
- const {status,offline,reload}=useBetaStatus();
+ const {status,offline,failure,reload}=useBetaStatus();
  const [form,setForm]=useState<ApplicationForm>({name:'',email:'',organisation:'',country:'',useCase:'',events:EVENT_OPTIONS[1]});
  const [busy,setBusy]=useState(false);
  const [error,setError]=useState('');
@@ -396,7 +435,7 @@ export function ApplyPage(){
  return <div className="site">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
-   {offline&&<OfflineBanner>The SCOUT host is not reachable on this address, so applications cannot be submitted right now.</OfflineBanner>}
+   {offline&&<OfflineBanner>{accountOfflineText(failure,'apply')}</OfflineBanner>}
    <div className="site-page-head">
     <span className="site-section-eyebrow">CLOSED BETA</span>
     <h1>Apply for access</h1>
@@ -440,7 +479,7 @@ export function ApplyPage(){
 // The device-approval flow lands here too — an invite link, or a launcher code — so an operator who
 // is not signed in yet meets one screen instead of three.
 export function LoginPage({linkCode,invite,reset,next='/profile'}:{linkCode?:string;invite?:string;reset?:string;next?:string}){
- const {status,offline,reload}=useBetaStatus();
+ const {status,offline,failure,reload}=useBetaStatus();
  const session=usePanelSession();
  const account=status?.account??null;
  const [email,setEmail]=useState('');const [password,setPassword]=useState('');
@@ -517,7 +556,7 @@ export function LoginPage({linkCode,invite,reset,next='/profile'}:{linkCode?:str
  return <div className="site">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
-   {offline&&<OfflineBanner>The SCOUT host is not reachable on this address, so signing in is not possible. Start the launcher (or open the host address) and try again.</OfflineBanner>}
+   {offline&&<OfflineBanner>{accountOfflineText(failure,'signin')}</OfflineBanner>}
    <div className="site-page-head">
     <span className="site-section-eyebrow">{invite?'INVITE':reset?'PASSWORD RESET':linkCode?'LAUNCHER LINK':'SIGN IN'}</span>
     <h1>{invite?'Set your password':reset?'Reset your password':linkCode?'Approve a launcher':'Welcome back'}</h1>
@@ -589,13 +628,13 @@ export function LoginPage({linkCode,invite,reset,next='/profile'}:{linkCode?:str
 // yet, so the installer has to be reachable somewhere. Everything after the install — tournaments,
 // linked launchers, the launcher code, every overlay setting — lives in the app, not here.
 export function DownloadPage(){
- const {status,offline,loading}=useBetaStatus();
+ const {status,offline,loading,failure}=useBetaStatus();
  const surface=useSurface();
  const account=status?.account??null;
  return <div className="site">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
-   {offline&&<OfflineBanner>The SCOUT host is not reachable on this address. Start the launcher, or open the host address, and reload.</OfflineBanner>}
+   {offline&&<OfflineBanner>{accountOfflineText(failure,'signin')}</OfflineBanner>}
    <div className="site-page-head">
     <span className="site-section-eyebrow">GET SCOUT</span>
     <h1>Download the app</h1>
@@ -804,7 +843,7 @@ export function BetaApplicationsPanel(){
 }
 // The website owns identity and launcher approvals, not any live broadcast controls.
 export function ProfilePage(){
- const {status,offline,loading,reload}=useBetaStatus();
+ const {status,offline,loading,failure,reload}=useBetaStatus();
  const account=status?.account??null;
  const [error,setError]=useState('');const [busy,setBusy]=useState('');
  const [isOwner,setIsOwner]=useState(false);
@@ -816,7 +855,7 @@ export function ProfilePage(){
  async function logout(){await betaRequest('/api/beta/logout');location.assign('/login')}
  return <div className="site"><SiteNav account={account}/><main className="site-main site-narrow">
   <div className="site-page-head"><span className="site-section-eyebrow">YOUR ACCOUNT</span><h1>User profile</h1><p>Your beta access and linked installations. Open SCOUT on the observer machine to host a match.</p></div>
-  {loading?<p className="site-loading">Checking your account…</p>:offline?<OfflineBanner>The account service is unreachable. Try again shortly.</OfflineBanner>:!account?<section className="site-card"><h2>Sign in to see your profile</h2><a className="button primary" href="/login">Sign in</a></section>:<>
+  {loading?<p className="site-loading">Checking your account…</p>:offline?<OfflineBanner>{accountOfflineText(failure,'signin')}</OfflineBanner>:!account?<section className="site-card"><h2>Sign in to see your profile</h2><a className="button primary" href="/login">Sign in</a></section>:<>
    <section className="site-card"><h2>{account.displayName}</h2><p>{account.email}</p><p>{account.organisation}</p><span className={'site-status '+statusTone(account.status)}>{statusLabel(account.status)}</span><div className="site-cta"><a className="button primary" href="/download">Download SCOUT</a>{isOwner&&<a className="button" href="/admin">Owner dashboard</a>}<button className="button" onClick={()=>void logout()}>Sign out</button></div></section>
    <section className="site-card site-devices"><h3>Linked launchers</h3>{error&&<Notice>{error}</Notice>}{account.devices?.length?<ul className="site-device-list">{account.devices.map(device=><li key={device.id}><div><b>{device.label}</b><small>{device.platform} · last seen {new Date(device.lastSeenAt).toLocaleString()}</small></div><button className="button" disabled={busy===device.id} onClick={()=>void revoke(device.id)}>Unlink</button></li>)}</ul>:<p>No linked installations. Start SCOUT and approve the code it displays at <a href="/login">Sign in / link launcher</a>.</p>}</section>
   </>}
