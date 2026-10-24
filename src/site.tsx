@@ -62,13 +62,12 @@ export function useDocumentMeta(meta:{title:string;description:string;robots:str
 export function useSurface(){const [surface,setSurface]=useState<'host'|'site'|null>(null);useEffect(()=>{void fetch('/api/surface').then(r=>r.json()).then(body=>{if(body?.surface==='host'||body?.surface==='site')setSurface(body.surface)}).catch(()=>{})},[]);return surface}
 // Why the account calls are not answering, when they are not. The website deployment reports its own
 // reason and the applicant can only act on the one that is theirs.
-export type AccountFailure='not-configured'|'unreachable'|'network';
-// Which failure the edge reported, from the body functions/api/beta/[[path]].ts sends: the Worker
-// answers 503 service-unavailable when SCOUT_ACCOUNT_SERVICE_URL is unset, and 502
-// upstream-unreachable when the account service cannot be dialled. Anything else here is a network
-// failure on the visitor's side (offline, DNS, a blocked request).
+export type AccountFailure='unreachable'|'network';
+// Which failure the host reported: the site surface proxies /api/beta/* to the account service and
+// answers `upstream-unreachable` when it cannot be dialled (a bare 502 from any gateway in between
+// means the same). Anything else here is a network failure on the visitor's side (offline, DNS, a
+// blocked request).
 export function classifyAccountFailure(status:number,code?:string):AccountFailure{
- if(status===503&&code==='service-unavailable') return 'not-configured';
  if(status===502||code==='upstream-unreachable') return 'unreachable';
  return 'network';
 }
@@ -79,9 +78,8 @@ function useBetaStatus(){
   try{
    const res=await fetch('/api/beta/status',{headers:{Accept:'application/json'}});
    if(!res.ok){
-    // The edge names the cause in the body (functions/api/beta/[[path]].ts): `service-unavailable`
-    // means the Worker has no SCOUT_ACCOUNT_SERVICE_URL yet — an operator fix, not something the
-    // visitor can retry — while `upstream-unreachable` means the account service is down.
+    // The host names the cause in the body: `upstream-unreachable` means the account service is
+    // down or unreachable from the site surface — try later, not something the visitor can fix.
     const body=await res.json().catch(()=>null) as {code?:string;error?:string}|null;
     setState({
      status:null,offline:true,loading:false,
@@ -159,13 +157,9 @@ export function SiteFooter(){
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
 // The offline message, said in terms of what the visitor can do. On the website deployment the
-// account service is reached through the Worker's `/api/beta` proxy, so `failure` distinguishes "this
-// deployment has no account service attached yet" (nothing to retry) from "it is down" (try later) and
-// from "there is no host on this address at all" (start the launcher).
+// account service is reached through the host's `/api/beta` proxy, so `failure` distinguishes "it
+// is down" (try later) from "there is no host on this address at all" (start the launcher).
 export function accountOfflineText(failure:AccountFailure|null,what:AccountNeed){
- if(failure==='not-configured') return what==='apply'
-  ? 'Applications cannot be accepted yet: this deployment is not connected to the SCOUT account service. Nothing on your side will fix that — try again once the beta reopens.'
-  : 'Accounts are not connected on this deployment yet, so signing in is not possible. Try again once the beta reopens.';
  if(failure==='unreachable') return what==='apply'
   ? 'The SCOUT account service is not answering right now, so applications cannot be submitted. Try again in a few minutes.'
   : 'The SCOUT account service is not answering right now, so signing in is not possible. Try again in a few minutes.';

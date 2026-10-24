@@ -338,7 +338,7 @@ test('Website surface with embedded account service + Supabase serves /api/beta/
  assert.equal(betaStatus.body.mode, 'hosted');
  assert.equal(betaStatus.body.applicationsOpen, true);
 
- // Bare /status and /settings work for external callers (Cloudflare Worker proxy or venue hosts)
+ // Bare /status and /settings work for external callers (venue hosts and operator tooling)
  const bareStatus = await site.request('/status');
  assert.equal(bareStatus.status, 200);
  assert.equal(bareStatus.body.mode, 'hosted');

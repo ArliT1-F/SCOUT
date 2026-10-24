@@ -78,8 +78,9 @@ export interface DownloadView {url:string;version:string;notes:string}
 export interface BetaStatusView {
  mode:BetaMode;applicationsOpen:boolean;signedIn:boolean;account:AccountView|null;download:DownloadView|null;
  host:string;reviewNote:string;
- // Hosted only: whether the signed-in session belongs to an approved owner/reviewer. The edge
- // proxy reads it before forwarding desk routes with the service key; the local service omits it.
+ // Hosted only: whether the signed-in session belongs to an approved owner/reviewer, so a desk
+ // client can tell without probing a desk route. The local service omits it; the local host
+ // computes reviewer access itself.
  reviewer?:boolean;
 }
 export interface DeviceGrantView {userCode:string;deviceCode:string;expiresAt:number;interval:number;verificationUrl:string}

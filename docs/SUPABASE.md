@@ -12,14 +12,16 @@ contract (docs/BETA.md); only the storage backend changes.
 
 ## Compatibility status
 
-The Node.js account service (`server/account-service.ts`) uses Node's `node:sqlite` and the local
-file system, so it **cannot run on Cloudflare Workers**. It keeps running on Node (the same machine
-as the broadcast host, or a small VM/container), and this migration does **not** rewrite its storage
-layer. Supabase is provisioned and the migrations are version-controlled and ready to apply; the
-account service continues to use SQLite by default. Switching the account service's store to Supabase
-PostgreSQL is a deliberate cutover the operator performs after testing (see "Cutover" below). This
-is by design: per the migration plan, an incompatible backend is preserved and documented rather than
-rewritten unnecessarily.
+The account service (`server/account-service.ts`) runs on Node with a local SQLite file as its
+primary store. When `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are configured it additionally
+mirrors every account table to Supabase PostgreSQL (`server/supabase-store.ts`: hydrate on
+startup, flush on change), so stateless deployments such as Render's free tier survive restarts
+without losing accounts, sessions, invites or mail-queue rows. Without those variables the
+service runs on SQLite alone, exactly as a venue host does.
+
+This document covers provisioning, the version-controlled migrations and moving data from an
+existing SQLite store. It does **not** replace authentication: accounts, sessions, scrypt
+passwords and invite tokens keep the existing contract (docs/BETA.md); Supabase is storage only.
 
 ## 1. Provision (free tier)
 
@@ -35,28 +37,33 @@ rewritten unnecessarily.
 
 ## 2. Apply the migrations
 
-Version-controlled migration: `supabase/migrations/001_initial_account_schema.sql`
+Version-controlled migrations in `supabase/migrations/`:
 
-It replicates the SQLite account schema (`accounts`, `sessions`, `devices`, `grants`,
-`platform_settings`, `events`, `audit_logs`, `account_roles`, `password_recovery_tokens`,
-`email_outbox`) with the same digest-only security model, plus indexes, foreign keys and row
-level security.
+- `001_initial_account_schema.sql` — replicates the SQLite account schema (`accounts`, `sessions`,
+  `devices`, `grants`, `platform_settings`, `events`, `audit_logs`, `account_roles`,
+  `password_recovery_tokens`, `email_outbox`) with the same digest-only security model, plus
+  indexes, foreign keys and row level security.
+- `002_render_supabase_cutover.sql` — BIGINT epoch-ms timestamps and `platform_store` for the
+  Render + Supabase deployment.
+- `003_revocation_and_delivery_diagnostics.sql` — the `revoked` account status, revocation reasons
+  and email-outbox failure detail (mirrors SQLite schema v4).
 
-Apply once to a fresh (empty) Supabase project:
+Apply in order to a fresh (empty) Supabase project:
 
 ```sh
 # Log in to the Supabase CLI and link the project
 supabase login
 supabase link --project-ref <project-ref>
 
-# Push the migration
+# Push the migrations
 supabase db push
 ```
 
-Or paste `supabase/migrations/001_initial_account_schema.sql` into the Supabase SQL Editor and run
-it. Track which migration has been applied in your deployment notes; migrations are forward-only
-(recover by restore from backup, not automatic down migrations), matching the SQLite runner's
-behavior.
+Or paste each file into the Supabase SQL Editor and run them in order. Projects that already
+applied 001 add 002 then 003. Track which migration has been applied in your deployment notes;
+migrations are forward-only (recover by restore from backup, not automatic down migrations),
+matching the SQLite runner's behavior. Always apply the Supabase migrations *before* deploying
+server code that writes the new columns.
 
 ## 3. Row Level Security
 
@@ -113,9 +120,10 @@ service at it.
 
 ## 6. Seeding and development commands
 
-- New project, fresh start: apply `supabase/migrations/001_initial_account_schema.sql`, then create
-  the owner account through the normal flow (`/apply` → approval → invite → set password) and set
-  `SCOUT_OWNER_EMAIL` to that address on the host and account service.
+- New project, fresh start: apply the migrations in `supabase/migrations/` in order (`001`,
+  then `002`, then `003`), then create the owner account through the normal flow (`/apply` →
+  approval → invite → set password) and set `SCOUT_OWNER_EMAIL` to that address on the host and
+  account service.
 - Owner bootstrap (hosted mode CLI):
   ```sh
   npm run account-service -- --list
@@ -128,7 +136,7 @@ service at it.
 When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set (as in `render.yaml`), SCOUT automatically connects to Supabase PostgreSQL (`server/supabase-store.ts`):
 
 - [x] Supabase project created on the free tier (`qtfbtfkthtvfpjvghyop` / `SCOUT DB`).
-- [x] Schema updated in `supabase/migrations/001_initial_account_schema.sql` and `supabase/migrations/002_render_supabase_cutover.sql` (`BIGINT` epoch-ms columns, `GENERATED BY DEFAULT AS IDENTITY`, and `public.platform_store` with default-deny RLS).
+- [x] Schema updated in `supabase/migrations/001_initial_account_schema.sql`, `supabase/migrations/002_render_supabase_cutover.sql` and `supabase/migrations/003_revocation_and_delivery_diagnostics.sql` (`BIGINT` epoch-ms columns, `GENERATED BY DEFAULT AS IDENTITY`, `public.platform_store` with default-deny RLS, plus the `revoked` status and outbox diagnostics).
 - [x] RLS verified: `anon` role denied by default on all tables.
 - [x] Account service (`server/account-service.ts`) hydrates from and flushes all 10 tables to Supabase when `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are configured, passing the full account flow: apply, approve, invitation, activate, sign in, password recovery, device link, licence check.
 - [x] Platform store (`server/platform.ts`) hydrates from and persists settings, tournaments, logs, and config receipts to Supabase (`public.platform_store` with fallback in `public.platform_settings`).
@@ -137,8 +145,8 @@ When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set (as in `render.yaml`
 ### Deploying on Render Free Tier (100% Free)
 
 1. Apply the schema in the Supabase SQL Editor (`qtfbtfkthtvfpjvghyop` / **SCOUT DB**):
-   - If the database is empty, paste and run `supabase/migrations/001_initial_account_schema.sql`.
-   - If an earlier version of `001_initial_account_schema.sql` was already applied, paste and run `supabase/migrations/002_render_supabase_cutover.sql`.
+   - If the database is empty, paste and run `001_initial_account_schema.sql`, then `002_render_supabase_cutover.sql`, then `003_revocation_and_delivery_diagnostics.sql`.
+   - If 001 (or 001+002) was already applied, paste and run the remaining migration(s) in order.
 2. In Render, create a **New Web Service** (or **New Blueprint Instance** using `render.yaml`) connected to `ArliT1-F/SCOUT` on the **Free** plan:
    - **Build Command:** `npm install --include=dev && npm run build`
    - **Start Command:** `npm start`
@@ -149,13 +157,6 @@ When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set (as in `render.yaml`
      - `SCOUT_EMAIL_API_KEY=<Resend API key>`
      - `SCOUT_EMAIL_FROM=<verified sender address>`
      - `SCOUT_EMAIL_ENCRYPTION_KEY=<base64 32-byte key: openssl rand -base64 32>`
-3. (Optional) If you also keep the Cloudflare Worker front-end active (`scout.arliturka2.workers.dev`), set its secret to point at the Render service so `GET /api/beta/status` no longer returns `503`:
-   ```sh
-   npx wrangler secret put SCOUT_ACCOUNT_SERVICE_URL
-   # enter: https://<your-render-service>.onrender.com
-   npx wrangler secret put SCOUT_BETA_API_KEY
-   # enter the same SCOUT_BETA_API_KEY configured on Render
-   ```
 
 ## 8. What stays unchanged
 

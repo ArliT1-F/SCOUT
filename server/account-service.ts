@@ -408,8 +408,8 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      const {applicationsOpen,reviewNote}=settings();
      const current=sessionAccount(cookieId(req));
      const account=current?accountRow(String(current.account.id)):null;
-     // The edge proxy reads `reviewer` before forwarding owner-desk routes with the service key,
-     // so the desk can never be driven by an anonymous or ordinary session through the website.
+     // `reviewer` lets any desk client know whether this session may review applications
+     // (approved + activated + owner or granted beta reviewer), without probing a desk route.
      const reviewer=Boolean(account&&String(account.status)==='approved'&&account.activated_at!==null&&(isPlatformOwner(String(account.email),{SCOUT_OWNER_EMAIL:ownerEmail})||settings().betaReviewers.includes(normalizeEmail(String(account.email)))));
      const answer:BetaStatusView={
       mode:'hosted',applicationsOpen,signedIn:Boolean(account),

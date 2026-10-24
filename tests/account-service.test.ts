@@ -233,8 +233,8 @@ test('the answers have the same shape as the local store — field for field',as
  assert.ok(activatedLocal.ok);
  if(!activatedLocal.ok) return;
  assert.equal(shape(activatedLocal.value.account),shape(activatedRemote.body.account),'AccountView after activation');
- // `reviewer` is hosted-only by design: the edge proxy reads it before forwarding desk routes with
- // the service key, while the local host computes reviewer access itself (see server/index.ts).
+ // `reviewer` is hosted-only by design: a desk client reads it to know whether the session may
+ // review, while the local host computes reviewer access itself (see server/index.ts).
  const {reviewer:_,...remoteStatus}=(await call('/status',{cookie:true})).body;
  assert.equal(shape(await localService.status(activatedLocal.value.cookieId)),shape(remoteStatus),'BetaStatusView');
  assert.equal(shape((await localService.status(activatedLocal.value.cookieId)).account),shape((await call('/status',{cookie:true})).body.account),'the signed-in AccountView');
@@ -559,7 +559,7 @@ test('a refused invitation delivery is diagnosed on the desk and on /healthz',as
  assert.equal(JSON.stringify(health.body).includes('ada@example.com'),false,'diagnostics never carry the recipient');
 });
 
-test('/status tells the edge whether the session belongs to a reviewer',async(t)=>{
+test('/status tells a desk client whether the session belongs to a reviewer',async(t)=>{
  const {call,jar}=await start({ownerEmail:'owner@example.com'},t);
  const enroll=async(email:string)=>{
   await call('/apply',{body:{...application,email,address:'203.0.113.7'}});
