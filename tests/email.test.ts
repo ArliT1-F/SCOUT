@@ -88,3 +88,35 @@ test('invitation and recovery emails never carry provider credentials', () => {
   assert.ok(invite.text.includes('/login?invite='));
   assert.ok(recovery.text.includes('/login?recovery='));
 });
+
+test('transactional templates share an accessible, email-safe brand layout and fallback link',()=>{
+ const expiresAt=1_900_000_000_000;
+ const url='https://accounts.example.test/login?invite=one&source=email';
+ for(const make of [invitationEmail,recoveryEmail]){
+  const message=make('ada@example.test','Ada <Admin> & "Team"',url,expiresAt);
+  assert.match(message.html,/<!doctype html>/i);
+  assert.match(message.html,/<html lang="en">/);
+  assert.match(message.html,/role="presentation"/);
+  assert.match(message.html,/max-width:600px/);
+  assert.match(message.html,/mso-padding-alt/,'Outlook has a padded action button');
+  assert.match(message.html,/Ada &lt;Admin&gt; &amp; &quot;Team&quot;/);
+  assert.ok(!message.html.includes('Ada <Admin>'));
+  assert.equal((message.html.match(/href="https:\/\/accounts.example.test\/login\?invite=one&amp;source=email"/g)||[]).length,2,'CTA and visible fallback use the same escaped URL');
+  assert.ok(message.text.includes(url));
+  assert.ok(message.text.includes(new Date(expiresAt).toUTCString()));
+  assert.ok(message.html.includes(new Date(expiresAt).toUTCString()));
+  assert.match(message.html,/ONE LINK. ONE USE./);
+  assert.match(message.html,/Keep this link private/);
+  assert.ok(!/<script|<form|<iframe|<img|https:\/\/fonts\./i.test(message.html),'email does not rely on blocked images, scripts or remote fonts');
+ }
+});
+test('invitation onboarding and recovery security copy remain distinct',()=>{
+ const invite=invitationEmail('a@example.test','','https://accounts.example.test/login?invite=x',1_900_000_000_000);
+ const reset=recoveryEmail('a@example.test','','https://accounts.example.test/login?recovery=y',1_900_000_000_000);
+ assert.match(invite.html,/Hello SCOUT organiser/);
+ assert.match(invite.html,/Your first steps with SCOUT/);
+ assert.match(invite.text,/download the SCOUT desktop app/);
+ assert.ok(!reset.html.includes('Your first steps'));
+ assert.match(reset.html,/Your password will not change/);
+ assert.match(reset.text,/your password will not change/);
+});
