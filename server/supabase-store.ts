@@ -24,7 +24,7 @@ const KEYED_TABLES:readonly KeyedTableSpec[]=[
   columns:[
    'id','email','normalized_email','display_name','organisation','country','use_case','events',
    'status','password','created_at','decided_at','decided_by','invite_digest','invite_expires_at',
-   'last_login_at','activated_at',
+   'last_login_at','activated_at','revoked_reason',
   ],
   keyOf:row=>String(row.id),
   deleteFilter:row=>`id=eq.${encodeURIComponent(String(row.id))}`,
@@ -73,6 +73,7 @@ const KEYED_TABLES:readonly KeyedTableSpec[]=[
   columns:[
    'id','template','recipient_digest','payload_ciphertext','payload_iv','payload_tag',
    'created_at','next_attempt_at','attempts','sent_at','last_error_code',
+   'last_error_status','last_provider_error',
   ],
   keyOf:row=>String(row.id),
   deleteFilter:row=>`id=eq.${encodeURIComponent(String(row.id))}`,

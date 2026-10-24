@@ -190,7 +190,7 @@ test('the request log counts what happened recently and forgets what did not',()
 test('the health snapshot says what needs attention, ranked and specific',()=>{
  const base:HealthInput={
   startedAt:clock,version:'0.1.0',pid:1234,
-  beta:{mode:'local',applications:{pending:2,approved:1,rejected:0},devices:1},
+  beta:{mode:'local',applications:{pending:2,approved:1,rejected:0,revoked:0},devices:1},
   licence:{state:'revoked',enforced:true,email:'ada@example.com'},
   releases:{published:0,latest:null,downloads:0},
   requests:new RequestLog(10,15*60*1000,()=>clock).summary(),
@@ -207,7 +207,7 @@ test('the health snapshot says what needs attention, ranked and specific',()=>{
 
  const healthy=healthSnapshot({
   ...base,
-  beta:{mode:'hosted',applications:{pending:0,approved:12,rejected:3},devices:12},
+  beta:{mode:'hosted',applications:{pending:0,approved:12,rejected:3,revoked:0},devices:12},
   licence:{state:'active',enforced:true,email:'ada@example.com'},
   releases:{published:1,latest:'0.4.1',downloads:7},
   requests:{...base.requests,byClass:{ok:120,redirect:1,clientError:2,serverError:0}},
@@ -220,7 +220,7 @@ test('a stale or rejected CS2 feed is called out rather than left to the operato
  const requests=new RequestLog(10,15*60*1000,()=>clock).summary();
  const stale=healthSnapshot({
   startedAt:clock,version:'0.1.0',pid:1,
-  beta:{mode:'local',applications:{pending:0,approved:1,rejected:0},devices:1},
+  beta:{mode:'local',applications:{pending:0,approved:1,rejected:0,revoked:0},devices:1},
   licence:null,
   releases:{published:1,latest:'0.4.1',downloads:0},
   requests,

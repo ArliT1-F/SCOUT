@@ -16,6 +16,7 @@ test('CSV quotes commas, newlines and quotes; spreadsheet formulas are inert',()
 test('invitation states distinguish review, activation, expiry and retry delivery',()=>{
  assert.equal(invitationState({status:'pending'}),'Awaiting review');
  assert.equal(invitationState({status:'rejected'}),'Not invited');
+ assert.equal(invitationState({status:'revoked'}),'Access revoked');
  assert.equal(invitationState({status:'approved'},{status:'sent',expiresAt:100},101),'Expired');
  assert.equal(invitationState({status:'approved'},{status:'sent',expiresAt:100},99),'Invitation sent');
  assert.equal(invitationState({status:'approved'},{status:'pending'}),'Email queued');

@@ -233,7 +233,10 @@ test('the answers have the same shape as the local store — field for field',as
  assert.ok(activatedLocal.ok);
  if(!activatedLocal.ok) return;
  assert.equal(shape(activatedLocal.value.account),shape(activatedRemote.body.account),'AccountView after activation');
- assert.equal(shape(await localService.status(activatedLocal.value.cookieId)),shape((await call('/status',{cookie:true})).body),'BetaStatusView');
+ // `reviewer` is hosted-only by design: a desk client reads it to know whether the session may
+ // review, while the local host computes reviewer access itself (see server/index.ts).
+ const {reviewer:_,...remoteStatus}=(await call('/status',{cookie:true})).body;
+ assert.equal(shape(await localService.status(activatedLocal.value.cookieId)),shape(remoteStatus),'BetaStatusView');
  assert.equal(shape((await localService.status(activatedLocal.value.cookieId)).account),shape((await call('/status',{cookie:true})).body.account),'the signed-in AccountView');
  // the launcher half, both implementations, same fields
  const localGrant=await localService.deviceStart({label:'pc',platform:'win32'},context());
@@ -485,4 +488,93 @@ test('password recovery is non-enumerating, expires, is single-use, and revokes 
  assert.equal((await call('/status',{cookie:true})).body.signedIn,false,'reset revokes all old sessions');
  assert.equal((await call('/login',{body:{email:'ada@example.com',password:'a-long-enough-password'}})).status,401);
  assert.equal((await call('/login',{body:{email:'ada@example.com',password:'a-new-long-password'}})).status,200);
+});
+
+test('revoking an approved account cuts sessions, launchers and sign-in',async(t)=>{
+ const {call,dir}=await start({},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const listed=await call('/applications',{key:true});
+ const id=listed.body.applications[0].id;
+ const approved=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ await call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'},cookie:true});
+ const grant=await call('/device/start',{body:{label:'pc',platform:'win32',origin:'http://panel.test:8080'}});
+ await call('/device/approve',{body:{userCode:grant.body.userCode},cookie:true});
+ const poll=await call('/device/poll',{body:{deviceCode:grant.body.deviceCode}});
+ const licence=await call('/license/check',{body:{deviceId:poll.body.deviceId,installationId:'inst-1',token:poll.body.installationToken}});
+ assert.equal(licence.body.status,'active');
+ const revoked=await call(`/applications/${id}`,{key:true,body:{decision:'revoke',decidedBy:'owner@example.com',reason:'exploited the beta build'}});
+ assert.equal(revoked.status,200);
+ assert.equal(revoked.body.account.status,'revoked');
+ assert.equal(revoked.body.account.revokedReason,'exploited the beta build');
+ assert.deepEqual(revoked.body.account.devices,[],'launchers lose entitlement with the account');
+ assert.equal((await call('/status',{cookie:true})).body.signedIn,false,'revocation signs the account out everywhere');
+ const signIn=await call('/login',{body:{email:'ada@example.com',password:'a-long-enough-password'}});
+ assert.equal(signIn.status,403);assert.equal(signIn.body.code,'revoked');
+ const reapply=await call('/apply',{body:{...application,address:'203.0.113.8'}});
+ assert.equal(reapply.status,403);assert.equal(reapply.body.code,'revoked');
+ const check=await call('/license/check',{body:{deviceId:poll.body.deviceId,installationId:'inst-1',token:poll.body.installationToken}});
+ assert.equal(check.body.status,'revoked');
+ const again=await call(`/applications/${id}`,{key:true,body:{decision:'revoke',decidedBy:'owner@example.com'}});
+ assert.equal(again.status,409);assert.equal(again.body.code,'already-decided');
+ const reopen=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ assert.equal(reopen.status,409);assert.equal(reopen.body.code,'already-decided');
+ const eventsDb=new DatabaseSync(path.join(dir,'accounts.sqlite'));
+ try{
+  const kinds=(eventsDb.prepare('SELECT kind FROM events WHERE account_id = ?').all(id) as Array<{kind:string}>).map(row=>row.kind);
+  assert.ok(kinds.includes('account.revoked'),kinds.join(','));
+ }finally{eventsDb.close()}
+});
+
+test('a revocation reason longer than the desk allows is refused, and pending accounts cannot be revoked',async(t)=>{
+ const {call}=await start({},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=(await call('/applications',{key:true})).body.applications[0].id;
+ const early=await call(`/applications/${id}`,{key:true,body:{decision:'revoke',decidedBy:'owner@example.com'}});
+ assert.equal(early.status,409);assert.equal(early.body.code,'invalid-decision');
+ await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ const tooLong=await call(`/applications/${id}`,{key:true,body:{decision:'revoke',decidedBy:'owner@example.com',reason:'x'.repeat(281)}});
+ assert.equal(tooLong.status,400);assert.equal(tooLong.body.code,'invalid-reason');
+ assert.equal((await call('/applications',{key:true})).body.applications[0].status,'approved','a refused revocation changes nothing');
+});
+
+test('a refused invitation delivery is diagnosed on the desk and on /healthz',async(t)=>{
+ const {call}=await start({emailTransport:async()=>{throw Object.assign(new Error('refused'),{status:403,providerCode:'validation_error'})}},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=(await call('/applications',{key:true})).body.applications[0].id;
+ const approved=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ const delivery=approved.body.invitationDelivery;
+ assert.equal(delivery.status,'pending');
+ assert.equal(delivery.errorCode,'provider-rejected');
+ assert.equal(delivery.errorStatus,403);
+ assert.equal(delivery.providerError,'validation_error');
+ assert.ok(delivery.guidance.includes('resend.com/domains'),delivery.guidance);
+ assert.ok(delivery.nextAttemptAt>Date.now()-60_000);
+ const listed=await call('/applications',{key:true});
+ assert.equal(listed.body.invitations[id].providerError,'validation_error');
+ const health=await call('/healthz');
+ assert.equal(health.body.emailOutboxRejected,1);
+ assert.equal(health.body.emailLastFailure.code,'provider-rejected');
+ assert.equal(health.body.emailLastFailure.status,403);
+ assert.ok(health.body.emailLastFailure.guidance.includes('resend.com/domains'));
+ assert.equal(JSON.stringify(health.body).includes('ada@example.com'),false,'diagnostics never carry the recipient');
+});
+
+test('/status tells a desk client whether the session belongs to a reviewer',async(t)=>{
+ const {call,jar}=await start({ownerEmail:'owner@example.com'},t);
+ const enroll=async(email:string)=>{
+  await call('/apply',{body:{...application,email,address:'203.0.113.7'}});
+  const id=(await call('/applications',{key:true})).body.applications.find((row:any)=>row.email===email).id;
+  const approved=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+  await call('/activate',{body:{invite:approved.body.invite,password:`a-long-${email.split('@')[0]}-password`},cookie:true});
+ };
+ await enroll('owner@example.com');
+ const ownerCookie=`scout_account=${jar.get('scout_account')}`;
+ assert.equal((await call('/status',{cookie:true})).body.reviewer,true,'the owner may review');
+ await enroll('reviewer@example.com');
+ assert.equal((await call('/status',{cookie:true})).body.reviewer,false,'an ordinary account may not');
+ const granted=await call('/settings',{method:'PUT',headers:{Cookie:ownerCookie},body:{betaReviewers:['reviewer@example.com']}});
+ assert.equal(granted.status,200);
+ assert.equal((await call('/status',{cookie:true})).body.reviewer,true,'a granted reviewer may review');
+ const visitor=await call('/status');
+ assert.equal(visitor.body.reviewer,false,'a visitor may not');
 });

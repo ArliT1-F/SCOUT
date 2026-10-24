@@ -6,7 +6,7 @@ export function matchesSearch(query:string,...values:(string|null|undefined)[]){
  return terms.every(term=>text.includes(term));
 }
 export function invitationState(app:Pick<AccountView,'status'>,invite?:InvitationDeliveryView,now=Date.now()){
- if(app.status!=='approved')return app.status==='pending'?'Awaiting review':'Not invited';
+ if(app.status!=='approved')return app.status==='pending'?'Awaiting review':app.status==='revoked'?'Access revoked':'Not invited';
  if(invite?.activated)return 'Activated';
  if(invite?.status==='pending')return invite.errorCode?'Retry queued':'Email queued';
  if(invite?.expiresAt&&invite.expiresAt<=now)return 'Expired';

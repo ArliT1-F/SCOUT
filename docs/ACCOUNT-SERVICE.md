@@ -122,11 +122,36 @@ The service has a small CLI for a deployment nobody is watching:
 ```sh
 npm run account-service -- --list                 # status, address, date and organisation per application
 npm run account-service -- --approve ada@example.com  # queues and attempts invitation delivery
+npm run account-service -- --revoke ada@example.com shared credentials  # cuts access at once; the trailing words are the recorded reason
 ```
 
 Approval requires complete email configuration and fails without changing the pending application if any required setting is absent. The encrypted outbox retries transient delivery failures with bounded backoff. The command reports that delivery was attempted, not that the recipient has read the message; use the admin delivery status and `/healthz` to monitor retries. Invite URLs and tokens are never printed.
 
-`GET /healthz` answers `{ok,accounts,pending,devices,emailDeliveryConfigured,emailOutboxPending}` for a supervisor or an uptime check.
+`GET /healthz` answers `{ok,accounts,pending,devices,emailDeliveryConfigured,emailOutboxPending,emailOutboxRejected,emailLastFailure}` for a supervisor or an uptime check. `emailLastFailure` carries the newest failing outbox row's error code, provider HTTP status, provider error name, operator guidance and next retry time — no addresses, bodies or tokens.
+
+### When email delivery fails
+
+A log line like `[accounts] email delivery <id> deferred (provider-rejected)` means the mail
+provider refused the message and the outbox will retry it on the bounded backoff schedule. The
+service never logs the refusal payload (it can embed recipient addresses), so diagnose by code:
+
+1. Read the review desk: a failing invitation says **Delivery needs attention**, names the provider
+   error (e.g. `HTTP 403 · validation_error`), and prints the recommended fix.
+2. `provider-rejected` with HTTP 401 (`missing_api_key`, `restricted_api_key`): the
+   `SCOUT_EMAIL_API_KEY` is absent, wrong or IP-restricted. Recreate it in Resend and update the
+   service's environment.
+3. `provider-rejected` with HTTP 403: the sender identity is not usable — verify the sending
+   domain at resend.com/domains; `onboarding@resend.dev` only delivers to the account's own
+   address, so test deliveries to other addresses fail this way.
+4. `provider-rejected` with HTTP 400/422: the sender/recipient payload is malformed (check
+   `SCOUT_EMAIL_FROM` and the queue payload shape) — retrying alone will not fix it.
+5. `transient` with HTTP 429: the provider asked to slow down; the outbox backs off and retries
+   by itself.
+6. `transient` with HTTP 0 or 5xx: the provider had an outage, or the service never reached it —
+   check network egress and `SCOUT_EMAIL_API_URL`.
+
+Fixing the underlying cause is enough: the queued message retries automatically, or a reviewer can
+resend the invitation from the desk.
 
 ## What it stores, and what it will never store
 
@@ -141,6 +166,44 @@ codes and installation tokens as SHA-256 digests. The only plaintext secrets tha
 `tests/account-service.test.ts` drives the flow over a socket and inspects the database file to verify that password, invite, recovery token, device code, installation token and queued-email plaintext are not stored as usable values.
 
 Legacy events (applications, sign-ins, activations, launcher link/revoke) continue to be appended to the existing `events` table for compatibility. Phase 2 also records actor/action/target/request ID in the dedicated indexed `audit_logs` table; each new audit row and its legacy `events` counterpart commit together. Audit metadata excludes the legacy free-form details, email addresses, user codes, tokens and request bodies. No broadcast state is sent here. HTTP logs use generated request IDs and safe error classes rather than exception/request text.
+
+## Revoking an account
+
+**When:** a tester abuses the beta — exploit, offence, leaked credentials — and must lose access
+immediately. Revocation keeps the account row for audit while cutting off everything the account
+could do.
+
+**How:** on the owner `/admin` desk (or the panel review desk), an approved account gets a
+**Revoke access** button. Confirming it optionally records a short reason (280 characters, shown
+only to reviewers) with the decision.
+
+Revoking does, in one store transaction:
+
+- sets the account to `revoked` and stamps reviewer + reason,
+- deletes every session (signed out everywhere, immediately),
+- revokes every linked launcher (the launcher loses entitlement on its next licence check),
+- clears the invitation and recovery tokens,
+- deletes queued mail for the address, including the invitation row.
+
+After that the address gets `403 revoked` from `/login` and `/apply`, cannot link a launcher, and
+cannot see the download. Linked launchers report `revoked` from `/license/check`, and the decision
+is written to the audit log as `beta.account.revoked` with the reviewer and the reason.
+
+**Rejected is not revoked.** `reject` is the answer to an application that was never approved
+(rejecting an already-approved account still cuts access, as before). `revoked` is the answer to an
+account that *was* approved and lost it. Both statuses are terminal — the desk offers no further
+action for them.
+
+**Undo:** revocation keeps the password digest, precisely so a mistaken revocation is recoverable.
+There is deliberately no desk button for this; an operator with database access restores the status
+directly:
+
+```sql
+UPDATE accounts SET status='approved', revoked_reason=NULL WHERE normalized_email='name@example.com';
+```
+
+Then resend an invitation from the desk if one is needed — the account signs in with its existing
+password.
 
 ## What is still missing
 
@@ -162,7 +225,9 @@ restore the backup or correct the reported precondition before retrying.
 
 Version 1 adopts the previous schema with idempotent `CREATE TABLE IF NOT EXISTS`; it does not rebuild
 or delete existing tables. Version 2 adds case-insensitive unique email enforcement, query indexes and
-the dedicated `audit_logs` table while preserving the legacy `events` table. If V2 reports duplicate emails after trimming and case normalization, back up the database, resolve those duplicates with the account owner, then restart.
+the dedicated `audit_logs` table while preserving the legacy `events` table. Version 3 adds role
+columns to SQLite, and version 4 adds the revocation reason plus the outbox failure detail columns
+(provider HTTP status and provider error name). If V2 reports duplicate emails after trimming and case normalization, back up the database, resolve those duplicates with the account owner, then restart.
 No rows are automatically merged or deleted. Migrations are forward-only; recovery is restore-from-
 backup, not an automatic down migration.
 

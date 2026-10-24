@@ -62,13 +62,12 @@ export function useDocumentMeta(meta:{title:string;description:string;robots:str
 export function useSurface(){const [surface,setSurface]=useState<'host'|'site'|null>(null);useEffect(()=>{void fetch('/api/surface').then(r=>r.json()).then(body=>{if(body?.surface==='host'||body?.surface==='site')setSurface(body.surface)}).catch(()=>{})},[]);return surface}
 // Why the account calls are not answering, when they are not. The website deployment reports its own
 // reason and the applicant can only act on the one that is theirs.
-export type AccountFailure='not-configured'|'unreachable'|'network';
-// Which failure the edge reported, from the body functions/api/beta/[[path]].ts sends: the Worker
-// answers 503 service-unavailable when SCOUT_ACCOUNT_SERVICE_URL is unset, and 502
-// upstream-unreachable when the account service cannot be dialled. Anything else here is a network
-// failure on the visitor's side (offline, DNS, a blocked request).
+export type AccountFailure='unreachable'|'network';
+// Which failure the host reported: the site surface proxies /api/beta/* to the account service and
+// answers `upstream-unreachable` when it cannot be dialled (a bare 502 from any gateway in between
+// means the same). Anything else here is a network failure on the visitor's side (offline, DNS, a
+// blocked request).
 export function classifyAccountFailure(status:number,code?:string):AccountFailure{
- if(status===503&&code==='service-unavailable') return 'not-configured';
  if(status===502||code==='upstream-unreachable') return 'unreachable';
  return 'network';
 }
@@ -79,9 +78,8 @@ function useBetaStatus(){
   try{
    const res=await fetch('/api/beta/status',{headers:{Accept:'application/json'}});
    if(!res.ok){
-    // The edge names the cause in the body (functions/api/beta/[[path]].ts): `service-unavailable`
-    // means the Worker has no SCOUT_ACCOUNT_SERVICE_URL yet — an operator fix, not something the
-    // visitor can retry — while `upstream-unreachable` means the account service is down.
+    // The host names the cause in the body: `upstream-unreachable` means the account service is
+    // down or unreachable from the site surface — try later, not something the visitor can fix.
     const body=await res.json().catch(()=>null) as {code?:string;error?:string}|null;
     setState({
      status:null,offline:true,loading:false,
@@ -110,8 +108,8 @@ function usePanelSession(){
  useEffect(()=>{void (async()=>{try{const surface=await fetch('/api/surface').then(r=>r.json());if(surface.surface!=='host')return;const res=await apiFetch('/api/session');if(res.ok)setSession(await res.json())}catch{}})()},[]);
  return session;
 }
-const statusLabel=(status:string)=>status==='approved'?'APPROVED':status==='rejected'?'NOT APPROVED':'IN REVIEW';
-const statusTone=(status:string)=>status==='approved'?'ok':status==='rejected'?'bad':'warn';
+const statusLabel=(status:string)=>status==='approved'?'APPROVED':status==='rejected'?'NOT APPROVED':status==='revoked'?'REVOKED':'IN REVIEW';
+const statusTone=(status:string)=>status==='approved'?'ok':status==='rejected'||status==='revoked'?'bad':'warn';
 // ------------------------------------------------------------------ shared chrome
 function SiteBrand(){return <a className="site-brand" href="/welcome"><ScoutMark className="brand-symbol" size={26}/> scout<span className="brand-dot">®</span></a>}
 export function SiteNav({account,link,onHost=false,section=''}:{account:AccountView|null;link?:InstallationView|null;onHost?:boolean;section?:string}){
@@ -159,13 +157,9 @@ export function SiteFooter(){
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
 // The offline message, said in terms of what the visitor can do. On the website deployment the
-// account service is reached through the Worker's `/api/beta` proxy, so `failure` distinguishes "this
-// deployment has no account service attached yet" (nothing to retry) from "it is down" (try later) and
-// from "there is no host on this address at all" (start the launcher).
+// account service is reached through the host's `/api/beta` proxy, so `failure` distinguishes "it
+// is down" (try later) from "there is no host on this address at all" (start the launcher).
 export function accountOfflineText(failure:AccountFailure|null,what:AccountNeed){
- if(failure==='not-configured') return what==='apply'
-  ? 'Applications cannot be accepted yet: this deployment is not connected to the SCOUT account service. Nothing on your side will fix that — try again once the beta reopens.'
-  : 'Accounts are not connected on this deployment yet, so signing in is not possible. Try again once the beta reopens.';
  if(failure==='unreachable') return what==='apply'
   ? 'The SCOUT account service is not answering right now, so applications cannot be submitted. Try again in a few minutes.'
   : 'The SCOUT account service is not answering right now, so signing in is not possible. Try again in a few minutes.';
@@ -666,7 +660,7 @@ export function DownloadPage(){
       </section>
       {account.status!=='approved'&&<section className="site-card">
        <h3>Your account is {statusLabel(account.status).toLowerCase()}</h3>
-       <p className="site-card-lead">{account.status==='pending'?'The download opens the moment your application is approved. Nothing else is needed from you.':'This account was not approved for the closed beta.'}</p>
+       <p className="site-card-lead">{account.status==='pending'?'The download opens the moment your application is approved. Nothing else is needed from you.':account.status==='revoked'?'This account’s access was revoked. Contact the SCOUT team if you believe this is a mistake.':'This account was not approved for the closed beta.'}</p>
       </section>}
       <p className="site-fineprint site-dash-foot">Signed in as {account.email}. Account created {new Date(account.createdAt).toLocaleString()}. This host is running the account service {status?.mode==='hosted'?'remotely (SCOUT_BETA_API_URL)':'locally (config/beta/store.json)'}.</p>
      </div>}
@@ -817,6 +811,7 @@ export function BetaApplicationsPanel(){
   if(!res.ok){setError(response?.error||'That action could not be saved.');return}
   if(path.endsWith('/resend-invitation'))setNotice(response.invitationDelivery?.status==='pending'?'Invitation is queued for delivery; the service will retry automatically.':'A replacement invitation was sent by email.');
   else if(body&&typeof body==='object'&&(body as any).decision==='approve')setNotice(response.invitationDelivery?.status==='pending'?'Application approved. Invitation queued; delivery will retry automatically.':'Application approved. A single-use invitation was emailed to the applicant.');
+  else if(body&&typeof body==='object'&&(body as any).decision==='revoke')setNotice(`Access revoked for ${response.application?.email||'the account'}.`);
   else setNotice(`${response.application?.email||'Application'} was rejected.`);
   await load();
  }
@@ -828,14 +823,21 @@ export function BetaApplicationsPanel(){
   {error&&<Notice>{error}</Notice>}{notice&&<Notice tone="ok">{notice}</Notice>}
   {applications.length?<div className="beta-list">{applications.map(entry=>{
    const invitation=invitations[entry.id];
-   const delivery=invitation?.activated?'Account activated':invitation?.status==='sent'?'Invitation emailed':invitation?.status==='pending'?'Email queued for retry':null;
+   const delivery=entry.status==='revoked'?'Access revoked':invitation?.activated?'Account activated':invitation?.status==='sent'?'Invitation emailed':invitation?.status==='pending'?'Email queued for retry':null;
+   const revoke=()=>{
+    if(!window.confirm(`Revoke access for ${entry.displayName} (${entry.email})? They will be signed out everywhere, their launchers will lose entitlement, and they will not be able to sign in again.`))return;
+    const answer=window.prompt('Why is this account being revoked? (optional — recorded with the decision)','');
+    if(answer===null)return;
+    void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'revoke',...(answer.trim()?{reason:answer.trim()}:{})});
+   };
    return <article key={entry.id} className={'beta-row '+entry.status}>
     <div className="beta-who"><b>{entry.displayName}</b><small>{entry.email}{entry.organisation?` · ${entry.organisation}`:''}{entry.country?` · ${entry.country}`:''}</small></div>
-    <p className="beta-use">{entry.useCase||'No note supplied.'}{delivery&&<small className="beta-delivery">{delivery}{invitation?.expiresAt&&!invitation.activated?` · expires ${new Date(invitation.expiresAt).toLocaleString()}`:''}</small>}</p>
+    <p className="beta-use">{entry.useCase||'No note supplied.'}{delivery&&<small className="beta-delivery">{delivery}{invitation?.expiresAt&&!invitation.activated?` · expires ${new Date(invitation.expiresAt).toLocaleString()}`:''}</small>}{entry.status==='revoked'&&entry.revokedReason&&<small className="beta-delivery">Reason: {entry.revokedReason}</small>}{invitation?.guidance&&<small className="beta-delivery">{invitation.guidance}</small>}</p>
     <span className={`site-status ${statusTone(entry.status)}`}><span className="status-dot"/>{statusLabel(entry.status)}</span>
     <div className="beta-actions">
      {entry.status==='pending'&&<><button className="button primary" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'approve'})}>{busy===entry.id?<Loader2 className="spin" size={13}/>:<Check size={13}/>}Approve</button><button className="button danger-button" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'reject'})}>Reject</button></>}
      {entry.status==='approved'&&!invitation?.activated&&<button className="button" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}/resend-invitation`,{})}>{busy===entry.id?<Loader2 className="spin" size={13}/>:<RefreshCw size={13}/>}Resend invitation</button>}
+     {entry.status==='approved'&&<button className="button danger-button" disabled={busy===entry.id} onClick={revoke}>Revoke access</button>}
     </div>
    </article>;
   })}</div>:<p className="beta-empty">No applications yet. They appear here the moment somebody applies at <code>/apply</code>.</p>}

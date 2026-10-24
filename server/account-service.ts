@@ -6,12 +6,12 @@ import {mkdirSync} from 'node:fs';
 import {migrateAccountDatabase} from './account-migrations.js';
 import path from 'node:path';
 import {loadEnvFile} from './env.js';
-import {emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport} from './email.js';
+import {describeEmailFailure,emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport} from './email.js';
 import {DEFAULT_PLATFORM_SETTINGS,isPlatformOwner,sanitizeSettings,type PlatformSettings} from './platform.js';
 import {SupabaseAccountMirror,supabaseConfiguration,type SupabaseConfiguration} from './supabase-store.js';
 import {
  ACCOUNT_COOKIE,ACCOUNT_TTL_MS,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
- DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_APPLICATIONS_PER_HOUR,MAX_LOGIN_FAILURES,MIN_PASSWORD,
+ DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_APPLICATIONS_PER_HOUR,MAX_LOGIN_FAILURES,MAX_REVOKE_REASON,MIN_PASSWORD,
  accountCookie,clearedAccountCookie,digestSecret,hashToken,newToken,newUserCode,normalizeEmail,normalizeUserCode,secretMatches,
  type AccountView,type ApplicationInput,type BetaStatusView,type DeviceGrantView,type DevicePollView,type DownloadView,type LicenceCheck,
 } from './beta.js';
@@ -73,7 +73,7 @@ export interface AccountService {
  close():Promise<void>;
  deliverPending():Promise<void>;
  /** The same operations the HTTP surface exposes, for the CLI and for tests that want no socket. */
- db:{file:string;list():AccountView[];decide(email:string,decision:'approve'|'reject',decidedBy:string):{account:AccountView;invite:string|null}|null};
+ db:{file:string;list():AccountView[];decide(email:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason?:string):{account:AccountView;invite:string|null}|null};
 }
 interface Row extends Record<string,unknown>{}
 const nowMs=Date.now;
@@ -179,14 +179,17 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
     try{
      const message=openEmail({ciphertext:String(item.payload_ciphertext),iv:String(item.payload_iv),tag:String(item.payload_tag)},mailKey);
      await mailTransport(message,String(item.id));
-     run('UPDATE email_outbox SET sent_at = ?, payload_ciphertext = \'\', payload_iv = \'\', payload_tag = \'\', last_error_code = NULL WHERE id = ? AND sent_at IS NULL',now(),item.id);
+     run('UPDATE email_outbox SET sent_at = ?, payload_ciphertext = \'\', payload_iv = \'\', payload_tag = \'\', last_error_code = NULL, last_error_status = NULL, last_provider_error = NULL WHERE id = ? AND sent_at IS NULL',now(),item.id);
      log(`email delivery ${String(item.id)} completed`);
     }catch(error){
      const attempts=Number(item.attempts)+1,delay=[60_000,5*60_000,15*60_000,60*60_000,6*60*60_000][Math.min(attempts-1,4)];
      const status=Number((error as {status?:unknown})?.status||0);
+     const providerCode=typeof (error as {providerCode?:unknown})?.providerCode==='string'?(error as {providerCode:string}).providerCode:null;
      const errorCode=status>=400&&status<500&&status!==429?'provider-rejected':'transient';
-     run('UPDATE email_outbox SET attempts = ?,next_attempt_at = ?,last_error_code = ? WHERE id = ? AND sent_at IS NULL',attempts,now()+delay,errorCode,item.id);
-     log(`email delivery ${String(item.id)} deferred (${errorCode})`);
+     run('UPDATE email_outbox SET attempts = ?,next_attempt_at = ?,last_error_code = ?,last_error_status = ?,last_provider_error = ? WHERE id = ? AND sent_at IS NULL',attempts,now()+delay,errorCode,status||null,providerCode,item.id);
+     // The deferred line is what an operator greps for. Status code and provider error name carry
+     // no recipient or credential data, so they are safe here; the provider body never is.
+     log(`email delivery ${String(item.id)} deferred (${errorCode}) — HTTP ${status||'unreachable'}${providerCode?` · ${providerCode}`:''}. ${describeEmailFailure(status,providerCode)}`);
     }
    }
    await flushSupabase();
@@ -205,6 +208,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
    id:String(row.id),email:String(row.email),displayName:String(row.display_name),organisation:String(row.organisation),
    country:String(row.country),status:String(row.status) as AccountView['status'],useCase:String(row.use_case),events:String(row.events),
    createdAt:Number(row.created_at),decidedAt:row.decided_at===null?null:Number(row.decided_at),devices:deviceViews(String(row.id)),
+   revokedReason:String(row.status)==='revoked'?(row.revoked_reason==null?null:String(row.revoked_reason)):null,
   };
  }
  function grantInvite(accountId:string,decidedBy:string){
@@ -219,18 +223,30 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   queueEmail('invitation',accountId,invitationEmail(String(row.email),String(row.display_name),url,expiresAt));
   return invite;
  }
- function decide(id:string,decision:'approve'|'reject',decidedBy:string){
+ /** Cutting access ends everything the account holds: sessions, launchers, recovery tokens, pending
+  * invites and queued mail. The password digest is kept, so an erroneous revocation is recoverable
+  * by restoring the status — the account signs in with its existing password and re-links launchers. */
+ function cutAccess(id:string,status:'rejected'|'revoked',decidedBy:string,reason:string|null){
+  run('UPDATE accounts SET status = ?, decided_at = ?, decided_by = ?, revoked_reason = ?, invite_digest = NULL, invite_expires_at = NULL WHERE id = ?',status,now(),decidedBy,reason,id);
+  run('DELETE FROM sessions WHERE account_id = ?',id);
+  run('UPDATE devices SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL',now(),id);
+  run('DELETE FROM password_recovery_tokens WHERE account_id = ?',id);
+  const row=accountRow(id);
+  if(row)run('DELETE FROM email_outbox WHERE recipient_digest = ? AND sent_at IS NULL',hashToken(normalizeEmail(String(row.email))));
+ }
+ function decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason=''){
   db.exec('BEGIN IMMEDIATE');
   try{
    const row=accountRow(id);
    if(!row){db.exec('COMMIT');return null}
-   if(String(row.status)==='rejected'||(decision==='approve'&&String(row.status)!=='pending'))fail(409,'already-decided',String(row.status)==='rejected'?'A rejected application is terminal. A new application is required.':'Only pending applications can be approved. Use the resend-invitation action for an unactivated approved account.');
+   if(String(row.status)==='rejected')fail(409,'already-decided','A rejected application is terminal. A new application is required.');
+   if(String(row.status)==='revoked')fail(409,'already-decided','A revoked account cannot be re-approved. Delete the account row and ask for a fresh application instead.');
+   if(decision==='revoke'&&String(row.status)!=='approved')fail(409,'invalid-decision','Only approved accounts can be revoked. Reject a pending application instead.');
+   if(decision==='approve'&&String(row.status)!=='pending')fail(409,'already-decided','Only pending applications can be approved. Use the resend-invitation action for an unactivated approved account.');
    const invite=decision==='approve'?grantInvite(id,decidedBy):null;
-   if(decision==='reject'){
-    run('UPDATE accounts SET status = ?, decided_at = ?, decided_by = ?, invite_digest = NULL, invite_expires_at = NULL WHERE id = ?','rejected',now(),decidedBy,id);
-    run('DELETE FROM sessions WHERE account_id = ?',id);
-   }
-   writeEvent(`application.${decision}`,id);
+   if(decision==='reject')cutAccess(id,'rejected',decidedBy,null);
+   if(decision==='revoke')cutAccess(id,'revoked',decidedBy,reason.trim().slice(0,MAX_REVOKE_REASON)||null);
+   writeEvent(decision==='revoke'?'account.revoked':`application.${decision}`,id);
    db.exec('COMMIT');
    void flushSupabase().catch(()=>{});
    return {account:view(accountRow(id)!),invite};
@@ -260,6 +276,17 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   const moment=now();
   run('DELETE FROM sessions WHERE created_at + ? < ?',ACCOUNT_TTL_MS,moment);
   run('DELETE FROM grants WHERE (status = ? AND expires_at < ?) OR (status != ? AND created_at + ? < ?)','pending',moment,'pending',DEVICE_CODE_TTL_MS,moment);
+ }
+ // What the review desk shows about an invitation: delivery state plus the operator guidance for a
+ // failure. Never the invite token or the recipient address — the row is keyed by the account.
+ function invitationDelivery(email:string){
+  const delivery=get('SELECT sent_at,attempts,last_error_code,last_error_status,last_provider_error,next_attempt_at FROM email_outbox WHERE template = ? AND recipient_digest = ? ORDER BY created_at DESC LIMIT 1','invitation',hashToken(normalizeEmail(email)));
+  if(!delivery)return null;
+  const errorCode=delivery.last_error_code==null?null:String(delivery.last_error_code);
+  const errorStatus=delivery.last_error_status==null?null:Number(delivery.last_error_status);
+  const providerError=delivery.last_provider_error==null?null:String(delivery.last_provider_error);
+  const pending=delivery.sent_at===null;
+  return {status:pending?'pending':'sent',attempts:Number(delivery.attempts||0),errorCode,errorStatus,providerError,sentAt:pending?null:Number(delivery.sent_at),nextAttemptAt:pending?Number(delivery.next_attempt_at):null,guidance:pending&&errorCode?describeEmailFailure(errorStatus??0,providerError):null};
  }
  // ---------------------------------------------------------------- the HTTP surface
  class HttpError extends Error{constructor(readonly status:number,readonly code:string,message:string){super(message)}}
@@ -345,7 +372,18 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
     const method=req.method||'GET';
     const userAgent=String(req.headers['user-agent']||'');
     reap();
-    if(method==='GET'&&route==='/healthz'){const accounts=(get('SELECT COUNT(*) AS n FROM accounts')!.n as number);return json(res,200,{ok:true,accounts,pending:Number(get('SELECT COUNT(*) AS n FROM accounts WHERE status = ?','pending')!.n),devices:Number(get('SELECT COUNT(*) AS n FROM devices WHERE revoked_at IS NULL')!.n),emailDeliveryConfigured:Boolean(mailTransport&&mailKey&&mailBaseUrl),emailOutboxPending:Number(get('SELECT COUNT(*) AS n FROM email_outbox WHERE sent_at IS NULL')!.n)})}
+    if(method==='GET'&&route==='/healthz'){
+     const accounts=(get('SELECT COUNT(*) AS n FROM accounts')!.n as number);
+     const lastFailure=get('SELECT last_error_code,last_error_status,last_provider_error,next_attempt_at FROM email_outbox WHERE sent_at IS NULL AND last_error_code IS NOT NULL ORDER BY created_at DESC LIMIT 1');
+     const lastStatus=lastFailure?.last_error_status==null?null:Number(lastFailure.last_error_status);
+     const lastProvider=lastFailure?.last_provider_error==null?null:String(lastFailure.last_provider_error);
+     return json(res,200,{ok:true,accounts,
+      pending:Number(get('SELECT COUNT(*) AS n FROM accounts WHERE status = ?','pending')!.n),
+      devices:Number(get('SELECT COUNT(*) AS n FROM devices WHERE revoked_at IS NULL')!.n),
+      emailDeliveryConfigured:Boolean(mailTransport&&mailKey&&mailBaseUrl),
+      emailOutboxPending:Number(get('SELECT COUNT(*) AS n FROM email_outbox WHERE sent_at IS NULL')!.n),
+      emailOutboxRejected:Number(get('SELECT COUNT(*) AS n FROM email_outbox WHERE sent_at IS NULL AND last_error_code IS NOT NULL')!.n),
+      emailLastFailure:lastFailure?{code:String(lastFailure.last_error_code),status:lastStatus,providerError:lastProvider,guidance:describeEmailFailure(lastStatus??0,lastProvider),nextAttemptAt:Number(lastFailure.next_attempt_at)}:null})}
     if(route==='/settings'&&method==='GET'){requireServiceKey(req);return json(res,200,{settings:settings()})}
     if(route==='/settings'&&method==='PUT'){
      requireSameOrigin(req);
@@ -370,12 +408,15 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      const {applicationsOpen,reviewNote}=settings();
      const current=sessionAccount(cookieId(req));
      const account=current?accountRow(String(current.account.id)):null;
+     // `reviewer` lets any desk client know whether this session may review applications
+     // (approved + activated + owner or granted beta reviewer), without probing a desk route.
+     const reviewer=Boolean(account&&String(account.status)==='approved'&&account.activated_at!==null&&(isPlatformOwner(String(account.email),{SCOUT_OWNER_EMAIL:ownerEmail})||settings().betaReviewers.includes(normalizeEmail(String(account.email)))));
      const answer:BetaStatusView={
       mode:'hosted',applicationsOpen,signedIn:Boolean(account),
       account:account?view(account):null,
       // The download is only offered to an approved account — the gate lives here, not in the page.
       download:account&&String(account.status)==='approved'?download:null,
-      host:serviceName,reviewNote,
+      host:serviceName,reviewNote,reviewer,
      };
      return json(res,200,answer);
     }
@@ -393,6 +434,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      const existing=get('SELECT * FROM accounts WHERE normalized_email = ?',email);
      if(existing){
       if(String(existing.status)==='approved') fail(409,'already-approved','That address already has an approved account — sign in, or open the invite link from your approval.');
+      if(String(existing.status)==='revoked') fail(403,'revoked','That email address was revoked from the closed beta. Contact the SCOUT team if you believe this is a mistake.');
       fail(409,'already-applied','That address already has an application in review. Sign in if you have already set a password.');
      }
      const id=newToken(12);
@@ -424,7 +466,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
       fail(401,'bad-credentials','That email address and password do not match an account.');
      }
      const status=String(row!.status);
-     if(status!=='approved') fail(403,status==='pending'?'pending-review':'rejected',status==='pending'?'This application is still in review. We will email you if it is approved.':'This application was not approved for the closed beta.');
+     if(status!=='approved') fail(403,status==='pending'?'pending-review':status==='revoked'?'revoked':'rejected',status==='pending'?'This application is still in review. We will email you if it is approved.':status==='revoked'?'This account has been revoked. Contact the SCOUT team if you believe this is a mistake.':'This application was not approved for the closed beta.');
      if(row!.activated_at===null)fail(401,'bad-credentials','That email address and password do not match an activated account.');
      failures.delete(from);
      run('UPDATE accounts SET last_login_at = ? WHERE id = ?',now(),row!.id);
@@ -525,8 +567,8 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      const rows=all('SELECT * FROM accounts ORDER BY created_at DESC');
      const invitations:Record<string,unknown>={};
      for(const row of rows){
-      const invite=get('SELECT * FROM email_outbox WHERE template = ? AND recipient_digest = ? ORDER BY created_at DESC LIMIT 1','invitation',hashToken(normalizeEmail(String(row.email))));
-      if(invite)invitations[String(row.id)]={status:invite.sent_at===null?'pending':'sent',activated:row.activated_at!==null,expiresAt:row.invite_expires_at===null?null:Number(row.invite_expires_at),sentAt:invite.sent_at===null?null:Number(invite.sent_at),attempts:Number(invite.attempts),errorCode:invite.last_error_code||null};
+      const delivery=invitationDelivery(String(row.email));
+      if(delivery)invitations[String(row.id)]={...delivery,activated:row.activated_at!==null,expiresAt:row.invite_expires_at===null?null:Number(row.invite_expires_at)};
      }
      return json(res,200,{applications:rows.map(view),invitations});
     }
@@ -544,20 +586,19 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
       writeEvent('invitation.resent',id);
       db.exec('COMMIT');
       await deliverPending();
-      const delivery=get('SELECT sent_at,attempts,last_error_code FROM email_outbox WHERE template = ? AND recipient_digest = ? ORDER BY created_at DESC LIMIT 1','invitation',hashToken(normalizeEmail(String(row!.email))));
-      return json(res,200,{account:view(accountRow(id)!),invite,invitationDelivery:{status:delivery?.sent_at===null?'pending':'sent',attempts:Number(delivery?.attempts||0),errorCode:delivery?.last_error_code||null}});
+      return json(res,200,{account:view(accountRow(id)!),invite,invitationDelivery:invitationDelivery(String(row!.email))});
      }catch(error){try{db.exec('ROLLBACK')}catch{};throw error}
     }
     const decision=route.match(/^\/applications\/([^/]+)$/);
     if(decision&&method==='POST'){
      requireServiceKey(req);
      const input=await body(req);
-     if(input.decision!=='approve'&&input.decision!=='reject') fail(400,'invalid-decision','A decision is approve or reject.');
-     const result=decide(decodeURIComponent(decision[1]),input.decision,attributeReviewer(input.decidedBy));
+     if(input.decision!=='approve'&&input.decision!=='reject'&&input.decision!=='revoke') fail(400,'invalid-decision','A decision is approve, reject or revoke.');
+     if(typeof input.reason==='string'&&input.reason.length>MAX_REVOKE_REASON) fail(400,'invalid-reason',`A revocation reason is at most ${MAX_REVOKE_REASON} characters.`);
+     const result=decide(decodeURIComponent(decision[1]),input.decision,attributeReviewer(input.decidedBy),typeof input.reason==='string'?input.reason:'');
      if(!result) fail(404,'not-found','That application no longer exists.');
      if(input.decision==='approve')await deliverPending();
-     const delivery=input.decision==='approve'?get('SELECT sent_at,attempts,last_error_code FROM email_outbox WHERE template = ? AND recipient_digest = ? ORDER BY created_at DESC LIMIT 1','invitation',hashToken(normalizeEmail(result!.account.email))):null;
-     return json(res,200,{...result,invitationDelivery:delivery?{status:delivery.sent_at===null?'pending':'sent',attempts:Number(delivery.attempts||0),errorCode:delivery.last_error_code||null}:null});
+     return json(res,200,{...result,invitationDelivery:input.decision==='approve'?invitationDelivery(result!.account.email):null});
     }
 
     // ---- the launcher's half
@@ -601,7 +642,8 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
     if((route==='/device/approve'||route==='/device/deny')&&method==='POST'){
      const input=await body(req);
      const current=requireAccount(req,'Sign in with your SCOUT account before approving a launcher.');
-     if(String(current.account.status)!=='approved') fail(403,'pending-review','Your account is not approved yet, so it cannot link a launcher.');
+     const linkStatus=String(current.account.status);
+     if(linkStatus!=='approved') fail(403,linkStatus==='pending'?'pending-review':linkStatus==='revoked'?'revoked':'rejected',linkStatus==='pending'?'Your account is not approved yet, so it cannot link a launcher.':linkStatus==='revoked'?'This account has been revoked, so it cannot link a launcher.':'This application was not approved, so it cannot link a launcher.');
      const code=normalizeUserCode(String(input.userCode||''));
      const grant=get('SELECT * FROM grants WHERE user_code = ?',code);
      if(!grant) fail(404,'unknown-code','No launcher is waiting with that code. Copy it from the launcher window.');
@@ -690,8 +732,9 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
 // store can be moved between the two without re-hashing anything.
 function parseSecret(value:string){const [salt,digest]=value.split(':');return salt&&digest?{salt,digest}:null}
 // ------------------------------------------------------------------ running it
-// `npm run account-service` (or `tsx server/account-service.ts`) starts the service. The two flags
-// exist for a deployment with no panel handy: list applications or approve one and queue its invitation email.
+// `npm run account-service` (or `tsx server/account-service.ts`) starts the service. The flags exist
+// for a deployment with no panel handy: list applications, approve one and queue its invitation
+// email, or revoke an approved account (`--revoke <email> [reason ...]`) and cut its access at once.
 // `isEntry` rather than a bare import-time start, so importing this module (the tests do, to drive
 // the same store without a socket) never starts a listener or runs a CLI command.
 const isEntry=Boolean(process.argv[1])&&/account-service\.ts$/.test(process.argv[1]);
@@ -716,6 +759,20 @@ if(isEntry){
    console.log(`[accounts] approved ${email}; invitation delivery was attempted. Any transient provider failure is queued for automatic retry.`);
   }catch(error){
    console.error(`[accounts] approval failed: ${error instanceof Error?error.message:'unexpected error'}`);
+   await service.close();process.exit(1);
+  }
+  await service.close();process.exit(0);
+ }
+ const revoke=flags.indexOf('--revoke');
+ if(revoke>=0){
+  const email=normalizeEmail(flags[revoke+1]||'');
+  const row=service.db.list().find(account=>account.email===email);
+  if(!row){console.error(`[accounts] no application for ${email}`);await service.close();process.exit(1)}
+  try{
+   service.db.decide(row.id,'revoke','command line',flags.slice(revoke+2).join(' '));
+   console.log(`[accounts] revoked ${email}; sessions, launchers, invites, recovery tokens and queued mail are cut off.`);
+  }catch(error){
+   console.error(`[accounts] revocation failed: ${error instanceof Error?error.message:'unexpected error'}`);
    await service.close();process.exit(1);
   }
   await service.close();process.exit(0);

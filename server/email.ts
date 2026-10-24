@@ -54,9 +54,34 @@ export function resendTransport(config:EmailConfiguration,fetchImpl:typeof fetch
   });
   if(!response.ok){
    // Never retain or log the provider response body: some providers echo recipient/template data.
-   throw Object.assign(new Error('Email provider refused the request.'),{status:response.status});
+   // The error `name` (e.g. `validation_error`, `missing_api_key`) is a stable, recipient-free enum
+   // in the Resend API (`{statusCode, message, name}`), so it is safe to keep for operator guidance.
+   let providerCode:string|null=null;
+   try{
+    const data=JSON.parse(await response.text());
+    const name=data&&typeof data==='object'?(data as {name?:unknown}).name:null;
+    if(typeof name==='string'&&/^[A-Za-z][A-Za-z0-9_.-]{0,64}$/.test(name))providerCode=name;
+   }catch{}
+   throw Object.assign(new Error('Email provider refused the request.'),{status:response.status,providerCode});
   }
  };
+}
+
+/** Operator-actionable guidance for a failed delivery. Status codes and provider error names carry
+ * no recipient or credential data, so this text is safe for logs, the review desk and /healthz. */
+export function describeEmailFailure(status:number,providerCode:string|null):string{
+ const code=(providerCode||'').toLowerCase();
+ if(status===401||code==='missing_api_key'||code==='invalid_api_key')
+  return 'The email provider rejected the API key (HTTP 401). Check SCOUT_EMAIL_API_KEY on the account service — recreate it in the Resend dashboard if it was rotated or deleted — then resend the invitation from the review desk.';
+ if(status===403||code==='restricted_api_key'||code==='suspended_api_key')
+  return 'The email provider refused the send (HTTP 403). The sender domain is usually not verified: verify it at resend.com/domains and send from an address on it. The onboarding@resend.dev test address only delivers to your own Resend account email.';
+ if(status===400||status===422||code==='validation_error')
+  return 'The email provider refused the message (validation). Usually the SCOUT_EMAIL_FROM sender or domain is not verified in Resend — verify the domain at resend.com/domains and use an address on it — or the recipient address is invalid.';
+ if(status===429||code==='rate_limit_exceeded'||code==='rate_limited')
+  return 'The email provider rate-limited delivery (HTTP 429). The outbox retries automatically with backoff; no action is needed unless it persists.';
+ if(status>=500||status<=0)
+  return 'The email provider had a transient problem, or could not be reached. The outbox retries automatically with backoff.';
+ return `The email provider rejected the message (HTTP ${status}). Check the provider dashboard logs, fix the configuration, and resend from the review desk — delivery retries automatically.`;
 }
 
 /** Shared, image-independent transactional layout. Tables and inline styles work in email clients

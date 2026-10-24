@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  describeEmailFailure,
   emailConfiguration,
   invitationEmail,
   recoveryEmail,
@@ -119,4 +120,47 @@ test('invitation onboarding and recovery security copy remain distinct',()=>{
  assert.ok(!reset.html.includes('Your first steps'));
  assert.match(reset.html,/Your password will not change/);
  assert.match(reset.text,/your password will not change/);
+});
+
+test('describeEmailFailure maps provider refusals to operator guidance', () => {
+  assert.match(describeEmailFailure(401, null), /SCOUT_EMAIL_API_KEY/);
+  assert.match(describeEmailFailure(403, 'validation_error'), /resend\.com\/domains/);
+  assert.match(describeEmailFailure(400, null), /SCOUT_EMAIL_FROM/);
+  assert.match(describeEmailFailure(429, null), /retries automatically/);
+  assert.match(describeEmailFailure(503, null), /retries automatically/);
+  assert.match(describeEmailFailure(0, null), /retries automatically/);
+  assert.match(describeEmailFailure(418, 'teapot_error'), /HTTP 418/);
+});
+
+test('resendTransport keeps the provider error name and drops anything else', async () => {
+  const failing = (payload: string, status = 403) =>
+    resendTransport(
+      transportConfig,
+      (async () => ({
+        status,
+        ok: false,
+        statusText: 'Forbidden',
+        body: null as any,
+        json: async () => JSON.parse(payload),
+        text: async () => payload,
+        headers: new Headers(),
+      }) as any),
+    );
+  const capture = async (payload: string, status: number) => {
+    try {
+      await failing(payload, status)({to: 'a@b.co', subject: 's', text: 't', html: '<p>t</p>'}, 'idem');
+      assert.fail('a refused send must throw');
+    } catch (error: any) {
+      return error;
+    }
+  };
+  const named = await capture(JSON.stringify({name: 'validation_error', message: 'Domain example.test is not verified'}), 403);
+  assert.equal(named.status, 403);
+  assert.equal(named.providerCode, 'validation_error');
+  assert.ok(!String(named.message).includes('example.test'), 'the provider message is never retained');
+  const anonymous = await capture('not json{{', 400);
+  assert.equal(anonymous.status, 400);
+  assert.equal(anonymous.providerCode, null);
+  const hostile = await capture(JSON.stringify({name: '../../etc/passwd'}), 422);
+  assert.equal(hostile.providerCode, null, 'names outside the safe pattern are dropped');
 });

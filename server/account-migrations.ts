@@ -6,7 +6,7 @@ import type {DatabaseSync} from 'node:sqlite';
  * Version 1 is intentionally an idempotent baseline: deployments made before the migration
  * runner already have these tables, and CREATE IF NOT EXISTS adopts them without rewriting data.
  */
-export const ACCOUNT_DB_SCHEMA_VERSION=3;
+export const ACCOUNT_DB_SCHEMA_VERSION=4;
 
 const MIGRATIONS:Array<{version:number;name:string;sql:string;apply?:(db:DatabaseSync)=>void}>=[
  {
@@ -118,6 +118,15 @@ const MIGRATIONS:Array<{version:number;name:string;sql:string;apply?:(db:Databas
    db.exec("UPDATE accounts SET activated_at = COALESCE(last_login_at,created_at) WHERE status = 'approved' AND password IS NOT NULL AND activated_at IS NULL");
    db.exec("INSERT OR IGNORE INTO account_roles (account_id,role,granted_at,granted_by) SELECT id,'user',COALESCE(activated_at,created_at),'migration' FROM accounts WHERE activated_at IS NOT NULL");
   },
+ },
+ {
+  version:4,
+  name:'delivery-diagnostics-and-account-revocation',
+  sql:`
+   ALTER TABLE accounts ADD COLUMN revoked_reason TEXT;
+   ALTER TABLE email_outbox ADD COLUMN last_error_status INTEGER;
+   ALTER TABLE email_outbox ADD COLUMN last_provider_error TEXT;
+  `,
  },
 ];
 

@@ -3,27 +3,18 @@ import assert from 'node:assert/strict';
 
 import {accountOfflineText, classifyAccountFailure} from '../src/site';
 
-// On the website deployment the account API is reached through the Worker's `/api/beta` proxy, so
-// "offline" covers three different situations. The banner used to say "The SCOUT host is not
-// reachable on this address" for all of them, which told an applicant on scout.*.workers.dev to
-// start a launcher that does not exist there. The copy now follows the failure the edge names.
+// On the website deployment the account API is reached through the host's `/api/beta` proxy, so
+// "offline" covers two different situations. The banner used to say "The SCOUT host is not
+// reachable on this address" for both, which told an applicant on the public website to start a
+// launcher that does not exist there. The copy now follows the failure the host names.
 
-test('the edge error codes map to the three account failures', () => {
-  // functions/api/beta/[[path]].ts: no SCOUT_ACCOUNT_SERVICE_URL on the Worker.
-  assert.equal(classifyAccountFailure(503, 'service-unavailable'), 'not-configured');
+test('the host error codes map to the two account failures', () => {
   // The proxy could not dial the account service.
   assert.equal(classifyAccountFailure(502, 'upstream-unreachable'), 'unreachable');
+  assert.equal(classifyAccountFailure(503, 'upstream-unreachable'), 'unreachable');
+  assert.equal(classifyAccountFailure(502), 'unreachable', 'a bare gateway failure means the same');
   assert.equal(classifyAccountFailure(200), 'network');
   assert.equal(classifyAccountFailure(429, 'throttled'), 'network');
-});
-
-test('an unconnected deployment does not blame the visitor’s address', () => {
-  for (const need of ['apply', 'signin'] as const) {
-    const text = accountOfflineText('not-configured', need);
-    assert.match(text, /not connected|not configured/, 'the reason is the deployment, not the visitor');
-    assert.equal(/not reachable on this address/.test(text), false, 'no launcher exists on the website');
-    assert.equal(/try again in a few minutes/.test(text), false, 'a retry will not fix a missing secret');
-  }
 });
 
 test('a down account service asks for a retry, and a missing host for the launcher', () => {
@@ -34,10 +25,10 @@ test('a down account service asks for a retry, and a missing host for the launch
 });
 
 test('every failure says something different, and every one of them is actionable', () => {
-  const failures = ['not-configured', 'unreachable', 'network'] as const;
+  const failures = ['unreachable', 'network'] as const;
   for (const need of ['apply', 'signin'] as const) {
     const texts = failures.map(failure => accountOfflineText(failure, need));
-    assert.equal(new Set(texts).size, texts.length, `${need}: three causes, three messages`);
+    assert.equal(new Set(texts).size, texts.length, `${need}: two causes, two messages`);
     for (const text of texts) assert.ok(text.length > 40, `${need}: a banner that explains itself`);
     assert.notEqual(accountOfflineText(failures[0], need), accountOfflineText(failures[0], need === 'apply' ? 'signin' : 'apply'), 'applying and signing in are not the same action');
   }
