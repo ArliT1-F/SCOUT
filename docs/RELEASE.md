@@ -10,7 +10,7 @@ getting that file to the right people, and about what is *not* automated.
 
 | | |
 | --- | --- |
-| **By hand** | `npm run package:windows` on a Windows box with Node 20+, the Rust toolchain, the Tauri CLI and Inno Setup 6.3+. Output: `dist-installer\SCOUT-Setup-<version>.exe`. Version defaults to `package.json`; override with `node scripts/build-installer.mjs --version 0.4.1`. |
+| **By hand** | `npm run package:windows` on a Windows box with Node 20+, the Rust toolchain, the Tauri CLI, the Visual C++ linker (Build Tools for Visual Studio with the C++ workload — Rust's MSVC target cannot link without it) and Inno Setup 6.3+. `scripts\install-windows-build-tools.ps1` installs all of it, and `npm run package:windows:check` proves a machine without building; the packaging script itself now refuses to start, with the fix spelled out, when a piece is missing. Output: `dist-installer\SCOUT-Setup-<version>.exe`. Version defaults to `package.json`; override with `node scripts/build-installer.mjs --version 0.4.1`. |
 | **By the workflow** | `ci/release.yml` (copy it to `.github/workflows/` — see [`ci/README.md`](../ci/README.md) for why it is not there yet). Push a tag (`git tag v0.4.1 && git push origin v0.4.1`) or run the workflow by hand with a version. It installs the same toolchain, runs `cargo test` on the shell's decision logic, calls the same packaging script, writes `SHA256SUMS.txt`, uploads both as build artifacts, and creates (or updates) the GitHub release the file belongs to. |
 
 The workflow changes nothing about the build: it runs `npm run package:windows` with a `--version`,

@@ -71,6 +71,31 @@ test('packaging refuses console-only installers before doing any build work',()=
  for(const line of iss.split('\n').filter(line=>/Name: "\{(?:group|autodesktop)\}\\SCOUT";/.test(line)))assert.match(line,/Filename: "\{app\}\\host\\scout-shell.exe"/);
 });
 
+test('packaging toolchain pre-flight runs before any build work, and on its own',()=>{
+ const packager=(args:string[])=>spawnSync(process.execPath,['scripts/build-installer.mjs',...args],{encoding:'utf8'});
+ // The verify-only mode succeeds on any machine when nothing is required, builds nothing, and
+ // contradictory flags are refused instead of silently becoming a skip.
+ const idle=packager(['--check-toolchain','--no-shell','--no-installer']);
+ assert.equal(idle.status,0,idle.stdout+idle.stderr);assert.match(idle.stdout,/Nothing to check/);
+ assert.doesNotMatch(idle.stdout,/Building the control panel/);
+ const clash=packager(['--check-toolchain','--no-toolchain-check']);
+ assert.equal(clash.status,1);assert.match(clash.stderr,/contradict each other/);
+ const build=readFileSync('scripts/build-installer.mjs','utf8');
+ // The pre-flight must be invoked before step 1: the first real Windows run had Rust but no
+ // link.exe and only learned so after npm ci, vite, tsc and the start of a Rust compile.
+ const step0=build.indexOf('// Step 0.');const step1=build.indexOf("banner('Building the control panel");
+ assert.ok(step0>-1&&step1>step0,'the toolchain pre-flight runs before step 1');
+ // vswhere -find patterns are relative to the VS install path and Build Tools needs -products *;
+ // the old absolute pattern could never match and accused correctly set-up machines.
+ assert.equal(build.includes(String.raw`'C:\\**\\link.exe'`),false);
+ assert.ok(build.includes(String.raw`'VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\link.exe'`));
+ assert.ok(build.includes("'-products','*'"));
+ // The one-command setup installs exactly the pieces the pre-flight asks for, then verifies itself.
+ const setup=readFileSync('scripts/install-windows-build-tools.ps1','utf8');
+ for(const id of ['Microsoft.VisualStudio.2022.BuildTools','Microsoft.VisualStudio.Workload.VCTools','Rustlang.Rustup','JRSoftware.InnoSetup'])assert.ok(setup.includes(id),id);
+ assert.ok(setup.includes('--check-toolchain'),'the setup script ends by running the packaging check');
+});
+
 
 test('beta application review is owner/reviewer-only and never exposes invite secrets',async(t)=>{
  const site=await platformHost(t,{SCOUT_SURFACE:'site',SCOUT_BETA_AUTO_APPROVE:'1'});
