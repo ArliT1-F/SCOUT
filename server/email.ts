@@ -9,7 +9,7 @@ export interface EmailConfiguration {apiKey:string;from:string;publicBaseUrl:str
 export function emailConfiguration(env:NodeJS.ProcessEnv=process.env):EmailConfiguration|null{
  const apiKey=(env.SCOUT_EMAIL_API_KEY||'').trim();
  const from=(env.SCOUT_EMAIL_FROM||'').trim();
- const publicBaseUrl=(env.SCOUT_ACCOUNT_BASE_URL||'').trim().replace(/\/$/,'');
+ const publicBaseUrl=(env.SCOUT_ACCOUNT_BASE_URL||env.RENDER_EXTERNAL_URL||'').trim().replace(/\/$/,'');
  const encodedKey=(env.SCOUT_EMAIL_ENCRYPTION_KEY||'').trim();
  const apiUrl=(env.SCOUT_EMAIL_API_URL||'https://api.resend.com/emails').trim();
  if(!apiKey||!from||!publicBaseUrl||!encodedKey)return null;

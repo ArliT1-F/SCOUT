@@ -8,6 +8,7 @@ import path from 'node:path';
 import {loadEnvFile} from './env.js';
 import {emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport} from './email.js';
 import {DEFAULT_PLATFORM_SETTINGS,isPlatformOwner,sanitizeSettings,type PlatformSettings} from './platform.js';
+import {SupabaseAccountMirror,supabaseConfiguration,type SupabaseConfiguration} from './supabase-store.js';
 import {
  ACCOUNT_COOKIE,ACCOUNT_TTL_MS,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
  DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_APPLICATIONS_PER_HOUR,MAX_LOGIN_FAILURES,MIN_PASSWORD,
@@ -61,6 +62,9 @@ export interface AccountServiceOptions {
  /** `Secure` on the account cookie. 'auto' sets it when the request arrived over https. */
  secureCookies?:'auto'|boolean;
  log?:(line:string)=>void;
+ /** Optional Supabase configuration override; defaults to environment variables when set. */
+ supabase?:SupabaseConfiguration|null;
+ supabaseFetch?:typeof fetch;
 }
 export interface AccountService {
  server:Server;
@@ -77,7 +81,10 @@ type RequestContext={requestId:string;actorType:'anonymous'|'account'|'service';
 const requestContext=new AsyncLocalStorage<RequestContext>();
 export async function createAccountService(options:AccountServiceOptions={}):Promise<AccountService>{
  const now=options.now??nowMs;
- const file=options.file??process.env.SCOUT_ACCOUNT_DB??path.join('config','account-service','accounts.sqlite');
+ const log=options.log??((line:string)=>console.log(`[accounts] ${line}`));
+ const supabaseConfig=options.supabase===undefined?supabaseConfiguration():options.supabase;
+ const supabaseMirror=supabaseConfig?new SupabaseAccountMirror(supabaseConfig,options.supabaseFetch??fetch,log):null;
+ const file=options.file??process.env.SCOUT_ACCOUNT_DB??(supabaseMirror?':memory:':path.join('config','account-service','accounts.sqlite'));
  if(file!==':memory:') mkdirSync(path.dirname(path.resolve(file)),{recursive:true});
  const db=new DatabaseSync(file);
  // Existing installations are adopted by migration 1 without rebuilding tables; later changes are
@@ -95,7 +102,16 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   ...DEFAULT_PLATFORM_SETTINGS,applicationsOpen:options.applicationsOpen??process.env.SCOUT_ACCOUNT_APPLICATIONS!=='closed',
   reviewNote:options.reviewNote??process.env.SCOUT_ACCOUNT_REVIEW_NOTE??'',
  }));
- const settings=():PlatformSettings=>({...DEFAULT_PLATFORM_SETTINGS,...JSON.parse(String(db.prepare('SELECT data FROM platform_settings WHERE id = 1').get()!.data))});
+ if(supabaseMirror){
+  try{await supabaseMirror.hydrate(db)}catch(error){db.close();throw error}
+ }
+ const rawSettings=():Record<string,unknown>=>{
+  try{return JSON.parse(String(db.prepare('SELECT data FROM platform_settings WHERE id = 1').get()?.data||'{}'))}catch{return {}}
+ };
+ const settings=():PlatformSettings=>{
+  const {_platformStore:_ignored,...rest}=rawSettings();
+  return {...DEFAULT_PLATFORM_SETTINGS,...(rest as Partial<PlatformSettings>)};
+ };
  const serviceName=options.serviceName??options.host??process.env.SCOUT_ACCOUNT_NAME??'SCOUT account service';
  const mailConfiguration=emailConfiguration();
  const mailKey=options.emailEncryptionKey??mailConfiguration?.encryptionKey??null;
@@ -104,14 +120,23 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
  const invitationTtl=options.invitationTtlMs??24*60*60*1000;
  const recoveryTtl=options.recoveryTtlMs??60*60*1000;
  const secureCookies=options.secureCookies??'auto';
- const log=options.log??((line:string)=>console.log(`[accounts] ${line}`));
  // The limits are in memory on purpose (as in the local store): they exist to blunt a burst, not to
  // be an audit trail, and a restart is a legitimate way to clear them.
  const applications=new Map<string,number[]>();
  const recoveries=new Map<string,number[]>();
  const recoveryTargets=new Map<string,number[]>();
  const failures=new Map<string,{count:number;first:number}>();
- const run=(sql:string,...values:unknown[])=>db.prepare(sql).run(...values as never[]);
+ let dbDirty=false;
+ const run=(sql:string,...values:unknown[])=>{
+  const result=db.prepare(sql).run(...values as never[]);
+  if(Number(result.changes)>0) dbDirty=true;
+  return result;
+ };
+ const flushSupabase=async()=>{
+  if(!supabaseMirror||!dbDirty) return;
+  dbDirty=false;
+  await supabaseMirror.flush(db);
+ };
  const get=(sql:string,...values:unknown[])=>(db.prepare(sql).get(...values as never[])??null) as Row|null;
  const all=(sql:string,...values:unknown[])=>db.prepare(sql).all(...values as never[]) as Row[];
  const writeEvent=(kind:string,accountId:string|null,detail='')=>{
@@ -164,6 +189,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      log(`email delivery ${String(item.id)} deferred (${errorCode})`);
     }
    }
+   await flushSupabase();
   }finally{delivering=false}
  }
 
@@ -206,6 +232,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
    }
    writeEvent(`application.${decision}`,id);
    db.exec('COMMIT');
+   void flushSupabase().catch(()=>{});
    return {account:view(accountRow(id)!),invite};
   }catch(error){try{db.exec('ROLLBACK')}catch{};throw error}
  }
@@ -281,7 +308,22 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   const secure=secureCookies==='auto'?String(req.headers['x-forwarded-proto']||'').split(',')[0].trim()==='https'||Boolean((req.socket as any).encrypted):secureCookies;
   res.setHeader('Set-Cookie',value?accountCookie(value,ttlMs,secure):clearedAccountCookie(secure));
  }
- function json(res:ServerResponse,status:number,value:unknown){const text=JSON.stringify(value);res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Content-Length':Buffer.byteLength(text),'Cache-Control':'no-store'});res.end(text)}
+ async function json(res:ServerResponse,status:number,value:unknown){
+  if(status<500&&supabaseMirror&&dbDirty){
+   try{await flushSupabase()}catch(error){
+    const requestId=requestContext.getStore()?.requestId||'unknown';
+    const errorType=error instanceof Error?error.name:'UnknownError';
+    log(`request ${requestId} failed (${errorType})`);
+    const errText=JSON.stringify({error:'The account service hit an unexpected error.',code:'internal',requestId});
+    res.writeHead(500,{'Content-Type':'application/json; charset=utf-8','Content-Length':Buffer.byteLength(errText),'Cache-Control':'no-store'});
+    res.end(errText);
+    return;
+   }
+  }
+  const text=JSON.stringify(value);
+  res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Content-Length':Buffer.byteLength(text),'Cache-Control':'no-store'});
+  res.end(text);
+ }
  // A launcher code brings its own throttle: at most 20 pending at a time, started from one address per
  // minute. Codes are cheap to mint but not free to guess, and a human has to approve one anyway.
  function checkServiceKey(req:IncomingMessage){
@@ -311,7 +353,9 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      const next=sanitizeSettings(await body(req),settings(),String(current.account.email),now());
      db.exec('BEGIN IMMEDIATE');
      try{
-      run('UPDATE platform_settings SET data = ? WHERE id = 1',JSON.stringify(next));
+      const existing=rawSettings();
+      const persisted=existing._platformStore!==undefined?{...next,_platformStore:existing._platformStore}:next;
+      run('UPDATE platform_settings SET data = ? WHERE id = 1',JSON.stringify(persisted));
       const reviewerSet=new Set(next.betaReviewers);
       for(const account of all('SELECT id,normalized_email FROM accounts')){
        if(reviewerSet.has(String(account.normalized_email)))run('INSERT OR IGNORE INTO account_roles (account_id,role,granted_at,granted_by) VALUES (?,?,?,?)',account.id,'beta_reviewer',now(),current.account.id);
@@ -635,6 +679,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   // file before the runner tears it down.
   async close(){
    clearInterval(outboxTimer);
+   await flushSupabase().catch(()=>{});
    await new Promise<void>(resolve=>{try{server.close(()=>resolve())}catch{resolve()}});
    try{db.close()}catch{}
   },

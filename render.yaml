@@ -1,0 +1,39 @@
+# Render Blueprint — SCOUT Public Website + Account Service + Platform Host (100% Free Tier)
+# Persistence is backed by the linked Supabase PostgreSQL project (qtfbtfkthtvfpjvghyop / SCOUT DB)
+# so accounts, sessions, invites, devices, settings, and tournaments survive Render free-tier spin-downs.
+
+services:
+  - type: web
+    name: scout
+    runtime: node
+    plan: free
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NPM_CONFIG_PRODUCTION
+        value: "false"
+      - key: SCOUT_SURFACE
+        value: site
+      - key: SCOUT_EMBED_ACCOUNT_SERVICE
+        value: "1"
+      - key: SUPABASE_URL
+        value: https://qtfbtfkthtvfpjvghyop.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: SCOUT_OWNER_EMAIL
+        sync: false
+      - key: SCOUT_BETA_API_KEY
+        generateValue: true
+      - key: SCOUT_EMAIL_API_KEY
+        sync: false
+      - key: SCOUT_EMAIL_FROM
+        sync: false
+      - key: SCOUT_EMAIL_ENCRYPTION_KEY
+        sync: false
+      - key: SCOUT_ACCOUNT_BASE_URL
+        sync: false

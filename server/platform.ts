@@ -2,6 +2,7 @@ import {mkdir,readFile,rename,writeFile} from 'node:fs/promises';
 import {createHash,randomBytes} from 'node:crypto';
 import path from 'node:path';
 import {normalizeConfig} from './config.js';
+import {SupabasePlatformMirror,supabaseConfiguration,type SupabaseConfiguration} from './supabase-store.js';
 // Account-owned workspaces and aggregate metrics. Live GSI/WS remains one match per host.
 import {DEFAULT_MAP_ROTATION} from '../src/map-rotation.js';
 export {DEFAULT_MAP_ROTATION};
@@ -78,25 +79,47 @@ function eventSequence(id:string):[string,number]{
 export class PlatformStore {
  data:PlatformStoreData={version:1,settings:{...DEFAULT_PLATFORM_SETTINGS},tournaments:[],activeTournamentId:null,activeByAccount:{},globalLogs:[],eventIds:{},configReceipts:{}};
  private writes:Promise<void>=Promise.resolve();
- constructor(private readonly file:string,private readonly now:()=>number=Date.now){}
- async load(){
-  try{const p=JSON.parse(await readFile(this.file,'utf8'));
-   if(p&&Array.isArray(p.tournaments)){
-    this.data={...this.data,...p,version:1,settings:{...DEFAULT_PLATFORM_SETTINGS,...p.settings},activeByAccount:p.activeByAccount??{},globalLogs:p.globalLogs??[],eventIds:p.eventIds??{},configReceipts:p.configReceipts??{}};
-    for(const t of this.data.tournaments){
-     t.configVersion=t.configVersion||1;
-     if(t.config!==null){t.config=normalizeConfig(t.config);t.configHash=configHash(t.config)}else t.configHash=null;
-    }
-    const active=this.active();if(active&&!this.data.activeByAccount[active.accountId])this.data.activeByAccount[active.accountId]=active.id;
+ private readonly supabase:SupabasePlatformMirror|null;
+ constructor(
+  private readonly file:string,
+  private readonly now:()=>number=Date.now,
+  options:{supabase?:SupabaseConfiguration|null;supabaseFetch?:typeof fetch}={},
+ ){
+  const cfg=options.supabase===undefined?supabaseConfiguration():options.supabase;
+  this.supabase=cfg?new SupabasePlatformMirror(cfg,options.supabaseFetch??fetch):null;
+ }
+ private adoptSnapshot(p:any){
+  if(p&&Array.isArray(p.tournaments)){
+   this.data={...this.data,...p,version:1,settings:{...DEFAULT_PLATFORM_SETTINGS,...p.settings},activeByAccount:p.activeByAccount??{},globalLogs:p.globalLogs??[],eventIds:p.eventIds??{},configReceipts:p.configReceipts??{}};
+   for(const t of this.data.tournaments){
+    t.configVersion=t.configVersion||1;
+    if(t.config!==null){t.config=normalizeConfig(t.config);t.configHash=configHash(t.config)}else t.configHash=null;
    }
+   const active=this.active();if(active&&!this.data.activeByAccount[active.accountId])this.data.activeByAccount[active.accountId]=active.id;
+  }
+ }
+ async load(){
+  try{
+   const p=JSON.parse(await readFile(this.file,'utf8'));
+   this.adoptSnapshot(p);
   }catch(e:any){if(e?.code!=='ENOENT')console.warn('[platform] platform store unreadable:',e.message)}
+  if(this.supabase){
+   const remote=await this.supabase.load();
+   if(remote){
+    this.adoptSnapshot(remote);
+   }else if(this.data.tournaments.length>0||this.data.globalLogs.length>0){
+    await this.supabase.save(this.data);
+   }
+  }
   return this;
  }
  async save(){
   const snapshot=JSON.stringify(this.data,null,2);
+  const parsedSnapshot=JSON.parse(snapshot);
   const write=this.writes.then(async()=>{
    await mkdir(path.dirname(this.file),{recursive:true});
    await writeFile(this.file+'.tmp',snapshot,{mode:0o600});await rename(this.file+'.tmp',this.file);
+   if(this.supabase) await this.supabase.save(parsedSnapshot);
   });
   this.writes=write.catch(()=>{});await write;
  }
