@@ -18,7 +18,7 @@ export async function platformHost(t:{after:(fn:()=>Promise<void>)=>void},extra:
  const mailServer=createHttpServer(async(req,res)=>{let text='';for await(const chunk of req)text+=chunk;try{emails.push(JSON.parse(text))}catch{}res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({id:'test-email'}))});
  await new Promise<void>(resolve=>mailServer.listen(0,'127.0.0.1',()=>resolve()));
  const mailAddress=mailServer.address();const mailPort=typeof mailAddress==='object'&&mailAddress?mailAddress.port:0;
- const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('SCOUT_')||key.startsWith('OBS_')||['PORT','HOST','NODE_ENV','LOG_GSI'].includes(key))delete env[key];
+ const env={...process.env};for(const key of Object.keys(env))if(key.startsWith('SCOUT_')||key.startsWith('OBS_')||key.startsWith('SUPABASE_')||key.startsWith('RENDER_')||['PORT','HOST','NODE_ENV','LOG_GSI','DATABASE_URL'].includes(key))delete env[key];
  Object.assign(env,{PORT:String(port),NODE_ENV:'production',SCOUT_APP_ROOT:repository,SCOUT_PANEL_TOKEN:'platform-route-test-panel-token',GSI_TOKEN:'platform-route-test-gsi-token',SCOUT_OWNER_EMAIL:'owner@example.com',SCOUT_EMAIL_API_KEY:'test-email-key',SCOUT_EMAIL_FROM:'SCOUT Test <no-reply@example.test>',SCOUT_EMAIL_ENCRYPTION_KEY:Buffer.alloc(32,9).toString('base64'),SCOUT_EMAIL_API_URL:`http://127.0.0.1:${mailPort}/emails`,SCOUT_ACCOUNT_BASE_URL:`http://127.0.0.1:${port}`,...extra});
  if(prepare)await prepare(directory);
  const child=spawn(process.execPath,[path.join(repository,'node_modules','tsx','dist','cli.mjs'),path.join(repository,'server','index.ts')],{cwd:directory,env,stdio:['ignore','pipe','pipe']});

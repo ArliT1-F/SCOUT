@@ -32,6 +32,8 @@ import {PlatformStore,isPlatformOwner,platformOwnerEmail,normalizeEmail,METRIC_K
 import {PlatformDeviceService,PlatformSyncAgent,SyncOutbox} from './platform-sync.js';
 import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
 import {loadEnvFile} from './env.js';
+import {createAccountService} from './account-service.js';
+import {supabaseConfiguration} from './supabase-store.js';
 // Optional `.env` next to the working directory (copy .env.example). Real environment variables win;
 // a missing file is silent. This runs before any setting below is read, so `npm start` needs no shell
 // wrapper on Windows and systemd units can keep using EnvironmentFile=.
@@ -90,10 +92,22 @@ const archives=new MatchArchiveStore('recordings/matches.json');await archives.l
 // hosted account service to move all of that off the machine; the /api/beta/* paths stay the same,
 // so the panel, the landing page and the launcher need no changes.
 const betaDir=process.env.SCOUT_BETA_DIR||'config/beta';
-const betaApiUrl=process.env.SCOUT_BETA_API_URL||readInstalledEnv('SCOUT_BETA_API_URL');
-const betaApiKey=process.env.SCOUT_BETA_API_KEY||readInstalledEnv('SCOUT_BETA_API_KEY');
+let betaApiUrl=process.env.SCOUT_BETA_API_URL||readInstalledEnv('SCOUT_BETA_API_URL');
+let betaApiKey=process.env.SCOUT_BETA_API_KEY||readInstalledEnv('SCOUT_BETA_API_KEY');
 const requireLicence=process.env.SCOUT_REQUIRE_LICENCE||readInstalledEnv('SCOUT_REQUIRE_LICENCE');
 const platformUrl=process.env.SCOUT_PLATFORM_URL||readInstalledEnv('SCOUT_PLATFORM_URL');
+let embeddedAccountService:Awaited<ReturnType<typeof createAccountService>>|null=null;
+if(!betaApiUrl&&(process.env.SCOUT_EMBED_ACCOUNT_SERVICE==='1'||Boolean(supabaseConfiguration()))){
+ if(!betaApiKey){betaApiKey=randomUUID();process.env.SCOUT_BETA_API_KEY=betaApiKey}
+ embeddedAccountService=await createAccountService({
+  host:'127.0.0.1',
+  port:0,
+  apiKey:betaApiKey,
+  download:{url:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,version:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION,notes:process.env.SCOUT_DOWNLOAD_NOTES||''},
+ });
+ betaApiUrl=embeddedAccountService.url;
+ console.log(`[accounts] embedded account service active on ${embeddedAccountService.url} (${supabaseConfiguration()?'Supabase PostgreSQL':'SQLite'})`);
+}
 const beta:BetaRuntime=createBetaService({
  dir:betaDir,
  apiUrl:betaApiUrl,
@@ -118,6 +132,7 @@ async function refreshPlatformSettings(){
  const result=await beta.launcher.settings();
  if(result.ok)await platform.setSettings(result.value.settings);
 }
+if(beta.mode==='hosted') await refreshPlatformSettings().catch(()=>{});
 const devicePlatform=new PlatformDeviceService(platform,beta.launcher,'public/uploads',refreshPlatformSettings);
 if(!platformOwnerEmail()) console.log('[platform] SCOUT_OWNER_EMAIL is not set — the /admin platform panel stays closed until it names the SCOUT owner account.');
 const licence=new LicenceMonitor({
@@ -397,7 +412,7 @@ app.get('/api/beta/license',async(req,res)=>{
  res.json(view);
 });
 // Machine-readable liveness for a supervisor: no panel session, no match data, no secrets.
-app.get('/healthz',(_req,res)=>{
+app.get(['/healthz','/api/healthz'],(_req,res)=>{
  const gsi=feed.snapshot();
  const age=gsi.lastPacketAt?Date.now()-gsi.lastPacketAt:null;
  res.json({ok:true,uptimeMs:Date.now()-startedAt,version:'0.1.0',gsi:Boolean(gsi.accepted&&age!==null&&age<5000),outputs:wss.clients.size});
@@ -825,7 +840,13 @@ if(beta.site){
    if(route==='/apply'&&!platform.settings.applicationsOpen){res.status(403).json({error:'The closed beta is not taking new applications right now.',code:'applications-closed'});return}
    const response=await fetch(upstream+req.originalUrl.replace(/^\/api\/beta/,''),{
     method:req.method,signal:AbortSignal.timeout(30_000),
-    headers:{'Content-Type':'application/json',...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),...(betaApiKey?{Authorization:`Bearer ${betaApiKey}`}:{})},
+    headers:{
+     'Content-Type':'application/json',
+     ...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),
+     ...(req.get('user-agent')?{'User-Agent':req.get('user-agent') as string}:{}),
+     ...(requestIsSecure(req.headers)?{'X-Forwarded-Proto':'https'}:{}),
+     ...(betaApiKey?{Authorization:`Bearer ${betaApiKey}`}:{}),
+    },
     body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
    });
    let text=await response.text();
@@ -846,6 +867,43 @@ if(beta.site){
    res.status(503).json({error:`The SCOUT account service could not be reached (${error?.message||'network error'}).`,code:'upstream-unreachable'});
   }
  });
+ if(embeddedAccountService){
+  const bareAccountRoute=(method:string,route:string)=>{
+   if(method==='GET'&&(route==='/status'||route==='/settings'||route==='/applications'))return true;
+   if(method==='PUT'&&route==='/settings')return true;
+   if(method==='POST'){
+    if(new Set(['/license/check','/apply','/login','/logout','/activate','/password-recovery','/password-recovery/complete','/device/start','/device/poll','/device/approve','/device/deny','/devices/revoke']).has(route))return true;
+    if(/^\/applications\/[^/]+(\/resend-invitation)?$/.test(route))return true;
+   }
+   return false;
+  };
+  app.use(async(req,res,next)=>{
+   const route=req.path.replace(/\/+$/,'')||'/';
+   if(!bareAccountRoute(req.method,route)){next();return}
+   try{
+    const response=await fetch(upstream+req.originalUrl,{
+     method:req.method,signal:AbortSignal.timeout(30_000),
+     headers:{
+      'Content-Type':'application/json',
+      ...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{}),
+      ...(req.get('authorization')?{Authorization:req.get('authorization') as string}:{}),
+      ...(req.get('origin')?{Origin:req.get('origin') as string}:{}),
+      ...(req.get('host')?{Host:req.get('host') as string}:{}),
+      ...(req.get('user-agent')?{'User-Agent':req.get('user-agent') as string}:{}),
+      ...(requestIsSecure(req.headers)?{'X-Forwarded-Proto':'https'}:{}),
+     },
+     body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
+    });
+    const text=await response.text();
+    const cookies=typeof response.headers.getSetCookie==='function'?response.headers.getSetCookie():[];
+    if(cookies.length) res.setHeader('Set-Cookie',cookies);
+    if(req.method==='PUT'&&route==='/settings'&&response.ok) await refreshPlatformSettings().catch(()=>{});
+    res.status(response.status).type(response.headers.get('content-type')||'application/json').send(text);
+   }catch(error:any){
+    res.status(503).json({error:`The SCOUT account service could not be reached (${error?.message||'network error'}).`,code:'upstream-unreachable'});
+   }
+  });
+ }
  console.log(`[beta] Closed beta accounts are served by ${upstream||'(no SCOUT_BETA_API_URL set)'} — the host proxies /api/beta to it.`);
 }
 const operatorInput=z.object({label:z.string().trim().min(1).max(64),role:z.enum(['producer','designer','viewer'])}).strip();

@@ -6,7 +6,7 @@ export function surfaceFromEnv(env:NodeJS.ProcessEnv=process.env):Surface {
  return value;
 }
 export function websitePathAllowed(path:string){
- if(path==='/healthz'||path==='/api/surface')return true;
+ if(path==='/healthz'||path==='/api/healthz'||path==='/api/surface')return true;
  if(path.startsWith('/api/beta/'))return !/^\/api\/beta\/(link|license)(\/|$)/.test(path);
  if(path.startsWith('/api/platform/'))return /^\/api\/platform\/(admin|status|stats|device)(\/|$)/.test(path);
  return !path.startsWith('/api/')&&!['/ws','/gsi','/app','/panel','/obs','/game','/remote'].includes(path.replace(/\/+$/,'').toLowerCase());
