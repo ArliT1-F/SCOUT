@@ -15,9 +15,13 @@ Prerequisites, all on the machine that builds (not on the machine that runs SCOU
 | | |
 | --- | --- |
 | **Node.js 20+** | builds the panel and the host; ships as the bundled runtime too |
-| **Rust + `cargo install tauri-cli --version "^2"`** | builds `scout-shell.exe`, the launcher (overlay + operator panel), required for every distributable installer |
+| **Rust + the Tauri 2 CLI** | builds `scout-shell.exe`, the launcher (overlay + operator panel), required for every distributable installer. Install with `cargo install tauri-cli --version "^2"`, or let the npm package `@tauri-apps/cli` (a devDependency, so `npm ci` installs it) do it — the script falls back to it automatically when `cargo tauri` is not on the machine |
 | **[Inno Setup 6.3+](https://jrsoftware.org/isdl.php)** | packs the wizard (`ISCC.exe`) |
 | Internet | to fetch the Node runtime and the WebView2 bootstrapper, both verified/skipped cleanly if absent |
+
+The Tauri CLI is picked automatically: the script runs `cargo tauri build --no-bundle` when the
+`cargo-tauri` subcommand is installed (what the release runner does) and falls back to the npm
+`@tauri-apps/cli` — a devDependency, so `npm ci` has already put it in `node_modules` — otherwise.
 
 ```powershell
 npm run package:windows

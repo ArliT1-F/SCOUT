@@ -173,7 +173,7 @@ No public registration endpoint exists (spec-compliant). No password-recovery fl
 
 | Command | What it does | Prerequisites |
 | --- | --- | --- |
-| `npm run shell:dev` / `npm run shell:build` | Tauri v2 dev/build for `src-tauri/` | Windows (target), Rust ≥1.77, `cargo install tauri-cli --version "^2"` |
+| `npm run shell:dev` / `npm run shell:build` | Tauri v2 dev/build for `src-tauri/` | Windows (target), Rust ≥1.77, the Tauri 2 CLI (`@tauri-apps/cli` npm package, or `cargo install tauri-cli --version "^2"`) |
 | `npm run package:windows` | `node scripts/build-installer.mjs` → `dist-installer/SCOUT-Setup-<version>.exe` | Windows, Rust + Tauri CLI, Inno Setup 6.3+; stages panel build, `tsc -p tsconfig.build.json` server build, shell exe, Node runtime, WebView2 bootstrapper, **runs a staged-host smoke test**, then packs |
 | `npm run shell:test` | `cargo test` for `src-tauri/core` (geometry, plan, config, licence parser) | Rust toolchain |
 | `npm run shell:test:win32` | Win32 layer vs fake `user32` (`src-tauri/verify/run.sh`) | bash + Rust |
