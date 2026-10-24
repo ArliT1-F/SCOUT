@@ -59,21 +59,60 @@ export function resendTransport(config:EmailConfiguration,fetchImpl:typeof fetch
  };
 }
 
+/** Shared, image-independent transactional layout. Tables and inline styles work in email clients
+ * that strip CSS; the plain-text alternative below carries the same action and security guidance. */
+function accountEmailHtml({displayName,url,expiry,kind}:{displayName:string;url:string;expiry:string;kind:'invitation'|'recovery'}){
+ const invitation=kind==='invitation';
+ const name=escapeHtml(displayName||'SCOUT organiser'),link=escapeHtml(url),safeExpiry=escapeHtml(expiry);
+ const title=invitation?'Your next great broadcast starts here.':'Let’s get you back in.';
+ const preheader=invitation?'You’re approved for the SCOUT closed beta. Set your password to get started.':'A secure link to reset your SCOUT password. This link can only be used once.';
+ const button=invitation?'Set your SCOUT password':'Reset your password';
+ const guidance=invitation?'If you did not request SCOUT access, you can safely ignore this invitation.':'If you did not request this reset, you can safely ignore this email. Your password will not change.';
+ return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>${invitation?'Your SCOUT invitation':'Reset your SCOUT password'}</title></head>
+<body style="margin:0;padding:0;background-color:#f3f0f5;font-family:Arial,Helvetica,sans-serif;color:#2b2432;-webkit-text-size-adjust:100%;">
+<div style="display:none;font-size:1px;line-height:1px;color:#f3f0f5;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">${preheader}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f3f0f5"><tr><td align="center" style="padding:36px 12px;">
+<!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;border-collapse:separate;">
+<tr><td bgcolor="#17121e" style="padding:30px 32px;border-radius:12px 12px 0 0;border-bottom:3px solid #dd9acb;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="font-size:30px;font-weight:bold;letter-spacing:-1.6px;color:#f5edf8;">scout<span style="color:#e8a7d4;">.</span></td><td align="right" style="font-size:9px;font-weight:bold;letter-spacing:1.8px;color:#d6b5d0;">${invitation?'CLOSED BETA':'ACCOUNT SECURITY'}</td></tr></table>
+<p style="margin:28px 0 10px;font-size:10px;font-weight:bold;letter-spacing:2px;line-height:1.7;color:#e6acd5;">${invitation?'YOUR INVITATION IS HERE':'PASSWORD RECOVERY'}</p>
+<h1 style="margin:0;max-width:410px;font-size:32px;line-height:1.2;font-weight:bold;letter-spacing:-.8px;color:#ffffff;">${title}</h1>
+<p style="margin:16px 0 2px;font-size:13px;line-height:1.7;color:#c9b9d2;">The tools behind your next CS2 broadcast.</p>
+</td></tr>
+<tr><td bgcolor="#ffffff" style="padding:32px;border-left:1px solid #e7dfea;border-right:1px solid #e7dfea;">
+<p style="margin:0 0 18px;font-size:16px;line-height:1.6;color:#302536;">Hello ${name},</p>
+<p style="margin:0 0 24px;font-size:15px;line-height:1.8;color:#625569;">${invitation?'Your SCOUT closed-beta application has been approved. We’re glad to have you on board. Set your password to activate your account and take the first step toward your next broadcast.':'We received a request to reset the password for your SCOUT account. Use the secure button below to choose a new password and get back to your workspace.'}</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" bgcolor="#e5a2cf" style="border:1px solid #cf87b9;border-radius:6px;mso-padding-alt:16px 26px;"><a href="${link}" style="display:inline-block;padding:16px 26px;mso-padding-alt:0;font-size:14px;line-height:1.3;font-weight:bold;text-decoration:none;color:#29162a;border-radius:6px;">${button} &rarr;</a></td></tr></table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:26px;"><tr><td bgcolor="#f7f3f9" style="padding:18px 20px;border:1px solid #e8dfed;border-left:3px solid #c486b7;border-radius:4px;">
+<p style="margin:0 0 6px;font-size:10px;letter-spacing:1px;font-weight:bold;color:#7d4d79;">ONE LINK. ONE USE.</p>
+<p style="margin:0;font-size:12px;line-height:1.8;color:#625269;">For your security, this link can only be used once.<br>Expires <strong style="font-weight:bold;color:#3b2b45;">${safeExpiry}</strong>.</p>
+</td></tr></table>
+${invitation?`<h2 style="margin:28px 0 12px;font-size:14px;color:#35263f;">Your first steps with SCOUT</h2><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="28" valign="top" style="padding:6px 0;font-size:12px;font-weight:bold;color:#9b5e91;">01</td><td style="padding:6px 0;font-size:13px;line-height:1.7;color:#625569;">Set your password and activate your account.</td></tr><tr><td width="28" valign="top" style="padding:6px 0;font-size:12px;font-weight:bold;color:#9b5e91;">02</td><td style="padding:6px 0;font-size:13px;line-height:1.7;color:#625569;">Sign in to download the SCOUT desktop app.</td></tr><tr><td width="28" valign="top" style="padding:6px 0;font-size:12px;font-weight:bold;color:#9b5e91;">03</td><td style="padding:6px 0;font-size:13px;line-height:1.7;color:#625569;">Create your tournament and make it broadcast-ready.</td></tr></table>`:''}
+<p style="margin:28px 0 0;padding-top:22px;border-top:1px solid #eee7f1;font-size:11px;line-height:1.8;color:#7e6b88;">Button not working? Copy and paste this link into your browser:</p>
+<p style="margin:8px 0 0;font-size:11px;line-height:1.8;word-break:break-all;overflow-wrap:anywhere;"><a href="${link}" style="color:#925484;text-decoration:underline;word-break:break-all;">${link}</a></p>
+</td></tr>
+<tr><td bgcolor="#faf7fc" style="padding:22px 32px;border:1px solid #e7dfea;border-top:0;border-radius:0 0 12px 12px;"><p style="margin:0;font-size:11px;line-height:1.8;color:#7e6b88;">${guidance} Keep this link private; the SCOUT team will never ask you to share your password.</p></td></tr>
+<tr><td align="center" style="padding:24px 20px 0;"><p style="margin:0;font-size:11px;font-weight:bold;letter-spacing:1px;color:#6c5b77;">SCOUT &nbsp; / &nbsp; BUILT FOR BROADCAST</p><p style="margin:8px 0 0;font-size:10px;line-height:1.8;color:#8d7d96;">This is a transactional email about your SCOUT account.</p></td></tr>
+</table>
+<!--[if mso]></td></tr></table><![endif]-->
+</td></tr></table></body></html>`;
+}
 export function invitationEmail(to:string,displayName:string,url:string,expiresAt:number):OutboundEmail{
  const expiry=new Date(expiresAt).toUTCString();
- const safeName=escapeHtml(displayName||'SCOUT organiser');
  return {
   to,subject:'Your SCOUT closed-beta invitation',
-  text:`Hello ${displayName||'SCOUT organiser'},\n\nYour SCOUT closed-beta application was approved. Set your password using this single-use link:\n${url}\n\nThe link expires ${expiry}. If you did not request access, you can ignore this message.\n`,
-  html:`<p>Hello ${safeName},</p><p>Your SCOUT closed-beta application was approved. Set your password using this single-use link:</p><p><a href="${escapeHtml(url)}">Set your SCOUT password</a></p><p>The link expires ${escapeHtml(expiry)}. If you did not request access, you can ignore this message.</p>`,
+  text:`Hello ${displayName||'SCOUT organiser'},\n\nYour SCOUT closed-beta application was approved. Welcome aboard! Set your password using this single-use link:\n${url}\n\nThe link expires ${expiry}.\n\nYour first steps:\n1. Set your password and activate your account.\n2. Sign in to download the SCOUT desktop app.\n3. Create your tournament and make it broadcast-ready.\n\nIf you did not request access, you can ignore this message. Keep this link private; the SCOUT team will never ask you to share your password.\n\nSCOUT — Built for broadcast\n`,
+  html:accountEmailHtml({displayName,url,expiry,kind:'invitation'}),
  };
 }
 export function recoveryEmail(to:string,displayName:string,url:string,expiresAt:number):OutboundEmail{
- const expiry=new Date(expiresAt).toUTCString(),safeName=escapeHtml(displayName||'SCOUT organiser');
+ const expiry=new Date(expiresAt).toUTCString();
  return {
   to,subject:'Reset your SCOUT password',
-  text:`Hello ${displayName||'SCOUT organiser'},\n\nUse this single-use link to reset your SCOUT password:\n${url}\n\nThe link expires ${expiry}. If you did not request a reset, ignore this message; your password will not change.\n`,
-  html:`<p>Hello ${safeName},</p><p>Use this single-use link to reset your SCOUT password:</p><p><a href="${escapeHtml(url)}">Reset your SCOUT password</a></p><p>The link expires ${escapeHtml(expiry)}. If you did not request a reset, ignore this message; your password will not change.</p>`,
+  text:`Hello ${displayName||'SCOUT organiser'},\n\nWe received a request to reset your SCOUT password. Use this single-use link to choose a new password:\n${url}\n\nThe link expires ${expiry}. If you did not request a reset, ignore this message; your password will not change. Keep this link private; the SCOUT team will never ask you to share your password.\n\nSCOUT — Built for broadcast\n`,
+  html:accountEmailHtml({displayName,url,expiry,kind:'recovery'}),
  };
 }
 function escapeHtml(value:string){return value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!))}
