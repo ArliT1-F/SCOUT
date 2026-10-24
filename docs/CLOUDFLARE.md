@@ -119,13 +119,87 @@ The Node host and account service expose their own `/healthz` routes with servic
 ## Troubleshooting what the logs show
 
 Every 5xx is logged by Cloudflare as `"level": "error"` with `"outcome": "ok"` (the Worker did
-answer; the status was a 5xx). Three symptoms account for almost all of the log noise:
+answer; the status was a 5xx). These symptoms account for almost all of the log noise:
 
 | Log line | Cause | Fix |
 |---|---|---|
 | `TypeError: Cannot read properties of undefined (reading 'fetch')` and a 500 on `/` or any page route | The **deployed version has no static-assets binding**. `functions/worker.ts` hands everything that is not `/api/*` to `env.ASSETS`, which comes from `[assets] binding = "ASSETS"` in `wrangler.toml`. A Worker created or edited outside it — dashboard *Quick edit*, a drag-drop upload, `wrangler deploy` run against a config without `[assets]`, or a Worker that predates the assets block — has no such binding, so `env.ASSETS` is `undefined`. | Deploy from a checkout with `npm ci && npm run build && npx wrangler deploy`. The deploy output must mention the assets upload; afterwards Workers & Pages → scout → Settings → Bindings lists `ASSETS` (Static Assets). The Worker now answers `{"code": "assets-unavailable"}` with an operator hint instead of throwing, so this is unambiguous in the logs. |
 | `GET /api/beta/status` → 503 `{"code": "service-unavailable"}` | `SCOUT_ACCOUNT_SERVICE_URL` is not set on the Worker, so the account proxy has nothing to forward to. This is expected until the Node.js account service is deployed; the SPA stays readable and reports "host could not be reached". | Deploy the account service, then `npx wrangler secret put SCOUT_ACCOUNT_SERVICE_URL` (and `SCOUT_BETA_API_KEY` for the owner desk). |
 | `GET /api/platform/status` (or any `/api/platform/*`) → 503 `{"code": "unavailable"}` | The platform desk deliberately lives on the central SCOUT host, not this deployment (`functions/api/platform/[[path]].ts`). The SPA polls it once per page load. | Nothing to fix on the website; it is the documented stub. It only disappears when the SPA stops probing for host-only features. |
+| `GET /api/beta/*` → an HTML/plain-text Cloudflare 1xxx response (for example 403 `error code: 1003`) | That body did not come from `server/account-service.ts`: its contract is JSON. The old proxy relayed upstream edge/gateway pages unchanged. | Deploy the instrumented proxy and follow the correlation steps below. A received upstream response is different from a thrown `fetch()` error. |
+
+### Correlating a beta proxy failure
+
+The beta proxy emits one JSON `scout-beta-proxy` log record per request and returns the same random
+correlation ID in `X-Scout-Request-Id`. Records include the incoming pathname, upstream hostname and
+pathname (never its query or credentials), whether `fetch()` was attempted, upstream/proxy statuses,
+and a bounded sanitized error body or exception summary. Request bodies, cookies, authorization
+values, application data and service keys are not logged.
+
+From this repository root, using the same Cloudflare account that owns Worker `scout`:
+
+```sh
+npx wrangler deploy
+npx wrangler tail scout
+```
+
+In another terminal:
+
+```sh
+curl -i https://scout.arliturka2.workers.dev/api/beta/status
+```
+
+Read the record whose `requestId` matches `X-Scout-Request-Id`:
+
+- `upstreamFetchAttempted:false` with 503 means the variable is missing or malformed on this Worker.
+- `errorName`/`errorMessage` with no `upstreamStatus` means `fetch()` threw; no upstream HTTP response
+  was received.
+- `upstreamStatus` means a response **was** received. Valid SCOUT JSON errors retain their status and
+  `{error,code}` body. A non-contract response becomes 502 `upstream-invalid-response` instead of
+  leaking a gateway page.
+- `cloudflareErrorCode:"1003"` together with `upstreamStatus:403` identifies a received Cloudflare
+  edge response, not an account-service refusal. Cloudflare defines 1003 as **Direct IP Access Not
+  Allowed**. Check `upstreamHostname` before changing anything else:
+  - If it is an IP address, loopback name, stale hostname, or anything other than the intended
+    account-service hostname, correct the secret on Worker `scout`. For the temporary tunnel used
+    during diagnosis, the exact command is:
+
+    ```sh
+    printf '%s' 'https://ata-honolulu-pumps-honey.trycloudflare.com' | \
+      npx wrangler secret put SCOUT_ACCOUNT_SERVICE_URL
+    ```
+
+    Run this once only when the log shows that the destination is wrong (or when deliberately
+    replacing the tunnel origin), then repeat the status request. Do not repeatedly reset a secret
+    whose logged hostname is already correct.
+  - If it is the expected `*.trycloudflare.com` hostname and the path is `/status`, URL construction
+    and secret targeting are confirmed. The failure is in the Worker-egress/Quick-Tunnel path, not
+    the Node route. Move the same unmodified service to a stable account-service hostname (a named
+    tunnel on an always-online machine or a persistent Node host), verify that origin's `/status`,
+    and update the secret to that new origin. Do not treat Quick Tunnel's expected `404` on `GET /`
+    as a failure; only its contract routes such as `/status` and `/healthz` are health signals.
+
+The production Worker is named `scout` in `wrangler.toml`; there is no separate `[env.*]` deployment
+in this checkout. Run secret and deployment commands from this root without an unrelated `--env` or
+`--name` override so the variable and code apply to the same Worker.
+
+### Account-service hosting after diagnosis
+
+A Quick Tunnel is intentionally temporary: its random hostname changes when restarted, it has no
+production availability guarantee, and both `cloudflared` and the laptop running Node must stay
+online. It is useful for the checks above, not a durable beta backend.
+
+| Option | Fit with the existing service | Operational trade-off |
+| --- | --- | --- |
+| Persistent Node.js VM/container with an HTTPS hostname and a durable volume | **Smallest reliable independent deployment.** Keep `server/account-service.ts`, SQLite, cookies, email and all routes unchanged. | Requires a small always-on host, process supervision, TLS, persistent-volume backups and monitoring. This is the recommended default when no always-on machine already exists. |
+| Named Cloudflare Tunnel to an always-online machine | Keeps Node/SQLite unchanged, avoids opening an inbound port and provides a stable hostname. | Still depends on that machine, its disk and `cloudflared`; a laptop remains a production dependency. Back up SQLite and run both processes under a supervisor. |
+| Worker + Supabase | Not a drop-in move: the service directly uses Node's HTTP server, `node:sqlite` and filesystem/runtime APIs. | Requires an explicitly planned runtime/store migration, contract and auth regression tests, data migration/backup and email verification. It is not part of the connectivity fix. |
+
+For any option, use an HTTPS hostname rather than a raw IP for `SCOUT_ACCOUNT_SERVICE_URL`, and
+verify `GET <account-service-origin>/status` before pointing the Worker at it. Keep
+`SCOUT_ACCOUNT_BASE_URL` pointed at the public website origin used in emailed `/login` links. The
+account-service origin itself does not serve the SPA or `GET /`. Loopback HTTP remains supported for
+local Wrangler development.
 
 `wrangler`'s pinned major (`^3.114`) understands everything `wrangler.toml` uses here —
 `[assets]` with `binding`, `not_found_handling`, `run_worker_first` and `[observability.logs]` —
