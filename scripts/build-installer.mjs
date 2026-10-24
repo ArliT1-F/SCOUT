@@ -4,7 +4,8 @@
 // What it does, in order:
 //   1. build the control panel and overlay pages (vite -> dist/)
 //   2. compile the host to plain JavaScript (tsc -p tsconfig.build.json -> build/, server/ + src/radar.ts)
-//   3. build the overlay shell (cargo tauri build -> scout-shell.exe)
+//   3. build the overlay shell (cargo tauri build, or npx @tauri-apps/cli when cargo-tauri is
+//      not installed -> scout-shell.exe)
 //   4. install the host's production dependencies into a staging directory
 //   5. put a Node runtime in the staging directory, so the operator needs no Node.js
 //   6. fetch the WebView2 bootstrapper for machines that lack it
@@ -59,7 +60,8 @@ const usage=`Builds the SCOUT Windows installer.
   --no-webview2        skip fetching the WebView2 bootstrapper
   --no-npm-ci          reuse the existing node_modules instead of npm ci
   --no-installer       stop after staging (no Inno Setup needed)
-  --tauri-cli <cmd>    cargo-like command that has the Tauri 2 CLI (default: cargo)
+  --tauri-cli <cmd>    cargo-like command that has the Tauri 2 CLI (default: cargo, falling back
+                       to npx @tauri-apps/cli when cargo-tauri is not installed)
   --iscc <path>        path to ISCC.exe (default: found in the usual places)
   --stage <dir>        staging directory (default: <repo>/dist-stage)
   --out <dir>          where the installer is written (default: <repo>/dist-installer)
@@ -117,12 +119,12 @@ function sizeOf(target){
 }
 function megabytes(bytes){return `${(bytes/1024/1024).toFixed(1)} MB`}
 
-function run(command,args,{cwd=repoRoot,allowFailure=false,quiet=false}={}){
+function run(command,args,{cwd=repoRoot,allowFailure=false,quiet=false,shell=false}={}){
   if(!quiet) log(`  $ ${command} ${args.join(' ')}`);
   const result=spawnSync(command,args,{
     cwd,
     stdio:quiet?['ignore','pipe','pipe']:'inherit',
-    shell:false,
+    shell,
     env:process.env,
   });
   if(result.error){
@@ -146,6 +148,21 @@ function runNpm(args,cwd=repoRoot){
   log(`  $ npm ${args.join(' ')}`);
   const result=spawnSync('npm',args,{cwd,stdio:'inherit',shell:process.platform==='win32'});
   if(result.status!==0) fail(`npm ${args.join(' ')} failed with exit code ${result.status}.`);
+}
+
+// The Tauri 2 CLI arrives in one of two shapes: the cargo subcommand (`cargo install tauri-cli
+// --version "^2"`, which the release runner installs) or the npm package `@tauri-apps/cli` (a
+// devDependency of this repository, so `npm ci` already put it in node_modules). Prefer the cargo
+// one; when `cargo tauri` is not installed - a machine with Rust but no cargo-tauri, or one with
+// only npm - run the npm CLI instead, so a fresh checkout can still package. `npx` is a .cmd shim
+// on Windows, hence the shell flag.
+function resolveTauriCli(){
+  if(options.tauriCli!=='cargo')
+    return {command:options.tauriCli,args:['tauri','build','--no-bundle'],shell:process.platform==='win32',fallback:false};
+  const probe=spawnSync('cargo',['tauri','--version'],{stdio:'ignore'});
+  if(probe.status===0)
+    return {command:'cargo',args:['tauri','build','--no-bundle'],shell:false,fallback:false};
+  return {command:'npx',args:['@tauri-apps/cli','build','--no-bundle'],shell:process.platform==='win32',fallback:true};
 }
 
 async function download(url,target){
@@ -200,7 +217,11 @@ banner('Building the overlay shell (scout-shell.exe)');
 let shellExe='';
 if(options.shell){
   // Never publish a console-only installer after a failed GUI build. Preserve compiler output.
-  run(options.tauriCli,['tauri','build','--no-bundle'],{cwd:repoRoot});
+  const tauri=resolveTauriCli();
+  if(tauri.fallback)
+    warn('cargo-tauri is not installed; building the shell with the npm @tauri-apps/cli '+
+         '(installed by npm ci). Install it with `cargo install tauri-cli --version "^2"` for a faster build.');
+  run(tauri.command,tauri.args,{cwd:repoRoot,shell:tauri.shell});
   shellExe=path.join(repoRoot,'src-tauri','target','release','scout-shell.exe');
   if(!existsSync(shellExe)) fail('GUI build produced no scout-shell.exe. Refusing to package SCOUT.');
   log(`  scout-shell.exe ${megabytes(statSync(shellExe).size)}`);
