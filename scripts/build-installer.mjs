@@ -165,6 +165,41 @@ function resolveTauriCli(){
   return {command:'npx',args:['@tauri-apps/cli','build','--no-bundle'],shell:process.platform==='win32',fallback:true};
 }
 
+// The shell is built for the Rust msvc target, which links with link.exe from the Visual C++
+// toolchain. A machine with Rust but no C++ workload (no VS Build Tools, or VS without the
+// "Desktop development with C++" workload) downloads 400 crates and compiles for minutes before
+// failing at the linker, so point at the missing piece before that starts. vswhere ships with
+// every VS/Build Tools installation and locates the latest instance that has the C++ compilers.
+// It exits 0 even when nothing matches, so the check is on the output - and this is a warning,
+// not a failure: a GNU toolchain or a custom linker setup can build without VS.
+function findVswhere(){
+  for(const base of [process.env.ProgramFiles,process.env['ProgramFiles(x86)']]){
+    if(!base) continue;
+    const candidate=path.join(base,'Microsoft Visual Studio','Installer','vswhere.exe');
+    if(existsSync(candidate)) return candidate;
+  }
+  return '';
+}
+
+function checkMsvcToolchain(){
+  if(process.platform!=='win32') return;
+  const vswhere=findVswhere();
+  if(!vswhere){
+    warn('no Visual Studio / Build Tools installation found, but the Rust MSVC build needs the '+
+         'Visual C++ linker (link.exe). The shell build below will fail at the linker unless you '+
+         'install Build Tools for Visual Studio with the C++ workload, for example:'+
+         '\n  winget install --id Microsoft.VisualStudio.2022.BuildTools --silent '+
+         '--accept-package-agreements --accept-source-agreements --override '+
+         '"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"');
+    return;
+  }
+  const found=capture(vswhere,['-latest','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','-find','C:\\**\\link.exe']);
+  if(!found)
+    warn('Visual Studio is installed but the C++ workload (link.exe) is missing. Run the VS '+
+         'Installer and add the VC++ workload ("Desktop development with C++"), then re-run the '+
+         'build - the shell build below will fail at the linker without it.');
+}
+
 async function download(url,target){
   log(`  $ download ${url}`);
   const response=await fetch(url,{redirect:'follow'});
@@ -216,6 +251,7 @@ log(`  ${path.relative(repoRoot,compiled)} written`);
 banner('Building the overlay shell (scout-shell.exe)');
 let shellExe='';
 if(options.shell){
+  checkMsvcToolchain();
   // Never publish a console-only installer after a failed GUI build. Preserve compiler output.
   const tauri=resolveTauriCli();
   if(tauri.fallback)
