@@ -15,7 +15,7 @@ Prerequisites, all on the machine that builds (not on the machine that runs SCOU
 | | |
 | --- | --- |
 | **Node.js 20+** | builds the panel and the host; ships as the bundled runtime too |
-| **Rust + the Tauri 2 CLI + the MSVC linker** | builds `scout-shell.exe`, the launcher (overlay + operator panel), required for every distributable installer. Install with `cargo install tauri-cli --version "^2"`, or let the npm package `@tauri-apps/cli` (a devDependency, so `npm ci` installs it) do it — the script falls back to it automatically when `cargo tauri` is not on the machine. The Rust msvc target also needs the Visual C++ linker: install **Build Tools for Visual Studio** (or VS with the *Desktop development with C++* workload) — the build script warns when it is missing, before the compile starts |
+| **Rust + the Tauri 2 CLI + the MSVC linker** | builds `scout-shell.exe`, the launcher (overlay + operator panel), required for every distributable installer. Install with `cargo install tauri-cli --version "^2"`, or let the npm package `@tauri-apps/cli` (a devDependency, so `npm ci` installs it) do it — the script falls back to it automatically when `cargo tauri` is not on the machine. The Rust msvc target also needs the Visual C++ linker: install **Build Tools for Visual Studio** (or VS with the *Desktop development with C++* workload; VS Code does not count). The build script checks for all of it **before building anything** and stops with the exact fix when a piece is missing — no more discovering `link.exe` is absent after a panel build, a host compile and most of a Rust compile, or discovering Inno Setup is absent at the very last step |
 | **[Inno Setup 6.3+](https://jrsoftware.org/isdl.php)** | packs the wizard (`ISCC.exe`) |
 | Internet | to fetch the Node runtime and the WebView2 bootstrapper, both verified/skipped cleanly if absent |
 
@@ -23,11 +23,26 @@ The Tauri CLI is picked automatically: the script runs `cargo tauri build --no-b
 `cargo-tauri` subcommand is installed (what the release runner does) and falls back to the npm
 `@tauri-apps/cli` — a devDependency, so `npm ci` has already put it in `node_modules` — otherwise.
 
+A fresh Windows machine is one command away: this installs the Build Tools (C++ workload), Rust
+(MSVC target), Inno Setup and — only when missing entirely — Node, all through winget, skipping
+whatever is already present, and finishes by verifying the machine with the packaging script
+itself:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-windows-build-tools.ps1
+```
+
+`npm run package:windows:check` (or `node scripts/build-installer.mjs --check-toolchain`) runs
+that same verification on its own and builds nothing. A GNU Rust target (`*-pc-windows-gnu`) is
+detected and never asked for Visual Studio; anything more exotic, like `lld-link` configured in
+`.cargo/config.toml`, passes `--no-toolchain-check` to skip the pre-flight.
+
 ```powershell
 npm run package:windows
 # = node scripts/build-installer.mjs
 
 node scripts/build-installer.mjs --help
+node scripts/build-installer.mjs --check-toolchain     # can this machine build? builds nothing
 node scripts/build-installer.mjs --no-shell            # ERROR: GUI required for an installer
 node scripts/build-installer.mjs --runtime-zip C:\node-v22.20.0-win-x64.zip   # offline runtime
 node scripts/build-installer.mjs --no-installer --no-shell   # just stage and smoke-test the tree
@@ -135,6 +150,15 @@ working directory (`SCOUT_APP_ROOT` set, panel/OBS/GSI all answering), the produ
 tree is small (≈6 MB: express, ws, zod; the panel's UI libraries are already inside the `dist`
 bundle and are trimmed with a guard that fails the build if the server ever imports one), and the
 staging script runs end to end with `--no-shell --no-runtime --no-webview2 --no-installer`.
+
+A real Windows run has since got through the panel build and the host compile and then died at
+the Rust linker in step 3: Rust was installed but no Visual Studio Build Tools, so there was no
+`link.exe`. Two lessons landed from it. The script now runs its toolchain pre-flight *before*
+step 1 and stops there with the install command (a missing C++ workload costs seconds, and a
+missing Inno Setup is likewise no longer discovered at the last step), and its `vswhere` probe
+was fixed — it passed `-find 'C:\**\link.exe'`, but `-find` patterns are relative to the VS
+install path, so it would have accused a correctly set-up machine too. `scripts\install-windows-build-tools.ps1`
+installs the missing pieces, and `--check-toolchain` proves a machine without building.
 
 **Not verified**: the wizard has never been run on Windows. The first ISCC run (6.7.3) stopped in
 the preprocessor; both causes are fixed. A `[Code]` continuation line began with `#13#10`, which

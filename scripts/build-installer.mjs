@@ -2,6 +2,9 @@
 // Builds SCOUT-Setup-<version>.exe: the Windows installer that carries the whole of SCOUT.
 //
 // What it does, in order:
+//   0. pre-flight: prove this machine can build at all (Rust, the Visual C++ linker when the Rust
+//      target needs it, Inno Setup) - before any build work, so a missing piece costs seconds
+//      rather than a panel build, a host compile and most of a Rust compile
 //   1. build the control panel and overlay pages (vite -> dist/)
 //   2. compile the host to plain JavaScript (tsc -p tsconfig.build.json -> build/, server/ + src/radar.ts)
 //   3. build the overlay shell (cargo tauri build, or npx @tauri-apps/cli when cargo-tauri is
@@ -16,6 +19,7 @@
 // with the failing command's output rather than building a broken installer.
 //
 //   node scripts/build-installer.mjs            # everything, on Windows
+//   node scripts/build-installer.mjs --check-toolchain   # only step 0; builds nothing
 //   node scripts/build-installer.mjs --help
 //
 // The Windows-only steps (5, 8 and the shell in 3) are skipped with --no-runtime / --no-installer
@@ -46,6 +50,8 @@ const options={
   stage:path.join(repoRoot,'dist-stage'),
   out:path.join(repoRoot,'dist-installer'),
   keepStage:false,
+  toolchainCheck:true,
+  checkToolchain:false,
 };
 
 const usage=`Builds the SCOUT Windows installer.
@@ -66,16 +72,20 @@ const usage=`Builds the SCOUT Windows installer.
   --stage <dir>        staging directory (default: <repo>/dist-stage)
   --out <dir>          where the installer is written (default: <repo>/dist-installer)
   --keep-stage         leave an existing staging directory in place instead of recreating it
+  --check-toolchain    only report whether this machine can build (Rust, the Visual C++ linker
+                       when the Rust target needs it, Inno Setup) and exit; builds nothing
+  --no-toolchain-check skip that pre-flight, for a GNU Rust target or a custom linker in
+                       .cargo/config.toml that this script cannot see
   --help               this text`;
 
 const argv=process.argv.slice(2);
 const valueFlags={'--version':'version','--runtime':'runtime','--runtime-zip':'runtimeZip','--tauri-cli':'tauriCli','--iscc':'iscc','--stage':'stage','--out':'out'};
-const switchFlags={'--no-runtime':'runtime','--no-shell':'shell','--no-smoke-test':'smokeTest','--no-webview2':'webview2','--no-npm-ci':'npmCi','--no-installer':'installer','--keep-stage':'keepStage'};
+const switchFlags={'--no-runtime':'runtime','--no-shell':'shell','--no-smoke-test':'smokeTest','--no-webview2':'webview2','--no-npm-ci':'npmCi','--no-installer':'installer','--keep-stage':'keepStage','--no-toolchain-check':'toolchainCheck','--check-toolchain':'checkToolchain'};
 for(let i=0;i<argv.length;i++){
   const [name,inline]=argv[i].split('=');
   if(name in switchFlags){
     if(inline!==undefined) fail(`${name} does not take a value.\n\n${usage}`);
-    options[switchFlags[name]]=name==='--keep-stage';
+    options[switchFlags[name]]=name==='--keep-stage'||name==='--check-toolchain';
     continue;
   }
   if(name in valueFlags){
@@ -88,6 +98,7 @@ for(let i=0;i<argv.length;i++){
   if(name==='--help'||name==='-h'){console.log(usage); process.exit(0)}
   fail(`Unknown argument ${name}.\n\n${usage}`);
 }
+if(options.checkToolchain&&!options.toolchainCheck) fail('--check-toolchain and --no-toolchain-check contradict each other: there would be nothing to check.');
 if(options.installer&&!options.shell) fail('--no-shell is for staging only; use --no-installer too. Windows installers must include the GUI.');
 if(options.keepStage&&!existsSync(options.stage)) fail(`--keep-stage was given but ${options.stage} does not exist.`);
 
@@ -165,13 +176,29 @@ function resolveTauriCli(){
   return {command:'npx',args:['@tauri-apps/cli','build','--no-bundle'],shell:process.platform==='win32',fallback:true};
 }
 
-// The shell is built for the Rust msvc target, which links with link.exe from the Visual C++
-// toolchain. A machine with Rust but no C++ workload (no VS Build Tools, or VS without the
-// "Desktop development with C++" workload) downloads 400 crates and compiles for minutes before
-// failing at the linker, so point at the missing piece before that starts. vswhere ships with
-// every VS/Build Tools installation and locates the latest instance that has the C++ compilers.
-// It exits 0 even when nothing matches, so the check is on the output - and this is a warning,
-// not a failure: a GNU toolchain or a custom linker setup can build without VS.
+// ---------------------------------------------------------------- toolchain ---------------------
+//
+// The pre-flight. The shell is built for the Rust msvc target, which links with link.exe from the
+// Visual C++ toolchain, and the wizard is packed by ISCC.exe. A machine that has Rust but no C++
+// workload (no VS Build Tools, or VS without the "Desktop development with C++" workload) used to
+// learn about it the expensive way: npm ci, a panel build, a host compile, then a Rust compile
+// that died with "linker `link.exe` not found" - and a machine without Inno Setup learned at the
+// very last step. So these are checked before anything is built, and a missing piece is a failure,
+// not a warning. The two setups this would wrongly accuse stay possible: a GNU Rust target needs
+// no Visual Studio (detected from rustc -vV below), and anything more exotic - lld-link configured
+// in .cargo/config.toml, say - can pass --no-toolchain-check. scripts/install-windows-build-tools.ps1
+// installs everything listed here; --check-toolchain runs only this section and builds nothing.
+
+const wingetBuildTools='winget install --id Microsoft.VisualStudio.2022.BuildTools -e --silent '+
+  '--accept-package-agreements --accept-source-agreements --override '+
+  '"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"';
+const wingetRustup='winget install --id Rustlang.Rustup -e --silent '+
+  '--accept-package-agreements --accept-source-agreements';
+const wingetInnoSetup='winget install --id JRSoftware.InnoSetup -e --silent '+
+  '--accept-package-agreements --accept-source-agreements';
+
+// vswhere ships with every VS/Build Tools installation and locates the latest instance that has
+// the C++ compilers. It exits 0 even when nothing matches, so every check here is on its output.
 function findVswhere(){
   for(const base of [process.env.ProgramFiles,process.env['ProgramFiles(x86)']]){
     if(!base) continue;
@@ -181,23 +208,149 @@ function findVswhere(){
   return '';
 }
 
-function checkMsvcToolchain(){
-  if(process.platform!=='win32') return;
+function vsInstallPath(){
   const vswhere=findVswhere();
-  if(!vswhere){
-    warn('no Visual Studio / Build Tools installation found, but the Rust MSVC build needs the '+
-         'Visual C++ linker (link.exe). The shell build below will fail at the linker unless you '+
-         'install Build Tools for Visual Studio with the C++ workload, for example:'+
-         '\n  winget install --id Microsoft.VisualStudio.2022.BuildTools --silent '+
-         '--accept-package-agreements --accept-source-agreements --override '+
-         '"--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"');
+  if(!vswhere) return '';
+  return capture(vswhere,['-latest','-products','*','-property','installationPath'])
+    .split(/\r?\n/)[0]?.trim()||'';
+}
+
+// The link.exe rustc will use, or ''. Two traps, both already fallen into once: vswhere's -find
+// takes a pattern *relative to the installation path* ('C:\**\link.exe' can never match, so the
+// old probe accused correctly set-up machines), and Git for Windows ships a GNU coreutils
+// link.exe (it makes hard links), so a PATH hit is only trusted inside an MSVC tree - which is
+// also why rustc itself asks vswhere instead of looking at PATH. -products * is what makes the
+// standalone Build Tools, not only full Visual Studio, match; the walk under VC\Tools\MSVC is a
+// fallback for vswhere versions whose ** glob behaves differently.
+function findMsvcLinker(){
+  const vswhere=findVswhere();
+  const component='Microsoft.VisualStudio.Component.VC.Tools.x86.x64';
+  if(vswhere){
+    const found=capture(vswhere,['-latest','-products','*','-requires',component,
+      '-find','VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\link.exe']);
+    for(const line of found.split(/\r?\n/)){
+      const candidate=line.trim();
+      if(candidate&&existsSync(candidate)) return candidate;
+    }
+    const installPath=capture(vswhere,['-latest','-products','*','-requires',component,
+      '-property','installationPath']).split(/\r?\n/)[0]?.trim();
+    const msvcDir=installPath?path.join(installPath,'VC','Tools','MSVC'):'';
+    if(msvcDir&&existsSync(msvcDir)){
+      for(const entry of readdirSync(msvcDir,{withFileTypes:true})){
+        if(!entry.isDirectory()) continue;
+        const candidate=path.join(msvcDir,entry.name,'bin','Hostx64','x64','link.exe');
+        if(existsSync(candidate)) return candidate;
+      }
+    }
+  }
+  // What a Developer Command Prompt puts on PATH.
+  for(const line of capture('where',['link.exe']).split(/\r?\n/)){
+    const candidate=line.trim();
+    if(candidate&&/VC\\Tools\\MSVC\\/i.test(candidate)&&existsSync(candidate)) return candidate;
+  }
+  return '';
+}
+
+function rustHostTriple(){
+  const match=capture('rustc',['-vV']).match(/^host:\s*(\S+)/m);
+  return match?match[1]:'';
+}
+
+// What this machine can and cannot build with, as {name,found} (built with), {name,skipped}
+// (not needed here) and {name,fix} (missing; how to get it) entries.
+function toolchainReport(){
+  const report=[];
+  if(options.shell){
+    const cargo=capture('cargo',['--version']);
+    const rustc=capture('rustc',['--version']);
+    report.push(cargo&&rustc
+      ?{name:'Rust toolchain',found:`${cargo} / ${rustc}`}
+      :{name:'Rust toolchain',fix:'cargo/rustc are not on PATH. Install Rust, then close and '+
+        're-open the terminal so the new PATH is seen:\n    '+wingetRustup+
+        '\n    rustup default stable-x86_64-pc-windows-msvc   (or https://rustup.rs/)'});
+    if(process.platform==='win32'){
+      const host=rustHostTriple();
+      if(host.endsWith('-pc-windows-gnu')){
+        report.push({name:'Visual C++ linker',skipped:`the Rust target is ${host}, which links `+
+          'with the GNU tools - Visual Studio is not required'});
+      }else{
+        const linker=findMsvcLinker();
+        if(linker) report.push({name:'Visual C++ linker',found:linker});
+        else{
+          const vs=vsInstallPath();
+          report.push({name:'Visual C++ linker',fix:(vs
+            ?`Visual Studio is installed at ${vs} but has no C++ tools (no link.exe under `+
+             'VC\\Tools\\MSVC), so rustc fails with "linker `link.exe` not found". Add them in '+
+             'the Visual Studio Installer (Modify -> "Desktop development with C++"), or '+
+             'install the standalone build tools:'
+            :'no Visual Studio / Build Tools installation was found, so rustc fails with '+
+             '"linker `link.exe` not found" (VS Code is an editor and does not include the '+
+             'linker). Install the free Build Tools with the C++ workload:')+
+            '\n    '+wingetBuildTools+
+            '\n    The download is several GB. Afterwards close and re-open the terminal, then '+
+            're-run npm run package:windows. scripts\\install-windows-build-tools.ps1 installs '+
+            'this and the rest of the toolchain in one go.'});
+        }
+      }
+    }
+  }
+  if(options.installer){
+    // An --iscc path the caller typed counts only if it is really there.
+    const iscc=options.iscc&&!existsSync(options.iscc)?'':options.iscc||findIscc();
+    report.push(iscc
+      ?{name:'Inno Setup (ISCC.exe)',found:iscc}
+      :{name:'Inno Setup (ISCC.exe)',fix:(options.iscc
+          ?`there is no ISCC.exe at the --iscc path ${options.iscc}. `
+          :'ISCC.exe was not found. ')+
+        'Install Inno Setup 6.3 or newer (https://jrsoftware.org/isdl.php), or pass '+
+        '--iscc <path to ISCC.exe>:\n    '+wingetInnoSetup});
+  }
+  return report;
+}
+
+function printToolchainReport(report){
+  for(const item of report){
+    if(item.found) log(`  [ok]      ${item.name}: ${item.found}`);
+    else if(item.skipped) log(`  [skipped] ${item.name}: ${item.skipped}`);
+    else log(`  [missing] ${item.name}:\n    ${item.fix}`);
+  }
+}
+
+// Runs before step 1. With --check-toolchain it is all that runs, which is how a machine is
+// proved before anyone commits to a full build (and how scripts/install-windows-build-tools.ps1
+// verifies its own work); otherwise a clean report costs three log lines and a dirty one stops
+// the build here instead of at the linker or at Inno Setup.
+function checkToolchain(){
+  if(!options.toolchainCheck){
+    log('  (--no-toolchain-check: skipping the toolchain pre-flight)');
     return;
   }
-  const found=capture(vswhere,['-latest','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','-find','C:\\**\\link.exe']);
-  if(!found)
-    warn('Visual Studio is installed but the C++ workload (link.exe) is missing. Run the VS '+
-         'Installer and add the VC++ workload ("Desktop development with C++"), then re-run the '+
-         'build - the shell build below will fail at the linker without it.');
+  const report=toolchainReport();
+  const missing=report.filter(item=>!item.found&&!item.skipped);
+  if(options.checkToolchain){
+    log('\nCan this machine build SCOUT-Setup?');
+    if(!report.length)
+      log('  Nothing to check: --no-shell with --no-installer needs no Windows toolchain.');
+    printToolchainReport(report);
+    if(missing.length){
+      console.error(`\n${missing.length} piece(s) missing - npm run package:windows would stop `+
+                    'on the first one it needs. Nothing was built.\n');
+      process.exit(1);
+    }
+    log('\nEverything this build needs is installed. Nothing was built.');
+    process.exit(0);
+  }
+  if(missing.length){
+    printToolchainReport(report);
+    fail('This machine cannot build SCOUT yet, so nothing was built. Install the missing '+
+         'piece(s) above and re-run npm run package:windows.\n'+
+         'scripts\\install-windows-build-tools.ps1 installs all of them; '+
+         'node scripts/build-installer.mjs --check-toolchain re-checks without building.\n'+
+         'Escape hatches: --no-shell --no-installer stages without the shell, and '+
+         '--no-toolchain-check trusts a toolchain this script cannot see.');
+  }
+  for(const item of report)
+    log(`  toolchain: ${item.name} - ${item.found||item.skipped}`);
 }
 
 async function download(url,target){
@@ -217,7 +370,7 @@ async function sha256(file){
 
 // ---------------------------------------------------------------- checks ------------------------
 
-log(`SCOUT installer build
+log(`SCOUT ${options.checkToolchain?'Windows toolchain check':'installer build'}
   version   ${options.version}
   repo      ${repoRoot}
   staging   ${options.stage}
@@ -225,6 +378,9 @@ log(`SCOUT installer build
 
 if(options.shell&&process.platform!=='win32')
   warn('Building the Tauri overlay shell off Windows usually needs a cross-compilation setup; use --no-shell if it fails.');
+
+// Step 0. With --check-toolchain this exits in both directions, having built nothing.
+checkToolchain();
 
 // ---------------------------------------------------------------- 1. panel ----------------------
 
@@ -251,8 +407,9 @@ log(`  ${path.relative(repoRoot,compiled)} written`);
 banner('Building the overlay shell (scout-shell.exe)');
 let shellExe='';
 if(options.shell){
-  checkMsvcToolchain();
-  // Never publish a console-only installer after a failed GUI build. Preserve compiler output.
+  // The toolchain pre-flight before step 1 has already proved rustc can link on this machine
+  // (or been told not to look). Never publish a console-only installer after a failed GUI
+  // build. Preserve compiler output.
   const tauri=resolveTauriCli();
   if(tauri.fallback)
     warn('cargo-tauri is not installed; building the shell with the npm @tauri-apps/cli '+
@@ -423,7 +580,8 @@ if(options.installer){
   checkInstallerScript();
   const iscc=options.iscc||findIscc();
   if(!iscc) fail('ISCC.exe was not found. Install Inno Setup 6.3 or newer '+
-                 '(https://jrsoftware.org/isdl.php), or pass --iscc <path to ISCC.exe>.');
+                 '(https://jrsoftware.org/isdl.php), or pass --iscc <path to ISCC.exe>:\n  '+
+                 wingetInnoSetup);
   mkdirSync(options.out,{recursive:true});
   const versionWin=options.version.split('.').concat(['0','0','0']).slice(0,4).join('.');
   const isccArgs=[
