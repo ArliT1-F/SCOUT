@@ -106,12 +106,24 @@ test('the worker proxies /api/beta to the account service and never leaks the se
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const body = typeof init?.body === 'string' ? init.body : '';
+    const cookie = new Headers(init?.headers).get('cookie');
     seen.push({
       url: String(input),
       authorization: new Headers(init?.headers).get('authorization'),
-      cookie: new Headers(init?.headers).get('cookie'),
+      cookie,
       body,
     });
+    // The reviewer gate asks /status who the browser's session belongs to; only the reviewer
+    // session is answered as one.
+    if (String(input).endsWith('/status'))
+      return new Response(
+        JSON.stringify(
+          cookie === 'scout_account=reviewer'
+            ? {reviewer: true, account: {id: 'owner-1'}}
+            : {reviewer: false, account: cookie ? {id: 'account-9'} : null},
+        ),
+        {status: 200, headers: {'content-type': 'application/json'}},
+      );
     return new Response(JSON.stringify({status: 'approved', invite: 'SECRET-TOKEN'}), {
       status: 200,
       headers: {'content-type': 'application/json'},
@@ -125,20 +137,36 @@ test('the worker proxies /api/beta to the account service and never leaks the se
       envWith({SCOUT_ACCOUNT_SERVICE_URL: 'http://127.0.0.1:8790', SCOUT_BETA_API_KEY: 'svc-key'}),
     );
     assert.equal(status.status, 200);
-    assert.deepEqual(await status.json(), {status: 'approved', invite: 'SECRET-TOKEN'});
+    assert.deepEqual(await status.json(), {reviewer: false, account: {id: 'account-9'}});
     assert.equal(seen[0]?.url, 'http://127.0.0.1:8790/status');
     assert.equal(seen[0]?.authorization, null, 'browser-safe routes carry no service key');
     assert.equal(seen[0]?.cookie, 'scout_account=session');
 
     const decision = await worker.fetch(
-      new Request('https://scout.test/api/beta/applications/1/approve', {method: 'POST', body: '{}'}),
+      new Request('https://scout.test/api/beta/applications/1/approve', {
+        method: 'POST',
+        headers: {cookie: 'scout_account=reviewer'},
+        body: '{}',
+      }),
       envWith({SCOUT_ACCOUNT_SERVICE_URL: 'http://127.0.0.1:8790', SCOUT_BETA_API_KEY: 'svc-key'}),
     );
     assert.equal(decision.status, 200);
-    assert.equal(seen[1]?.url, 'http://127.0.0.1:8790/applications/1/approve');
-    assert.equal(seen[1]?.authorization, 'Bearer svc-key', 'the desk gets the key server-side');
+    assert.equal(seen[1]?.url, 'http://127.0.0.1:8790/status', 'the desk verifies the session first');
+    assert.equal(seen[1]?.authorization, null, 'the check carries no service key');
+    assert.equal(seen[2]?.url, 'http://127.0.0.1:8790/applications/1/approve');
+    assert.equal(seen[2]?.authorization, 'Bearer svc-key', 'the desk gets the key server-side');
     const body = (await decision.json()) as Record<string, unknown>;
     assert.equal('invite' in body, false, 'invitation tokens are delivered by email only');
+
+    // Without a reviewer session the desk is refused at the edge and never forwarded.
+    const anonymous = await worker.fetch(
+      new Request('https://scout.test/api/beta/applications'),
+      envWith({SCOUT_ACCOUNT_SERVICE_URL: 'http://127.0.0.1:8790', SCOUT_BETA_API_KEY: 'svc-key'}),
+    );
+    assert.equal(anonymous.status, 401);
+    assert.equal(((await anonymous.json()) as {code: string}).code, 'no-account');
+    assert.equal(seen[3]?.url, 'http://127.0.0.1:8790/status');
+    assert.equal(seen.length, 4, 'the refused desk route is never forwarded upstream');
   } finally {
     globalThis.fetch = originalFetch;
   }

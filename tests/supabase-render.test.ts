@@ -145,11 +145,16 @@ test('supabaseConfiguration resolves SUPABASE_URL or derives it from DATABASE_UR
 test('Supabase migrations use BIGINT for epoch-ms timestamps and define platform_store with RLS', async () => {
  const m001 = await readFile('supabase/migrations/001_initial_account_schema.sql', 'utf8');
  const m002 = await readFile('supabase/migrations/002_render_supabase_cutover.sql', 'utf8');
+ const m003 = await readFile('supabase/migrations/003_revocation_and_delivery_diagnostics.sql', 'utf8');
  assert.match(m001, /created_at\s+BIGINT\s+NOT NULL/);
  assert.match(m001, /CREATE TABLE IF NOT EXISTS platform_store/);
  assert.match(m001, /ENABLE ROW LEVEL SECURITY/);
  assert.match(m002, /ALTER COLUMN created_at TYPE BIGINT/);
  assert.match(m002, /CREATE TABLE IF NOT EXISTS platform_store/);
+ assert.match(m003, /'revoked'/, 'the status constraint admits revoked accounts');
+ assert.match(m003, /ADD COLUMN IF NOT EXISTS revoked_reason/);
+ assert.match(m003, /ADD COLUMN IF NOT EXISTS last_error_status/);
+ assert.match(m003, /ADD COLUMN IF NOT EXISTS last_provider_error/);
 });
 
 test('Account service and PlatformStore persist across simulated Render Free Tier restarts via Supabase', async t => {

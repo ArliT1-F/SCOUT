@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,stat} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createElement} from 'react';
@@ -265,7 +265,7 @@ test('a user code is unambiguous when it is read out loud',()=>{
 
 // ---------------------------------------------------------------- the pages themselves
 const clean=(html:string)=>html.replace(/<!-- -->/g,'');
-const approvedAccount:AccountView={id:'a1',email:'ada@example.com',displayName:'Ada Operator',organisation:'Durres LAN',country:'AL',status:'approved',useCase:'weekly cups',events:'Every week',createdAt:1_700_000_000_000,decidedAt:1_700_000_100_000,devices:[]};
+const approvedAccount:AccountView={id:'a1',email:'ada@example.com',displayName:'Ada Operator',organisation:'Durres LAN',country:'AL',status:'approved',useCase:'weekly cups',events:'Every week',createdAt:1_700_000_000_000,decidedAt:1_700_000_100_000,devices:[],revokedReason:null};
 const pendingAccount:AccountView={...approvedAccount,status:'pending',decidedAt:null};
 
 test('the website is access only: landing, apply, sign-in, download and the owner admin',()=>{
@@ -357,4 +357,102 @@ test('the listing view hides revoked devices and the secrets behind them',async(
  assert.equal(JSON.stringify(view).includes('"d"'),false);
  assert.equal(view.devices.length,0,'a revoked device is gone from the account view');
  assert.equal(hashToken('abc').length,64);
+});
+
+test('revoking an approved account ends its sessions, launchers, invites and sign-in',async()=>{
+ await fresh();
+ const created=await service.apply(application,context(STRANGER));
+ const id=created.ok?created.value.account.id:'';
+ const approved=await service.decide(id,'approve','owner');
+ const invite=approved.ok?approved.value.invite!:'';
+ await service.activate({invite,password:'a-long-enough-password'},context(HOME));
+ const signedIn=await service.signIn({email:'ada@example.com',password:'a-long-enough-password'},context(HOME));
+ assert.equal(signedIn.ok,true);
+ if(!signedIn.ok) return;
+ const start=await service.deviceStart({label:'observer-pc',platform:'win32'},context(HOME));
+ assert.equal(start.ok,true);
+ if(!start.ok) return;
+ assert.equal((await service.deviceDecide(signedIn.value.cookieId,start.value.userCode,true)).ok,true);
+ const poll=await service.devicePoll({deviceCode:start.value.deviceCode});
+ assert.equal(poll.ok&&poll.value.status,'approved');
+ const deviceId=poll.ok?poll.value.deviceId!:'';
+ const token=poll.ok?poll.value.installationToken!:'';
+ const live=await service.installationStatus({deviceId,installationId:'inst-1',token});
+ assert.equal(live.ok&&live.value.status,'active');
+ const revoked=await service.decide(id,'revoke','owner','shared the invitation link publicly');
+ assert.equal(revoked.ok,true,JSON.stringify(revoked));
+ if(!revoked.ok) return;
+ assert.equal(revoked.value.account.status,'revoked');
+ assert.equal(revoked.value.account.revokedReason,'shared the invitation link publicly');
+ assert.equal(revoked.value.account.devices.length,0,'launchers lose entitlement with the account');
+ assert.equal(revoked.value.invite,null);
+ assert.equal((await service.status(signedIn.value.cookieId)).signedIn,false,'revocation signs the account out everywhere');
+ const signIn=await service.signIn({email:'ada@example.com',password:'a-long-enough-password'},context(HOME));
+ assert.equal(signIn.ok,false);
+ if(!signIn.ok){assert.equal(signIn.status,403);assert.equal(signIn.code,'revoked')}
+ const reapply=await service.apply(application,context(STRANGER));
+ assert.equal(reapply.ok,false);
+ if(!reapply.ok){assert.equal(reapply.status,403);assert.equal(reapply.code,'revoked')}
+ const check=await service.installationStatus({deviceId,installationId:'inst-1',token});
+ assert.equal(check.ok&&check.value.status,'revoked');
+ const link=await service.deviceDecide(signedIn.value.cookieId,start.value.userCode,true);
+ assert.equal(link.ok,false);
+ if(!link.ok)assert.equal(link.code,'no-session');
+ // terminal in every direction
+ for(const decision of ['revoke','approve','reject'] as const){
+  const again=await service.decide(id,decision,'owner');
+  assert.equal(again.ok,false);
+  if(!again.ok)assert.equal(again.code,'already-decided',decision);
+ }
+});
+
+test('only approved accounts can be revoked, and an outstanding invite dies with them',async()=>{
+ await fresh();
+ const created=await service.apply(application,context(STRANGER));
+ const id=created.ok?created.value.account.id:'';
+ const early=await service.decide(id,'revoke','owner');
+ assert.equal(early.ok,false);
+ if(!early.ok){assert.equal(early.status,409);assert.equal(early.code,'invalid-decision')}
+ const approved=await service.decide(id,'approve','owner');
+ const invite=approved.ok?approved.value.invite!:'';
+ const revoked=await service.decide(id,'revoke','owner','x'.repeat(500));
+ assert.equal(revoked.ok,true);
+ if(!revoked.ok) return;
+ assert.equal(revoked.value.account.revokedReason?.length,280,'a reason longer than the desk allows is trimmed, not refused');
+ const dead=await service.activate({invite,password:'a-long-enough-password'},context(HOME));
+ assert.equal(dead.ok,false);
+ if(!dead.ok)assert.equal(dead.code,'bad-invite');
+ const review=await service.applicationReview();
+ assert.equal(review.applications.find(entry=>entry.id===id)?.status,'revoked');
+ assert.equal(review.applications.find(entry=>entry.id===id)?.revokedReason?.length,280);
+});
+
+test('a refused invitation delivery tells the desk what failed and what to do',async()=>{
+ dir=await mkdtemp(path.join(tmpdir(),'scout-beta-'));clock=1_700_000_000_000;
+ service=await new LocalBetaService({dir,emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async()=>{throw Object.assign(new Error('refused'),{status:403,providerCode:'validation_error'})},now:()=>clock}).load();
+ const created=await service.apply(application,context(STRANGER));
+ const id=created.ok?created.value.account.id:'';
+ const approved=await service.decide(id,'approve','owner');
+ assert.equal(approved.ok,true);
+ const delivery=approved.ok?approved.value.invitationDelivery:null;
+ assert.equal(delivery?.status,'pending');
+ assert.equal(delivery?.errorCode,'provider-rejected');
+ assert.equal(delivery?.errorStatus,403);
+ assert.equal(delivery?.providerError,'validation_error');
+ assert.ok(delivery?.guidance?.includes('resend.com/domains'),delivery?.guidance??'no guidance was returned');
+ assert.ok((delivery?.nextAttemptAt??0)>clock);
+ assert.equal(JSON.stringify(delivery).includes('ada@example.com'),false,'diagnostics never carry the recipient');
+});
+
+test('a store written before revocation existed loads and decides normally',async()=>{
+ dir=await mkdtemp(path.join(tmpdir(),'scout-beta-'));clock=1_700_000_000_000;
+ await writeFile(path.join(dir,'store.json'),JSON.stringify({version:1,accounts:[{id:'legacy',email:'ada@example.com',displayName:'Ada',organisation:'',country:'',useCase:'',events:'',status:'approved',createdAt:clock,decidedAt:clock,decidedBy:'owner',password:null,invite:null,devices:[]}],sessions:[],grants:[],emailOutbox:[{id:'mail-1',template:'invitation',recipientDigest:hashToken('ada@example.com'),ciphertext:'',iv:'',tag:'',createdAt:clock,nextAttemptAt:clock,attempts:1,sentAt:null,lastErrorCode:'transient'}],recoveries:[],audit:[]}));
+ service=await new LocalBetaService({dir,emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async()=>{},now:()=>clock}).load();
+ const review=await service.applicationReview();
+ assert.equal(review.applications[0]?.revokedReason,null);
+ assert.equal(review.invitations['legacy']?.errorCode,'transient');
+ assert.equal(review.invitations['legacy']?.errorStatus,null);
+ const revoked=await service.decide('legacy','revoke','owner','pre-change account');
+ assert.equal(revoked.ok,true);
+ if(revoked.ok)assert.equal(revoked.value.account.revokedReason,'pre-change account');
 });

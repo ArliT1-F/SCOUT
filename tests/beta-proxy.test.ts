@@ -264,6 +264,8 @@ test('owner decisions inject only the server key, strip invites and never log re
   const result = await captureRuntime(
     (async (input: string | URL | Request, init?: RequestInit) => {
       calls.push({url: String(input), init});
+      if (String(input).endsWith('/status'))
+        return Response.json({reviewer: true, account: {id: 'owner-1'}}, {status: 200});
       return Response.json(
         {
           account: {id: 'account-1', email: 'applicant@example.com'},
@@ -281,16 +283,23 @@ test('owner decisions inject only the server key, strip invites and never log re
           headers: {
             'content-type': 'application/json',
             authorization: 'Bearer browser-supplied-key',
+            cookie: 'scout_account=reviewer-session',
           },
           body: JSON.stringify({decision: 'approve', decidedBy: 'owner@example.com'}),
         }),
       }),
   );
 
-  const headers = new Headers(calls[0]?.init?.headers);
+  // The desk route first verifies the browser's session against the service's reviewer flag —
+  // the check carries the browser cookie, never the service key.
+  assert.equal(calls[0]?.url, `${TUNNEL}/status`);
+  const checkHeaders = new Headers(calls[0]?.init?.headers);
+  assert.equal(checkHeaders.get('authorization'), null);
+  assert.equal(checkHeaders.get('cookie'), 'scout_account=reviewer-session');
+  const headers = new Headers(calls[1]?.init?.headers);
   assert.equal(headers.get('authorization'), `Bearer ${ownerKey}`);
-  assert.equal(calls[0]?.url, `${TUNNEL}/applications/account-1`);
-  assert.equal(calls[0]?.init?.body, JSON.stringify({decision: 'approve', decidedBy: 'owner@example.com'}));
+  assert.equal(calls[1]?.url, `${TUNNEL}/applications/account-1`);
+  assert.equal(calls[1]?.init?.body, JSON.stringify({decision: 'approve', decidedBy: 'owner@example.com'}));
   const body = (await result.response.json()) as Record<string, unknown>;
   assert.equal('invite' in body, false);
   const logs = result.logs.join('\n');
@@ -299,4 +308,57 @@ test('owner decisions inject only the server key, strip invites and never log re
   assert.ok(!logs.includes('plaintext-invite-token'));
   assert.ok(!logs.includes('owner@example.com'));
   assert.ok(!logs.includes('applicant@example.com'));
+});
+
+test('desk routes verify the reviewer session before the service key is injected', async () => {
+  const desk = (statusBody: unknown, headers?: Record<string, string>) => {
+    const calls: FetchCall[] = [];
+    const run = captureRuntime(
+      (async (input: string | URL | Request, init?: RequestInit) => {
+        calls.push({url: String(input), init});
+        return Response.json(statusBody, {status: 200});
+      }) as typeof fetch,
+      () =>
+        betaProxy({
+          env: {SCOUT_ACCOUNT_SERVICE_URL: TUNNEL, SCOUT_BETA_API_KEY: 'server-owner-key'},
+          request: request('/api/beta/applications', {headers}),
+        }),
+    );
+    return {calls, run};
+  };
+
+  // Anonymous: no session at all, so /status has no account — 401, and the desk route is never
+  // forwarded, so the service key never leaves the Worker.
+  const anonymous = desk({reviewer: false, account: null});
+  const anonymousResult = await anonymous.run;
+  assert.equal(anonymousResult.response.status, 401);
+  assert.equal(((await anonymousResult.response.json()) as {code: string}).code, 'no-account');
+  assert.deepEqual(
+    anonymous.calls.map((call) => call.url),
+    [`${TUNNEL}/status`],
+  );
+
+  // Signed in but not a reviewer (an ordinary approved account) — 403, still never forwarded.
+  const ordinary = desk({reviewer: false, account: {id: 'account-9'}}, {cookie: 'scout_account=user-session'});
+  const ordinaryResult = await ordinary.run;
+  assert.equal(ordinaryResult.response.status, 403);
+  assert.equal(((await ordinaryResult.response.json()) as {code: string}).code, 'not-beta-reviewer');
+  assert.deepEqual(
+    ordinary.calls.map((call) => call.url),
+    [`${TUNNEL}/status`],
+  );
+
+  // A reviewer session is forwarded with the key injected server-side.
+  const reviewer = desk({reviewer: true, account: {id: 'owner-1'}}, {cookie: 'scout_account=reviewer-session'});
+  const reviewerResult = await reviewer.run;
+  assert.equal(reviewerResult.response.status, 200);
+  assert.deepEqual(
+    reviewer.calls.map((call) => call.url),
+    [`${TUNNEL}/status`, `${TUNNEL}/applications`],
+  );
+  assert.equal(new Headers(reviewer.calls[0]?.init?.headers).get('authorization'), null);
+  assert.equal(
+    new Headers(reviewer.calls[1]?.init?.headers).get('authorization'),
+    'Bearer server-owner-key',
+  );
 });

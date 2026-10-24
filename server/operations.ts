@@ -111,7 +111,7 @@ export class RequestLog {
 export interface AttentionItem {level:'info'|'warn'|'bad';title:string;detail:string}
 export interface HealthInput {
  startedAt:number;version:string;pid:number;
- beta:{mode:string;applications:{pending:number;approved:number;rejected:number};devices:number};
+ beta:{mode:string;applications:{pending:number;approved:number;rejected:number;revoked:number};devices:number};
  licence:{state:string;enforced:boolean;email:string|null}|null;
  releases:{published:number;latest:string|null;downloads:number};
  requests:RequestSummary;

@@ -114,3 +114,20 @@ test('the account-service CLI reads .env too',async(t)=>{
   assert.equal(code,0);
   assert.equal(existsSync(path.join(dir,'custom','accounts.sqlite')),true,'SCOUT_ACCOUNT_DB came from .env');
 });
+
+test('the account-service CLI revokes by email and says so when there is nothing to revoke',async(t)=>{
+  const dir=await temporary(t);
+  const env:NodeJS.ProcessEnv={...process.env};
+  for(const key of Object.keys(env))if(key.startsWith('SCOUT_'))delete env[key];
+  const run=async(...args:string[])=>new Promise<{code:number;output:string}>((resolve,reject)=>{
+    const child=spawn(process.execPath,[path.join(repository,'node_modules','tsx','dist','cli.mjs'),path.join(repository,'server','account-service.ts'),...args],{cwd:dir,env,stdio:['ignore','pipe','pipe']});
+    let output='';
+    child.stdout!.on('data',buffer=>{output+=buffer.toString()});
+    child.stderr!.on('data',buffer=>{output+=buffer.toString()});
+    child.once('error',reject);
+    child.once('exit',code=>resolve({code:code??0,output}));
+  });
+  const missing=await run('--revoke','nobody@example.com');
+  assert.equal(missing.code,1);
+  assert.match(missing.output,/no application for nobody@example\.com/);
+});

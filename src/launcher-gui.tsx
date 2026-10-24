@@ -14,8 +14,8 @@ type BetaStatus={mode:string;account:AccountView|null;download:DownloadView|null
 type LinkView={linked:boolean;deviceId:string|null;email:string|null;displayName:string|null;linkedAt:number|null;pending:{userCode:string;deviceCode:string;expiresAt:number}|null;installationId:string};
 type Licence={state:string;enforced?:boolean;email?:string;message?:string};
 type LinkState={mode:string;link:LinkView;sync?:any};
-const statusLabel=(status:string)=>status==='approved'?'APPROVED':status==='rejected'?'NOT APPROVED':'IN REVIEW';
-const statusTone=(status:string)=>status==='approved'?'ok':status==='rejected'?'bad':'warn';
+const statusLabel=(status:string)=>status==='approved'?'APPROVED':status==='rejected'?'NOT APPROVED':status==='revoked'?'REVOKED':'IN REVIEW';
+const statusTone=(status:string)=>status==='approved'?'ok':status==='rejected'||status==='revoked'?'bad':'warn';
 
 export function AppHome(){
  const hostUrl=location.origin;
@@ -185,7 +185,7 @@ export function AppHome(){
      <h2 style={{color:'#fff',fontSize:15,textTransform:'none',letterSpacing:0}}>Welcome, operator</h2>
      <p>Everything for the broadcast lives here and in the control panel. The transparent <code>/obs</code> overlay keeps working even when this window is closed.</p>
      <div className="lh-steps">
-      <div className={`lh-step ${account?.status==='approved'?'done':''}`}><b>1</b><div><div style={{fontWeight:700,fontSize:12}}>{account?.status==='approved'?'✓ Account connected':account?'Application in review':'Sign in'}</div><div style={{color:'#9a8eac',fontSize:11}}>{account?.email||'Whitelisted accounts only'}</div></div></div>
+      <div className={`lh-step ${account?.status==='approved'?'done':''}`}><b>1</b><div><div style={{fontWeight:700,fontSize:12}}>{account?.status==='approved'?'✓ Account connected':account?.status==='revoked'?'Access revoked':account?'Application in review':'Sign in'}</div><div style={{color:'#9a8eac',fontSize:11}}>{account?.email||'Whitelisted accounts only'}</div></div></div>
       <div className={`lh-step ${hostOk?'done':''}`}><b>2</b><div><div style={{fontWeight:700,fontSize:12}}>Host running</div><div style={{color:'#9a8eac',fontSize:11}}>{hostOk?'Online':'Starting…'}</div></div></div>
       <div className={`lh-step ${receiving?'done':''}`}><b>3</b><div><div style={{fontWeight:700,fontSize:12}}>CS2 feed</div><div style={{color:'#9a8eac',fontSize:11}}>{receiving?'Receiving':'Waiting for /gsi push'}</div></div></div>
      </div>
@@ -196,7 +196,7 @@ export function AppHome(){
       <h2>Your account</h2>
       {account?<>
        <div className="lh-kv"><span>Signed in</span><b>{account.email}</b></div>
-       <div className="lh-kv"><span>Status</span><b style={{color:account.status==='approved'?'#8ce0b4':account.status==='rejected'?'#ff9aac':'#ffcf8a'}}>{statusLabel(account.status)}</b></div>
+       <div className="lh-kv"><span>Status</span><b style={{color:account.status==='approved'?'#8ce0b4':account.status==='rejected'||account.status==='revoked'?'#ff9aac':'#ffcf8a'}}>{statusLabel(account.status)}</b></div>
        <div className="lh-kv"><span>Organisation</span><b>{account.organisation||'—'}</b></div>
        <div className="lh-row" style={{marginTop:12}}>
         <a className="lh-btn" href="/download" style={{padding:'9px 12px'}}>Download page</a>

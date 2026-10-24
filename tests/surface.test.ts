@@ -149,6 +149,39 @@ test('an authorized website reviewer approves a pending hosted application throu
  assert.equal(JSON.stringify(browserBody.body).includes('invite'),false,'review pages receive delivery metadata, never invitation tokens');
 });
 
+test('a reviewer revokes an approved account with a recorded reason',async(t)=>{
+ const site=await platformHost(t,{SCOUT_SURFACE:'site',SCOUT_BETA_AUTO_APPROVE:'1'});
+ const inviteFor=async(email:string)=>{
+  const applied=await site.request('/api/beta/apply',{name:email.split('@')[0],email,organisation:'Test club',country:'AL',useCase:'Run events',events:'Monthly'});
+  assert.equal(applied.status,200);
+  const message=site.emails.find((entry:any)=>(entry.to===email||entry.to?.includes(email))&&entry.subject==='Your SCOUT closed-beta invitation');
+  assert.ok(message,`an invitation email was delivered to ${email}`);
+  return {id:applied.body.application.id,invite:new URL(message.text.match(/https?:\/\/[^\s]+/)![0]).searchParams.get('invite')!};
+ };
+ const owner=await inviteFor('owner@example.com');
+ const ownerSession=await site.request('/api/beta/activate',{invite:owner.invite,password:'a-long-owner-password'});
+ assert.equal(ownerSession.status,200);
+ const victim=await inviteFor('victim@example.com');
+ const victimSession=await site.request('/api/beta/activate',{invite:victim.invite,password:'a-long-victim-password'});
+ assert.equal(victimSession.status,200);
+ const anonymous=await site.request(`/api/beta/applications/${victim.id}`,{decision:'revoke',reason:'exploit'});
+ assert.equal(anonymous.status,401,'an anonymous applicant cannot revoke');
+ const ordinary=await site.request(`/api/beta/applications/${victim.id}`,{decision:'revoke',reason:'exploit'},{cookie:victimSession.cookie});
+ assert.equal(ordinary.status,403,'an ordinary account cannot revoke');
+ const tooLong=await site.request(`/api/beta/applications/${victim.id}`,{decision:'revoke',reason:'x'.repeat(281)},{cookie:ownerSession.cookie});
+ assert.equal(tooLong.status,400);
+ assert.equal(tooLong.body.code,'invalid-reason');
+ const revoked=await site.request(`/api/beta/applications/${victim.id}`,{decision:'revoke',reason:'exploited the beta build'},{cookie:ownerSession.cookie});
+ assert.equal(revoked.status,200,JSON.stringify(revoked.body));
+ assert.equal(revoked.body.application.status,'revoked');
+ assert.equal(revoked.body.application.revokedReason,'exploited the beta build');
+ const queue=await site.request('/api/beta/applications',undefined,{cookie:ownerSession.cookie});
+ assert.equal(queue.body.applications.find((row:any)=>row.id===victim.id).revokedReason,'exploited the beta build');
+ const signIn=await site.request('/api/beta/login',{email:'victim@example.com',password:'a-long-victim-password'});
+ assert.equal(signIn.status,403);
+ assert.equal(signIn.body.code,'revoked');
+});
+
 test('website owner settings reach a real linked host without exposing any central broadcast dashboard',async(t)=>{
  const {Installation}=await import('../server/beta.js');
  const path=await import('node:path');const {readFile}=await import('node:fs/promises');

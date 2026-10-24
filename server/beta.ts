@@ -2,7 +2,7 @@ import {createHash,randomBytes,randomUUID,scryptSync,timingSafeEqual} from 'node
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import type {PlatformSettings} from './platform.js';
-import {emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport,type EncryptedEmail} from './email.js';
+import {describeEmailFailure,emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport,type EncryptedEmail} from './email.js';
 // The closed beta: who may download the launcher, and which installation belongs to whom.
 //
 // SCOUT is a local-first program — the host runs on the observer's machine and the overlay is a
@@ -31,6 +31,9 @@ export const DEVICE_POLL_INTERVAL_MS=5000;
 export const MAX_APPLICATIONS_PER_HOUR=3;
 export const MAX_LOGIN_FAILURES=8;
 export const LOGIN_FAILURE_WINDOW_MS=15*60*1000;
+// A revocation reason is an operator note, not an essay: short enough to fit the review desk and
+// the audit log line, long enough to say which rule was broken.
+export const MAX_REVOKE_REASON=280;
 // Printed on the dashboard and used by the download card. The installer publishes exactly this
 // asset name (`npm run package:windows`), so a GitHub release is a complete download story.
 export const DEFAULT_DOWNLOAD_URL='https://github.com/ArliT1-F/SCOUT/releases/latest';
@@ -39,7 +42,7 @@ export const DEFAULT_DOWNLOAD_VERSION='SCOUT-Setup-0.1.0.exe';
 // browser cannot be mistyped into a different valid-looking code.
 const USER_CODE_ALPHABET='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const USER_CODE_LENGTH=8;
-export type ApplicationStatus='pending'|'approved'|'rejected';
+export type ApplicationStatus='pending'|'approved'|'rejected'|'revoked';
 export type BetaMode='local'|'hosted';
 export interface AccountSecret {salt:string;digest:string}
 export interface BetaDevice {id:string;label:string;platform:string;createdAt:number;lastSeenAt:number;revokedAt:number|null;tokenDigest:string}
@@ -47,6 +50,8 @@ export interface BetaAccount {
  id:string;email:string;displayName:string;organisation:string;country:string;useCase:string;events:string;
  status:ApplicationStatus;createdAt:number;decidedAt:number|null;decidedBy:string;
  password:AccountSecret|null;invite:{digest:string;expiresAt:number}|null;devices:BetaDevice[];
+ /** Why an approved account was revoked. Only ever set when status is 'revoked'. */
+ revokedReason?:string|null;
 }
 export interface BetaSession {id:string;accountId:string;createdAt:number;lastSeenAt:number;address:string;userAgent:string}
 export interface BetaGrant {
@@ -55,22 +60,27 @@ export interface BetaGrant {
  userCode:string;deviceCode:string;label:string;platform:string;createdAt:number;expiresAt:number;
  status:'pending'|'approved'|'denied';accountId:string|null;deviceId:string|null;installationToken:string|null;
 }
-export interface LocalOutboxEntry extends EncryptedEmail {id:string;template:'invitation'|'password_recovery';recipientDigest:string;createdAt:number;nextAttemptAt:number;attempts:number;sentAt:number|null;lastErrorCode:string|null}
+export interface LocalOutboxEntry extends EncryptedEmail {id:string;template:'invitation'|'password_recovery';recipientDigest:string;createdAt:number;nextAttemptAt:number;attempts:number;sentAt:number|null;lastErrorCode:string|null;lastErrorStatus:number|null;lastProviderError:string|null}
 export interface LocalRecoveryToken {digest:string;accountId:string;createdAt:number;expiresAt:number;usedAt:number|null}
 export interface BetaStore {version:1;accounts:BetaAccount[];sessions:BetaSession[];grants:BetaGrant[];emailOutbox?:LocalOutboxEntry[];recoveries?:LocalRecoveryToken[];audit?:Array<{at:number;action:string;accountId:string|null}>}
 export interface LinkedDeviceView {id:string;label:string;platform:string;createdAt:number;lastSeenAt:number}
-export interface InvitationDeliveryView {status:'sent'|'pending'|'manual'|'none';activated?:boolean;expiresAt?:number|null;sentAt?:number|null;attempts?:number;errorCode?:string|null}
+export interface InvitationDeliveryView {status:'sent'|'pending'|'manual'|'none';activated?:boolean;expiresAt?:number|null;sentAt?:number|null;attempts?:number;errorCode?:string|null;errorStatus?:number|null;providerError?:string|null;nextAttemptAt?:number|null;guidance?:string|null}
 export interface ApplicationReviewView {applications:AccountView[];invitations:Record<string,InvitationDeliveryView>}
 export interface AccountView {
  id:string;email:string;displayName:string;organisation:string;country:string;status:ApplicationStatus;
  // The applicant's own words, kept so the owner can review without a second lookup. The view only
  // ever reaches the account it belongs to (the dashboard) or the panel owner (the review desk).
  useCase:string;events:string;createdAt:number;decidedAt:number|null;devices:LinkedDeviceView[];
+ /** Why an approved account was revoked. Only ever set when status is 'revoked'. */
+ revokedReason:string|null;
 }
 export interface DownloadView {url:string;version:string;notes:string}
 export interface BetaStatusView {
  mode:BetaMode;applicationsOpen:boolean;signedIn:boolean;account:AccountView|null;download:DownloadView|null;
  host:string;reviewNote:string;
+ // Hosted only: whether the signed-in session belongs to an approved owner/reviewer. The edge
+ // proxy reads it before forwarding desk routes with the service key; the local service omits it.
+ reviewer?:boolean;
 }
 export interface DeviceGrantView {userCode:string;deviceCode:string;expiresAt:number;interval:number;verificationUrl:string}
 export interface DevicePollView {status:'pending'|'approved'|'denied'|'expired';installationToken?:string;deviceId?:string;account?:{email:string;displayName:string}}
@@ -104,7 +114,7 @@ export interface LauncherBetaService {
  // observer machine: in local mode they are the store, in hosted mode they carry the service key.
  applications():Promise<AccountView[]>;
  applicationReview?():Promise<ApplicationReviewView>;
- decide(id:string,decision:'approve'|'reject',decidedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
+ decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason?:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
  resendInvitation?(id:string,requestedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
 }
 export interface BetaService extends SiteBetaService,LauncherBetaService {
@@ -148,7 +158,7 @@ const isEmail=(value:string)=>/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
 // reviewed by a human. Length, not composition rules: this is an operator tool, not a bank.
 export const MIN_PASSWORD=10;
 export function accountView(account:BetaAccount):AccountView {
- return {id:account.id,email:account.email,displayName:account.displayName,organisation:account.organisation,country:account.country,status:account.status,useCase:account.useCase,events:account.events,createdAt:account.createdAt,decidedAt:account.decidedAt,devices:account.devices.filter(device=>!device.revokedAt).map(device=>({id:device.id,label:device.label,platform:device.platform,createdAt:device.createdAt,lastSeenAt:device.lastSeenAt}))};
+ return {id:account.id,email:account.email,displayName:account.displayName,organisation:account.organisation,country:account.country,status:account.status,useCase:account.useCase,events:account.events,createdAt:account.createdAt,decidedAt:account.decidedAt,devices:account.devices.filter(device=>!device.revokedAt).map(device=>({id:device.id,label:device.label,platform:device.platform,createdAt:device.createdAt,lastSeenAt:device.lastSeenAt})),revokedReason:account.status==='revoked'?(account.revokedReason??null):null};
 }
 // ------------------------------------------------------------------ the local beta, on this host
 // One JSON document under the operator data directory. It is written atomically (temp file +
@@ -188,7 +198,7 @@ export class LocalBetaService implements BetaService {
  get storeFile(){return path.join(this.dir,'store.json')}
  async load(){
   await mkdir(this.dir,{recursive:true});
-  try{const parsed=JSON.parse(await readFile(this.storeFile,'utf8'));if(parsed&&Array.isArray(parsed.accounts))this.store={version:1,accounts:parsed.accounts,sessions:parsed.sessions||[],grants:parsed.grants||[],emailOutbox:parsed.emailOutbox||[],recoveries:parsed.recoveries||[],audit:parsed.audit||[]}}
+  try{const parsed=JSON.parse(await readFile(this.storeFile,'utf8'));if(parsed&&Array.isArray(parsed.accounts)){this.store={version:1,accounts:parsed.accounts,sessions:parsed.sessions||[],grants:parsed.grants||[],emailOutbox:parsed.emailOutbox||[],recoveries:parsed.recoveries||[],audit:parsed.audit||[]};for(const account of this.store.accounts)if(!('revokedReason' in account))account.revokedReason=null;for(const entry of this.store.emailOutbox??[]){const legacy=entry as Partial<LocalOutboxEntry>;if(legacy.lastErrorStatus===undefined){entry.lastErrorStatus=null;entry.lastProviderError=null}}}}
   catch(error:any){if(error?.code!=='ENOENT')console.warn('[beta] config/beta/store.json is unreadable — starting from an empty beta:',error.message)}
   this.reap();
   return this;
@@ -200,23 +210,30 @@ export class LocalBetaService implements BetaService {
  }
  private queueEmail(template:LocalOutboxEntry['template'],email:string,message:ReturnType<typeof invitationEmail>|ReturnType<typeof recoveryEmail>){
   const encrypted=sealEmail(message,this.mailKey!);
-  const entry:LocalOutboxEntry={id:randomUUID(),template,recipientDigest:hashToken(normalizeEmail(email)),...encrypted,createdAt:this.now(),nextAttemptAt:this.now(),attempts:0,sentAt:null,lastErrorCode:null};
+  const entry:LocalOutboxEntry={id:randomUUID(),template,recipientDigest:hashToken(normalizeEmail(email)),...encrypted,createdAt:this.now(),nextAttemptAt:this.now(),attempts:0,sentAt:null,lastErrorCode:null,lastErrorStatus:null,lastProviderError:null};
   this.store.emailOutbox??=[];this.store.emailOutbox.push(entry);return entry;
  }
  private delivery(account:BetaAccount):InvitationDeliveryView{
   const latest=(this.store.emailOutbox??[]).filter(entry=>entry.template==='invitation'&&entry.recipientDigest===hashToken(account.email)).sort((a,b)=>b.createdAt-a.createdAt)[0];
   if(!latest)return {status:'none',activated:!!account.password};
-  return {status:latest.sentAt===null?'pending':'sent',activated:!!account.password,expiresAt:account.invite?.expiresAt??null,sentAt:latest.sentAt,attempts:latest.attempts,errorCode:latest.lastErrorCode};
+  const errorCode=latest.lastErrorCode;
+  const errorStatus=latest.lastErrorStatus??null;
+  const providerError=latest.lastProviderError??null;
+  const pending=latest.sentAt===null;
+  return {status:pending?'pending':'sent',activated:!!account.password,expiresAt:account.invite?.expiresAt??null,sentAt:latest.sentAt,attempts:latest.attempts,errorCode,errorStatus,providerError,nextAttemptAt:pending?latest.nextAttemptAt:null,guidance:pending&&errorCode?describeEmailFailure(errorStatus??0,providerError):null};
  }
  async deliverPending(){
   if(!this.mailReady())return;
   for(const entry of [...(this.store.emailOutbox??[])].filter(row=>row.sentAt===null&&row.nextAttemptAt<=this.now()).slice(0,20)){
    try{
     await this.mailTransport!(openEmail(entry,this.mailKey!),entry.id);
-    entry.sentAt=this.now();entry.ciphertext='';entry.iv='';entry.tag='';entry.lastErrorCode=null;
+    entry.sentAt=this.now();entry.ciphertext='';entry.iv='';entry.tag='';entry.lastErrorCode=null;entry.lastErrorStatus=null;entry.lastProviderError=null;
    }catch(error){
     entry.attempts++;entry.nextAttemptAt=this.now()+[60_000,5*60_000,15*60_000,60*60_000,6*60*60_000][Math.min(entry.attempts-1,4)];
-    const status=Number((error as {status?:unknown})?.status||0);entry.lastErrorCode=status>=400&&status<500&&status!==429?'provider-rejected':'transient';
+    const status=Number((error as {status?:unknown})?.status||0);
+    const providerCode=typeof (error as {providerCode?:unknown})?.providerCode==='string'?(error as {providerCode:string}).providerCode:null;
+    entry.lastErrorCode=status>=400&&status<500&&status!==429?'provider-rejected':'transient';
+    entry.lastErrorStatus=status||null;entry.lastProviderError=providerCode;
    }
    await this.save();
   }
@@ -279,6 +296,7 @@ export class LocalBetaService implements BetaService {
   const existing=this.find(email);
   if(existing){
    if(existing.status==='approved') return {ok:false,status:409,code:'already-approved',message:'That address already has an approved account — sign in, or open the invite link from your approval.'};
+   if(existing.status==='revoked') return {ok:false,status:403,code:'revoked',message:'That email address was revoked from the closed beta. Contact the SCOUT team if you believe this is a mistake.'};
    return {ok:false,status:409,code:'already-applied',message:'That address already has an application in review. Sign in if you have already set a password.'};
   }
   const account:BetaAccount={
@@ -317,7 +335,7 @@ export class LocalBetaService implements BetaService {
    this.failures.set(context.address,next);
    return {ok:false,status:401,code:'bad-credentials',message:'That email address and password do not match an account.'};
   }
-  if(account.status!=='approved') return {ok:false,status:403,code:account.status==='pending'?'pending-review':'rejected',message:account.status==='pending'?'This application is still in review. We will email you if it is approved.':'This application was not approved for the closed beta.'};
+  if(account.status!=='approved') return {ok:false,status:403,code:account.status==='pending'?'pending-review':account.status==='revoked'?'revoked':'rejected',message:account.status==='pending'?'This application is still in review. We will email you if it is approved.':account.status==='revoked'?'This account has been revoked. Contact the SCOUT team if you believe this is a mistake.':'This application was not approved for the closed beta.'};
   this.failures.delete(context.address);
   const cookieId=this.issueSession(account,context);
   await this.save();
@@ -365,17 +383,34 @@ export class LocalBetaService implements BetaService {
   this.recordAudit('password-recovery.completed',account.id);await this.save();
   return {ok:true,value:{ok:true}};
  }
- async decide(id:string,decision:'approve'|'reject',decidedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>{
+ // Cutting access ends everything the account holds: sessions, launchers, recovery tokens, pending
+ // invites and queued mail. The password digest is kept, so an erroneous revocation is recoverable
+ // by restoring the status — the account signs in with its existing password and re-links launchers.
+ private cutAccess(account:BetaAccount,status:'rejected'|'revoked',decidedBy:string,reason:string|null){
+  account.status=status;account.decidedAt=this.now();account.decidedBy=decidedBy;
+  account.revokedReason=status==='revoked'?reason:null;
+  account.invite=null;
+  this.store.sessions=this.store.sessions.filter(session=>session.accountId!==account.id);
+  const moment=this.now();
+  for(const device of account.devices)if(!device.revokedAt)device.revokedAt=moment;
+  this.store.recoveries=(this.store.recoveries??[]).filter(row=>row.accountId!==account.id);
+  const digest=hashToken(account.email);
+  this.store.emailOutbox=(this.store.emailOutbox??[]).filter(entry=>entry.recipientDigest!==digest||entry.sentAt!==null);
+ }
+ async decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason=''):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>{
   const account=this.store.accounts.find(entry=>entry.id===id);
   if(!account) return {ok:false,status:404,code:'not-found',message:'That application no longer exists.'};
+  if(account.status==='revoked')return {ok:false,status:409,code:'already-decided',message:'A revoked account cannot be re-approved. Delete the account and ask for a fresh application instead.'};
   if(decision==='reject'&&account.status==='rejected')return {ok:false,status:409,code:'already-decided',message:'A rejected application is terminal. A new application is required.'};
+  if(decision==='revoke'&&account.status!=='approved')return {ok:false,status:409,code:'invalid-decision',message:'Only approved accounts can be revoked. Reject a pending application instead.'};
   if(decision==='approve'&&account.status==='rejected')return {ok:false,status:409,code:'already-decided',message:'A rejected application is terminal. A new application is required.'};
   if(decision==='approve'&&account.password)return {ok:false,status:409,code:'invitation-not-available',message:'Only pending applications or approved accounts that have not activated can receive an invitation.'};
   if(decision==='approve'&&!this.mailReady())return this.emailUnavailable();
   const renewal=decision==='approve'&&account.status==='approved';
   const invite=decision==='approve'?this.grantInvite(account,decidedBy,renewal):null;
-  if(decision==='reject'){account.status='rejected';account.decidedAt=this.now();account.decidedBy=decidedBy;account.invite=null;this.store.sessions=this.store.sessions.filter(session=>session.accountId!==account.id)}
-  this.recordAudit(renewal?'invitation.resent':`application.${decision}`,account.id);
+  if(decision==='reject')this.cutAccess(account,'rejected',decidedBy,null);
+  if(decision==='revoke')this.cutAccess(account,'revoked',decidedBy,reason.trim().slice(0,MAX_REVOKE_REASON)||null);
+  this.recordAudit(decision==='revoke'?'account.revoked':renewal?'invitation.resent':`application.${decision}`,account.id);
   await this.save();
   if(decision==='approve')await this.deliverPending();
   return {ok:true,value:{account:accountView(account),invite,invitationDelivery:decision==='approve'?this.delivery(account):undefined}};
@@ -448,7 +483,7 @@ export class LocalBetaService implements BetaService {
   this.reap();
   const current=this.sessionAccount(cookieId);
   if(!current) return {ok:false,status:401,code:'no-session',message:'Sign in with your SCOUT account before approving a launcher.'};
-  if(current.account.status!=='approved') return {ok:false,status:403,code:'pending-review',message:'Your account is not approved yet, so it cannot link a launcher.'};
+  if(current.account.status!=='approved') return {ok:false,status:403,code:current.account.status==='pending'?'pending-review':current.account.status==='revoked'?'revoked':'rejected',message:current.account.status==='pending'?'Your account is not approved yet, so it cannot link a launcher.':current.account.status==='revoked'?'This account has been revoked, so it cannot link a launcher.':'This application was not approved, so it cannot link a launcher.'};
   const code=normalizeUserCode(userCode);
   const grant=this.store.grants.find(entry=>entry.userCode===code);
   if(!grant) return {ok:false,status:404,code:'unknown-code',message:'No launcher is waiting with that code. Copy it from the launcher window.'};
@@ -497,7 +532,7 @@ export class HostedBetaService implements LauncherBetaService {
  // The site half is deliberately absent here: in hosted mode the browser's /api/beta requests are
  // proxied verbatim to this service (cookies included), so a second implementation of them would
  // only be a copy that drifts. What the host itself needs is the launcher half below.
- async decide(id:string,decision:'approve'|'reject',decidedBy:string){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy})}
+ async decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason=''){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy,...(reason?{reason}:{})})}
  async resendInvitation(id:string,requestedBy:string){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id)+'/resend-invitation','POST',{requestedBy})}
  async applicationReview(){const result=await this.call<ApplicationReviewView>('/applications','GET');return result.ok?result.value:{applications:[],invitations:{}}}
  async applications(){return (await this.applicationReview()).applications}

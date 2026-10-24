@@ -6,7 +6,9 @@
 // This mirrors the host's own account routing: the /api/beta prefix is stripped, the browser-
 // safe routes are forwarded, and the owner service key is injected server-side so browsers
 // never see it. Cookies flow both ways so `scout_account` sessions work exactly as on a
-// self-hosted deployment.
+// self-hosted deployment. The application desk (`/applications*`) additionally verifies the
+// browser's session against the service's reviewer flag before the key is injected, so only
+// an authorized reviewer session can list or decide applications through the public website.
 //
 // The account-service URL and the service key are Worker secrets; they never reach the browser.
 // The plaintext invitation token is stripped from decision/resend responses: invites are
@@ -201,6 +203,59 @@ export const onRequest = async (context: {env: Env; request: Request}) => {
       {errorName: errorName(error), errorMessage: sanitizeText(error instanceof Error ? error.message : error, redactions)},
       'error',
     );
+  }
+
+  // The application desk is reviewer-only on every surface. Before the service key is injected,
+  // the account service is asked who the browser's session belongs to; only an approved
+  // owner/reviewer session is forwarded. Without this gate any visitor could list applicants
+  // and drive approve/reject/revoke decisions through the public website.
+  if (route === '/applications' || route.startsWith('/applications/')) {
+    const statusUrl = new URL(target.toString());
+    statusUrl.pathname = statusUrl.pathname.replace(/\/applications(\/.*)?$/, '/status');
+    statusUrl.search = '';
+    let reviewer = false;
+    let signedIn = false;
+    try {
+      upstreamFetchAttempted = true;
+      const check = await fetch(statusUrl.toString(), {
+        method: 'GET',
+        headers: {
+          ...(request.headers.get('cookie') ? {cookie: request.headers.get('cookie') as string} : {}),
+          ...(request.headers.get('user-agent')
+            ? {'user-agent': request.headers.get('user-agent') as string}
+            : {}),
+        },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10_000),
+      });
+      const checkBody = (await check.json().catch(() => null)) as {
+        reviewer?: unknown;
+        account?: unknown;
+      } | null;
+      signedIn = Boolean(checkBody?.account);
+      reviewer = check.ok && checkBody?.reviewer === true;
+    } catch (error) {
+      return jsonResponse(
+        502,
+        {error: 'The account service could not be reached.', code: 'upstream-unreachable'},
+        {
+          errorName: errorName(error),
+          errorMessage: sanitizeText(error instanceof Error ? error.message : error, redactions),
+        },
+        'error',
+      );
+    }
+    if (!reviewer) {
+      return jsonResponse(
+        signedIn ? 403 : 401,
+        signedIn
+          ? {
+              error: 'Only an authorized SCOUT beta reviewer may review applications.',
+              code: 'not-beta-reviewer',
+            }
+          : {error: 'Sign in with an authorized SCOUT reviewer account.', code: 'no-account'},
+      );
+    }
   }
 
   const headers = new Headers();

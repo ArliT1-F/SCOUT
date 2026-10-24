@@ -26,7 +26,7 @@ import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './
 import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
 import {appPath,resolveDistDir,readInstalledEnv} from './runtime.js';
 import {hostname} from 'node:os';
-import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
+import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_REVOKE_REASON,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
 import {PlatformStore,isPlatformOwner,platformOwnerEmail,normalizeEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash} from './platform.js';
 import {PlatformDeviceService,PlatformSyncAgent,SyncOutbox} from './platform-sync.js';
@@ -659,11 +659,13 @@ app.get('/api/beta/applications',async(req,res)=>{
 app.post('/api/beta/applications/:id',async(req,res)=>{
  await refreshPlatformSettings();
  const reviewer=await betaReviewAccess(req,res);if(!reviewer)return;
- const decision=req.body?.decision==='approve'?'approve':req.body?.decision==='reject'?'reject':null;
- if(!decision){res.status(400).json({error:'Choose approve or reject.',code:'invalid-decision'});return}
- const result=await beta.launcher.decide(String(req.params.id),decision,reviewer.email);
+ const decision=req.body?.decision==='approve'?'approve':req.body?.decision==='reject'?'reject':req.body?.decision==='revoke'?'revoke':null;
+ if(!decision){res.status(400).json({error:'Choose approve, reject or revoke.',code:'invalid-decision'});return}
+ const reason=typeof req.body?.reason==='string'?req.body.reason.trim():'';
+ if(reason.length>MAX_REVOKE_REASON){res.status(400).json({error:`A revocation reason is at most ${MAX_REVOKE_REASON} characters.`,code:'invalid-reason'});return}
+ const result=await beta.launcher.decide(String(req.params.id),decision,reviewer.email,reason);
  sendBetaResult(res,result,value=>{
-  audit.record({id:reviewer.id,name:reviewer.email,role:'owner'},`beta.application.${decision}`,value.account.email);
+  audit.record({id:reviewer.id,name:reviewer.email,role:'owner'},decision==='revoke'?'beta.account.revoked':`beta.application.${decision}`,reason?`${value.account.email} — ${reason}`:value.account.email);
   res.json({application:value.account,inviteUrl:null,invitationDelivery:(value as any).invitationDelivery||{status:decision==='approve'?'sent':'none'}});
  });
 });
@@ -688,7 +690,7 @@ app.get('/api/ops/health',(req,res)=>{
   const list=releases.list();
   const snapshot=healthSnapshot({
    startedAt,version:'0.1.0',pid:process.pid,
-   beta:{mode:beta.mode,applications:{pending:applications.filter(entry=>entry.status==='pending').length,approved:applications.filter(entry=>entry.status==='approved').length,rejected:applications.filter(entry=>entry.status==='rejected').length},devices:applications.reduce((sum,entry)=>sum+entry.devices.length,0)},
+   beta:{mode:beta.mode,applications:{pending:applications.filter(entry=>entry.status==='pending').length,approved:applications.filter(entry=>entry.status==='approved').length,rejected:applications.filter(entry=>entry.status==='rejected').length,revoked:applications.filter(entry=>entry.status==='revoked').length},devices:applications.reduce((sum,entry)=>sum+entry.devices.length,0)},
    licence:{state:licenceView.state,enforced:licenceView.enforced,email:licenceView.email},
    releases:{published:list.length,latest:list[0]?.version??null,downloads:list.reduce((sum,entry)=>sum+entry.downloads,0)},
    requests:requests.summary(),

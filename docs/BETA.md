@@ -59,6 +59,13 @@ CORS configuration anywhere.
 6. **Revoke** — the app's dashboard lists linked launchers with a last-seen time and an **Unlink** button.
    Revoking takes effect on the launcher's next licence check (within 15 minutes; immediately on a
    restart), and the launcher says so rather than dying quietly.
+7. **Revoke an account** — when a tester abuses the beta (exploit, offence, shared credentials), a
+   reviewer presses **Revoke access** on the approved account in `/admin` (or the panel's review desk)
+   and optionally records why. Revocation signs the account out everywhere, revokes all its launchers,
+   clears its invites/recovery tokens/queued mail, blocks sign-in (`403 revoked`) and re-application
+   with the same address, and hides the download. The status is `revoked` — distinct from `rejected`,
+   which stays the answer for an application that was never approved. Both are terminal; see
+   [ACCOUNT-SERVICE.md](ACCOUNT-SERVICE.md) for the recovery path after an erroneous revocation.
 7. **Run** — the launcher asks about itself every 15 minutes and caches the answer. The states it can
    report are `active`, `pending`, `unlinked`, `revoked`, `unknown` (the service does not know this
    installation — link it again) and `offline` (nobody answered; the last verified answer stays in
@@ -102,13 +109,13 @@ value. The host proxies `GET|POST /api/beta/<path>` to `${SCOUT_BETA_API_URL}/<p
 
 | Method | Path | Body | Answer |
 | --- | --- | --- | --- |
-| GET | `/status` | — | `BetaStatusView` |
+| GET | `/status` | — | `BetaStatusView` (includes `reviewer` for the signed-in session on the hosted service) |
 | POST | `/apply` | `ApplicationInput` + `address` | `{account, invite:null}`; invitation is never returned to browser |
 | POST | `/login` | `{email, password, address, userAgent}` | `{account}` + `Set-Cookie: scout_account=…` |
 | POST | `/logout` | — (cookie) | `{ok:true}` + cleared cookie |
 | POST | `/activate` | `{invite, password, address}` | `{account}` + cookie |
 | GET | `/applications` | — (service key) | `{applications, invitations}` delivery metadata |
-| POST | `/applications/:id` | `{decision, decidedBy}` | `{account, invite, invitationDelivery}`; service-key-only backend response, not exposed to browser |
+| POST | `/applications/:id` | `{decision: approve\|reject\|revoke, decidedBy, reason?}` | `{account, invite, invitationDelivery}`; service-key-only backend response, not exposed to browser |
 | POST | `/applications/:id/resend-invitation` | `{requestedBy}` | account and invitation delivery metadata |
 | POST | `/password-recovery` | `{email}` | generic non-enumerating acknowledgement |
 | POST | `/password-recovery/complete` | `{token, password}` | `{ok:true}`; revokes existing sessions |
@@ -118,7 +125,7 @@ value. The host proxies `GET|POST /api/beta/<path>` to `${SCOUT_BETA_API_URL}/<p
 | POST | `/device/approve` \| `/device/deny` | `{userCode}` + cookie | `{account}` |
 | POST | `/devices/revoke` | `{deviceId}` + cookie | `{account}` |
 | POST | `/license/check` | `{deviceId, installationId, token}` | `{status: active\|revoked\|unknown, email?, displayName?}` |
-| GET | `/healthz` | — | `{ok, accounts, pending, devices}` |
+| GET | `/healthz` | — | `{ok, accounts, pending, devices, emailDeliveryConfigured, emailOutboxPending, emailOutboxRejected, emailLastFailure}` |
 
 `/license/check` is what the launcher's licence check asks (`server/licensing.ts`, and the shell's own
 parser in `src-tauri/core/src/licence.rs`). It answers `200` with `unknown` for a device the service
@@ -154,4 +161,4 @@ are never proxied: they are about *this* installation.
 
 ## Verified here
 
-`tests/beta.test.ts` pins the local state machine and legacy workflows; `tests/account-service.test.ts` drives the hosted service over HTTP, including encrypted-email delivery, missing mail configuration, expiry/replacement, concurrent single-use activation, recovery expiry/reuse/session revocation and stored-secret checks. `tests/surface.test.ts` exercises the real website's owner/reviewer access, denial for anonymous and ordinary accounts, invite-secret non-disclosure, and activation from delivered mail. `tests/platform-sync.test.ts` and `tests/licensing.test.ts` retain the hosted/local broadcast and entitlement regression coverage.
+`tests/beta.test.ts` pins the local state machine and legacy workflows; `tests/account-service.test.ts` drives the hosted service over HTTP, including encrypted-email delivery, missing mail configuration, expiry/replacement, concurrent single-use activation, recovery expiry/reuse/session revocation, stored-secret checks, account revocation and email-failure diagnostics. `tests/surface.test.ts` exercises the real website's owner/reviewer access, denial for anonymous and ordinary accounts, invite-secret non-disclosure, and activation from delivered mail. `tests/platform-sync.test.ts` and `tests/licensing.test.ts` retain the hosted/local broadcast and entitlement regression coverage.

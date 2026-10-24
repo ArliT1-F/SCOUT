@@ -110,8 +110,8 @@ function usePanelSession(){
  useEffect(()=>{void (async()=>{try{const surface=await fetch('/api/surface').then(r=>r.json());if(surface.surface!=='host')return;const res=await apiFetch('/api/session');if(res.ok)setSession(await res.json())}catch{}})()},[]);
  return session;
 }
-const statusLabel=(status:string)=>status==='approved'?'APPROVED':status==='rejected'?'NOT APPROVED':'IN REVIEW';
-const statusTone=(status:string)=>status==='approved'?'ok':status==='rejected'?'bad':'warn';
+const statusLabel=(status:string)=>status==='approved'?'APPROVED':status==='rejected'?'NOT APPROVED':status==='revoked'?'REVOKED':'IN REVIEW';
+const statusTone=(status:string)=>status==='approved'?'ok':status==='rejected'||status==='revoked'?'bad':'warn';
 // ------------------------------------------------------------------ shared chrome
 function SiteBrand(){return <a className="site-brand" href="/welcome"><ScoutMark className="brand-symbol" size={26}/> scout<span className="brand-dot">®</span></a>}
 export function SiteNav({account,link,onHost=false,section=''}:{account:AccountView|null;link?:InstallationView|null;onHost?:boolean;section?:string}){
@@ -666,7 +666,7 @@ export function DownloadPage(){
       </section>
       {account.status!=='approved'&&<section className="site-card">
        <h3>Your account is {statusLabel(account.status).toLowerCase()}</h3>
-       <p className="site-card-lead">{account.status==='pending'?'The download opens the moment your application is approved. Nothing else is needed from you.':'This account was not approved for the closed beta.'}</p>
+       <p className="site-card-lead">{account.status==='pending'?'The download opens the moment your application is approved. Nothing else is needed from you.':account.status==='revoked'?'This account’s access was revoked. Contact the SCOUT team if you believe this is a mistake.':'This account was not approved for the closed beta.'}</p>
       </section>}
       <p className="site-fineprint site-dash-foot">Signed in as {account.email}. Account created {new Date(account.createdAt).toLocaleString()}. This host is running the account service {status?.mode==='hosted'?'remotely (SCOUT_BETA_API_URL)':'locally (config/beta/store.json)'}.</p>
      </div>}
@@ -817,6 +817,7 @@ export function BetaApplicationsPanel(){
   if(!res.ok){setError(response?.error||'That action could not be saved.');return}
   if(path.endsWith('/resend-invitation'))setNotice(response.invitationDelivery?.status==='pending'?'Invitation is queued for delivery; the service will retry automatically.':'A replacement invitation was sent by email.');
   else if(body&&typeof body==='object'&&(body as any).decision==='approve')setNotice(response.invitationDelivery?.status==='pending'?'Application approved. Invitation queued; delivery will retry automatically.':'Application approved. A single-use invitation was emailed to the applicant.');
+  else if(body&&typeof body==='object'&&(body as any).decision==='revoke')setNotice(`Access revoked for ${response.application?.email||'the account'}.`);
   else setNotice(`${response.application?.email||'Application'} was rejected.`);
   await load();
  }
@@ -828,14 +829,21 @@ export function BetaApplicationsPanel(){
   {error&&<Notice>{error}</Notice>}{notice&&<Notice tone="ok">{notice}</Notice>}
   {applications.length?<div className="beta-list">{applications.map(entry=>{
    const invitation=invitations[entry.id];
-   const delivery=invitation?.activated?'Account activated':invitation?.status==='sent'?'Invitation emailed':invitation?.status==='pending'?'Email queued for retry':null;
+   const delivery=entry.status==='revoked'?'Access revoked':invitation?.activated?'Account activated':invitation?.status==='sent'?'Invitation emailed':invitation?.status==='pending'?'Email queued for retry':null;
+   const revoke=()=>{
+    if(!window.confirm(`Revoke access for ${entry.displayName} (${entry.email})? They will be signed out everywhere, their launchers will lose entitlement, and they will not be able to sign in again.`))return;
+    const answer=window.prompt('Why is this account being revoked? (optional — recorded with the decision)','');
+    if(answer===null)return;
+    void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'revoke',...(answer.trim()?{reason:answer.trim()}:{})});
+   };
    return <article key={entry.id} className={'beta-row '+entry.status}>
     <div className="beta-who"><b>{entry.displayName}</b><small>{entry.email}{entry.organisation?` · ${entry.organisation}`:''}{entry.country?` · ${entry.country}`:''}</small></div>
-    <p className="beta-use">{entry.useCase||'No note supplied.'}{delivery&&<small className="beta-delivery">{delivery}{invitation?.expiresAt&&!invitation.activated?` · expires ${new Date(invitation.expiresAt).toLocaleString()}`:''}</small>}</p>
+    <p className="beta-use">{entry.useCase||'No note supplied.'}{delivery&&<small className="beta-delivery">{delivery}{invitation?.expiresAt&&!invitation.activated?` · expires ${new Date(invitation.expiresAt).toLocaleString()}`:''}</small>}{entry.status==='revoked'&&entry.revokedReason&&<small className="beta-delivery">Reason: {entry.revokedReason}</small>}{invitation?.guidance&&<small className="beta-delivery">{invitation.guidance}</small>}</p>
     <span className={`site-status ${statusTone(entry.status)}`}><span className="status-dot"/>{statusLabel(entry.status)}</span>
     <div className="beta-actions">
      {entry.status==='pending'&&<><button className="button primary" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'approve'})}>{busy===entry.id?<Loader2 className="spin" size={13}/>:<Check size={13}/>}Approve</button><button className="button danger-button" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}`,{decision:'reject'})}>Reject</button></>}
      {entry.status==='approved'&&!invitation?.activated&&<button className="button" disabled={busy===entry.id} onClick={()=>void action(entry.id,`/api/beta/applications/${entry.id}/resend-invitation`,{})}>{busy===entry.id?<Loader2 className="spin" size={13}/>:<RefreshCw size={13}/>}Resend invitation</button>}
+     {entry.status==='approved'&&<button className="button danger-button" disabled={busy===entry.id} onClick={revoke}>Revoke access</button>}
     </div>
    </article>;
   })}</div>:<p className="beta-empty">No applications yet. They appear here the moment somebody applies at <code>/apply</code>.</p>}

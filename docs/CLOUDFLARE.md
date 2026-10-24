@@ -70,7 +70,7 @@ once per environment and are **not** in the repository:
 | Secret | Meaning |
 |---|---|
 | `SCOUT_ACCOUNT_SERVICE_URL` | Origin of the Node.js account service (https) |
-| `SCOUT_BETA_API_KEY` | Service key for owner-only `/api/beta/applications*` routes |
+| `SCOUT_BETA_API_KEY` | Service key for owner-only `/api/beta/applications*` routes. The Worker injects it only after verifying the browser's session against the account service's reviewer flag. |
 
 Set them with `npx wrangler secret put SCOUT_ACCOUNT_SERVICE_URL` (and
 `npx wrangler secret put SCOUT_BETA_API_KEY`) against worker `scout`, or in the Cloudflare
