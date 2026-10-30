@@ -24,7 +24,7 @@ const KEYED_TABLES:readonly KeyedTableSpec[]=[
   columns:[
    'id','email','normalized_email','display_name','organisation','country','use_case','events',
    'status','password','created_at','decided_at','decided_by','invite_digest','invite_expires_at',
-   'last_login_at','activated_at','revoked_reason',
+   'last_login_at','activated_at','revoked_reason','plan','trial_ends_at','billing',
   ],
   keyOf:row=>String(row.id),
   deleteFilter:row=>`id=eq.${encodeURIComponent(String(row.id))}`,

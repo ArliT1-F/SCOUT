@@ -10,7 +10,7 @@ import {MatchStore,FeedMonitor,type TokenSource} from './state.js';
 import {EventTracker} from './events.js';
 import {SideTracker,configSides} from './sides.js';
 import {seriesState} from './series.js';
-import {configSchema,normalizeConfig,type ScoutConfig} from './config.js';
+import {configSchema,emptyPlayer,normalizeConfig,type ScoutConfig} from './config.js';
 import {layoutSchema,type LayoutConfig} from './layout.js';
 import {defaultOverlay,overlaySchema,type OverlayConfig} from './overlay.js';
 import {OperatorDirectory} from './operators.js';
@@ -28,7 +28,19 @@ import {appPath,resolveDistDir,readInstalledEnv} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_REVOKE_REASON,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
-import {PlatformStore,isPlatformOwner,platformOwnerEmail,normalizeEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash} from './platform.js';
+import {PlatformStore,isPlatformOwner,platformOwnerEmail,normalizeEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash,legacyConfigHash} from './platform.js';
+import {automationConfigSchema,normalizeAutomation,AutomationEngine,defaultAutomation,type AutomationConfig} from './automation.js';
+import {buildIcs,nextUps,slotIsSoon,suggestBreak} from './schedule.js';
+import {buildRecap,recapCsv,snapshotFromState} from './recap.js';
+import {markersCsv,type ClipMarker} from './recordings.js';
+import {recapCardSvg,recapCaption} from './recap-card.js';
+import {validateWebhookUrl,deliverWebhook,buildRecapDiscordMessage,WebhookError} from './webhooks.js';
+import {entitlementsFor,canCreateTournament,hasFeature,planRefusal,publicPlanViews,FEATURE_LABELS,isPlanId,type Entitlements,type Feature} from './plans.js';
+import {billingConfiguration,billingReady,createCheckoutSession,verifyStripeSignature,parseStripeEvent,BillingLedger} from './billing.js';
+import {hubMeta,injectHubMeta,type PublicationInput} from './hub.js';
+import {SponsorLedger,activeSponsor,rotationBucket,sponsorCsv} from './sponsors.js';
+import {FeedWatchdog,buildFeedAlert} from './watchdog.js';
+import {PORTAL_TTL_MS,PortalStore,type PortalDecision} from './portal.js';
 import {PlatformDeviceService,PlatformSyncAgent,SyncOutbox} from './platform-sync.js';
 import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
 import {loadEnvFile} from './env.js';
@@ -84,6 +96,9 @@ const panel=new PanelAuth({
 });
 const lease=new ControlLease();
 const audit=new AuditTrail('recordings');await audit.load();
+// (The engine is created below, once `controls` exists; this declaration keeps saveControls free of
+// an ordering dependency on module scope.)
+let automationEngine:AutomationEngine|undefined;
 const recorder=new GsiRecorder('recordings');await recorder.initialize(process.env.LOG_GSI==='1');
 const archives=new MatchArchiveStore('recordings/matches.json');await archives.load();
 // ---- Closed beta (server/beta.ts): who may download the launcher, and which installation belongs
@@ -229,18 +244,40 @@ try {layout=layoutSchema.parse(JSON.parse(await readFile('config/layout.json','u
 // themes, layers and custom graphics can evolve without breaking older layout.json files.
 let overlay:OverlayConfig=defaultOverlay();
 try{overlay=overlaySchema.parse(JSON.parse(await readFile('config/overlay.json','utf8')))}catch(error:any){if(error?.code!=='ENOENT')console.warn('[overlay] config/overlay.json is invalid — using the production defaults:',error.message)}
+// Auto-pilot (server/automation.ts). The file is optional and gitignored, exactly like
+// config/operator.json; with no file every rule ships disabled, so an upgrade never changes what
+// goes to air. It only ever writes the scene and the break countdown.
+const feedWatchdog=new FeedWatchdog();
+const portalStore=await new PortalStore(path.join(path.dirname(platformFile),'portal','links.json')).load();
+const sponsorLedger=await new SponsorLedger(path.join(path.dirname(platformFile),'sponsors','impressions.json')).load();
+let automationConfig:AutomationConfig=defaultAutomation();
+try{automationConfig=normalizeAutomation(JSON.parse(await readFile('config/automation.json','utf8')))}catch(error:any){if(error?.code!=='ENOENT')console.warn('[automation] config/automation.json is invalid — using the defaults (all rules off):',error.message)}
 // Team logos, map pictures, player portraits and radar images are operator uploads. They live under
 // public/uploads/ (gitignored) and are stored as plain image files referenced by path from
 // config/teams.json or config/radars.json.
 const UPLOAD_ROOT='public/uploads';
 const IMAGE_EXTS:Record<string,string>={'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/gif':'gif','image/webp':'webp','image/svg+xml':'svg'};
+// An overlay graphic is drawn inside the broadcast canvas and is often supplied by a sponsor, so it is
+// restricted to the four raster formats a browser renders in an <img>: PNG, JPEG, WEBP and GIF. No
+// SVG — it is a document, not a picture, and nothing on air needs to carry script.
+const OVERLAY_EXTS:Record<string,string>={'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/gif':'gif','image/webp':'webp'};
 const UPLOAD_KINDS:Record<string,{dir:string;exts:Record<string,string>}>={
  logo:{dir:'logos',exts:IMAGE_EXTS},
  map:{dir:'maps',exts:IMAGE_EXTS},
  radar:{dir:'radars',exts:IMAGE_EXTS},
  player:{dir:'players',exts:IMAGE_EXTS},
- overlay:{dir:'overlays',exts:IMAGE_EXTS},
+ overlay:{dir:'overlays',exts:OVERLAY_EXTS},
 };
+// The data URL says what the browser believed. These bytes say what the file is: a renamed .svg, an
+// HTML page or a zip must not land in public/uploads and be served back as an image.
+function sniffImage(buffer:Buffer):string|null {
+ if(buffer.length>=8&&buffer.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]))) return 'image/png';
+ if(buffer.length>=3&&buffer[0]===0xff&&buffer[1]===0xd8&&buffer[2]===0xff) return 'image/jpeg';
+ if(buffer.length>=6&&/^GIF8[79]a$/.test(buffer.toString('ascii',0,6))) return 'image/gif';
+ if(buffer.length>=12&&buffer.toString('ascii',0,4)==='RIFF'&&buffer.toString('ascii',8,12)==='WEBP') return 'image/webp';
+ if(/^\s*(?:<\?xml|<svg)/i.test(buffer.toString('utf8',0,64))) return 'image/svg+xml';
+ return null;
+}
 for(const dir of UPLOAD_DIRS) await mkdir(path.join(UPLOAD_ROOT,dir),{recursive:true});
 // Panel saves, imports, activations and remote applies share one atomic commit lane. The remote
 // apply rechecks the live hash inside it so a save during slow artwork restoration is never lost.
@@ -259,7 +296,7 @@ async function saveTournamentConfig(next:ScoutConfig){
 // POST /gsi is CS2's own feed and authenticates with the GSI token inside its body, and POST/DELETE
 // /api/session is the way in and the way out.
 const PUBLIC_BETA_PATHS=new Set([
- '/api/beta/apply','/api/beta/login','/api/beta/logout','/api/beta/activate','/api/beta/password-recovery','/api/beta/password-recovery/complete',
+ '/api/beta/apply','/api/beta/trial','/api/beta/login','/api/beta/logout','/api/beta/activate','/api/beta/password-recovery','/api/beta/password-recovery/complete',
  '/api/beta/device/start','/api/beta/device/poll','/api/beta/device/approve','/api/beta/device/deny',
  '/api/beta/devices/revoke',
 ]);
@@ -274,12 +311,18 @@ function isProtected(req:express.Request){
  // Everything else under /api/beta (the owner's application list, the launcher link) stays behind
  // the panel gate like every other mutation.
  if(routePath.startsWith('/api/platform/')) return false; // own account-session auth (above)
+ // Billing carries its own credentials: a Stripe signature on the webhook, an account session on
+ // checkout/status/cancel. A panel token must not be a way to start a subscription.
+ if(routePath.startsWith('/api/billing/')) return false;
  if(req.method==='POST'&&routePath.startsWith('/api/beta/applications/'))return false; // account reviewer auth is enforced by the route
  return !PUBLIC_BETA_PATHS.has(routePath);
 }
 // Same-origin as well as token: a browser page on another site must not be able to drive the panel,
 // and a name the operator listed (a proxy that rewrites Host) is treated as the operator's own.
 function sameOrigin(req:express.Request){return originTrusted(req.get('origin'),req.get('host'),panel.allowedHosts)}
+// The public base URL of this request, used for calendar UIDs and hub links. Forwarded headers are
+// only trusted for the scheme, which is the one thing a reverse proxy has to tell us.
+function requestOrigin(req:express.Request){return `${requestIsSecure(req.headers)?'https':'http'}://${req.get('host')||'127.0.0.1'}`}
 function panelRequest(req:express.Request){return {address:req.socket.remoteAddress,host:req.get('host'),cookie:req.get('cookie'),headers:req.headers}}
 // Operator data that is not a capability of its own (recordings, match archives, OBS settings): any signed-in
 // panel role may read it, a request from another site or without a session may not.
@@ -378,7 +421,18 @@ app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
  if(!match||!spec){res.status(400).json({error:'Unsupported image — upload a PNG, JPEG, GIF, WEBP or SVG'});return}
  const buffer=Buffer.from(match[2],'base64');
  if(buffer.length<8||buffer.length>5*1024*1024){res.status(400).json({error:'Image must be between 8 bytes and 5 MB'});return}
- const mime=match[1].toLowerCase(), ext=spec.exts[mime];
+ const claimed=match[1].toLowerCase();
+ const sniffed=sniffImage(buffer);
+ // The bytes win over the label. A file that is not an image at all is refused before it is written.
+ if(!sniffed||(sniffed==='image/svg+xml')!==(claimed==='image/svg+xml')){
+  res.status(400).json({error:'That file is not an image in a format SCOUT can draw.'});
+  return;
+ }
+ if(kind==='overlay'&&!spec.exts[sniffed]){
+  res.status(400).json({error:'Overlay graphics must be a PNG, JPEG, WEBP or GIF.'});
+  return;
+ }
+ const mime=claimed==='image/jpg'?'image/jpeg':claimed, ext=spec.exts[mime];
  const slug=(name.replace(/\.[a-z0-9]+$/i,'').replace(/[^a-z0-9-_]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,48)||'image').toLowerCase();
  const file=`${Date.now()}-${slug}.${ext}`, dir=path.join(UPLOAD_ROOT,spec.dir);
  await mkdir(dir,{recursive:true});
@@ -411,6 +465,12 @@ app.get('/api/beta/license',async(req,res)=>{
  const view=await licence.view(installation,req.query.refresh==='1');
  res.json(view);
 });
+// Tournament pages are a website feature (server/hub.ts). On a venue host the path would otherwise
+// fall through to the panel SPA and render the operator console at a public URL, so it is refused
+// explicitly rather than by accident.
+if(surface==='host'){
+ app.get(['/t/:slug','/embed/:slug'],(_req,res)=>res.status(404).type('text/plain').send('Tournament pages are served by the SCOUT website, not by a venue host.'));
+}
 // Machine-readable liveness for a supervisor: no panel session, no match data, no secrets.
 app.get(['/healthz','/api/healthz'],(_req,res)=>{
  const gsi=feed.snapshot();
@@ -421,6 +481,36 @@ app.get(['/healthz','/api/healthz'],(_req,res)=>{
 app.use('/api/pack/import',express.json({limit:'70mb'}));
 // Config-push outbox events embed the same bounded event pack, never arbitrary upload URLs.
 app.use('/api/platform/device/metrics',express.json({limit:'70mb'}));
+// Billing (server/billing.ts). The webhook is mounted *before* the JSON parser because Stripe signs
+// the raw bytes, and a verifier that re-serialises the body is a verifier that can be tricked.
+const billing=billingConfiguration();
+const billingLedger=await new BillingLedger(path.join(path.dirname(platformFile),'billing','events.json')).load();
+app.post('/api/billing/webhook',express.raw({type:'*/*',limit:'256kb'}),async(req,res)=>{
+ if(!sameOrigin(req)&&req.get('origin')){res.status(403).json({error:'Cross-site billing webhooks are refused.'});return}
+ const raw=Buffer.isBuffer(req.body)?req.body:Buffer.from(typeof req.body==='string'?req.body:'');
+ const verdict=verifyStripeSignature(raw,req.get('stripe-signature'),billing.webhookSecret);
+ if(!verdict.ok){console.warn(`[billing] refused a webhook: ${verdict.reason}`);res.status(400).json({error:'Invalid signature',code:'bad-signature'});return}
+ let event:any;try{event=JSON.parse(raw.toString('utf8'))}catch{res.status(400).json({error:'Invalid JSON',code:'bad-payload'});return}
+ const parsed=parseStripeEvent(event);
+ if(!parsed){res.json({received:true,ignored:true});return}
+ if(parsed.id&&billingLedger.has(parsed.id)){res.json({received:true,duplicate:true});return}
+ // Finding the account: the metadata the checkout session carried, then the email fallback. A
+ // webhook for an address that does not exist here is acknowledged, not retried forever.
+ let target:any=null;
+ const accountId=parsed.accountId,email=parsed.email;
+ if(accountId){const apps=await beta.launcher.applications().catch(()=>[]);target=apps.find((account:any)=>account.id===accountId)??null}
+ if(!target&&email){const apps=await beta.launcher.applications().catch(()=>[]);target=apps.find((account:any)=>normalizeEmail(String(account.email))===normalizeEmail(email))??null}
+ if(!target){console.warn('[billing] a webhook arrived for an account this deployment does not know');if(parsed.id)await billingLedger.add(parsed.id);res.json({received:true,unknownAccount:true});return}
+ const plan=parsed.plan??(target.plan&&isPlanId(target.plan)&&target.plan!=='trial'?target.plan:'organiser');
+ if(beta.launcher.setPlan){
+  const result=await beta.launcher.setPlan(target.id,{plan,billing:{status:parsed.status,customerId:target.billing?.customerId??null,subscriptionId:null,currentPeriodEnd:parsed.currentPeriodEnd,updatedAt:Date.now()}},'stripe webhook').catch(()=>null);
+  if(!result||!result.ok){res.status(503).json({error:'The account could not be updated; the provider will retry.',code:'account-update-failed'});return}
+ }
+ if(parsed.id)await billingLedger.add(parsed.id);
+ console.log(`[billing] ${parsed.type}: ${target.email} → ${plan} (${parsed.status})`);
+ audit.record({id:'billing',name:'Stripe',role:'owner'},'billing.webhook',`${parsed.type} · ${plan} · ${parsed.status}`);
+ res.json({received:true});
+});
 app.use(express.json({limit:'1mb'}));
 // The WebSocket carries the same snapshot the public overlay renders, so it stays readable — but a
 // handshake from another site is refused: no legitimate cross-site client exists, and a rebound
@@ -438,12 +528,53 @@ server.on('upgrade',(req,socket,head)=>{
  }
  wss.handleUpgrade(req,socket,head,ws=>wss.emit('connection',ws,req));
 });
-function snapshot(session?:PanelSessionView){const active=archives.active;return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,overlay,lease:lease.view(session?.principalId||undefined),recording:recorder.status,archive:active?{id:active.id,name:active.name,startedAt:active.startedAt,eventCount:active.events.length}:null,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{}),platform:{settings:platform.settings,activeTournamentId:platform.data.activeTournamentId}}}
+function snapshot(session?:PanelSessionView){const active=archives.active;return {state:store.state,lastSeen:store.lastSeen,revision:store.revision,serverTime:Date.now(),config,controls,layout,overlay,lease:lease.view(session?.principalId||undefined),recording:recorder.status,archive:active?{id:active.id,name:active.name,startedAt:active.startedAt,eventCount:active.events.length}:null,gsi:feed.snapshot(),events:events.snapshot(),sides:store.revision?sides.resolve(store.state,config):configSides(config),series:seriesState(store.state,config),radars,obs:{config:obsConfig,status:obs.status()},...(session?{session}:{}),platform:{settings:platform.settings,activeTournamentId:platform.data.activeTournamentId},automation:automationEngine?.status()??null,watchdog:feedWatchdog.status(Date.now(),store.lastSeen||feed.snapshot().lastPacketAt||null),portal:{links:portalStore.list(),pending:portalStore.queue().length},schedule:{next:nextUps(config.schedule||[],(controls.lateOffsetMinutes||0)*60_000,Date.now()).next,offsetMinutes:controls.lateOffsetMinutes||0}}}
 function broadcast(){const data=JSON.stringify(snapshot()); for(const client of wss.clients) if(client.readyState===WebSocket.OPEN){if(client.bufferedAmount>1e6) client.terminate(); else client.send(data)}}
 // The first snapshot of a connection carries *that* connection's session view, so the panel knows
 // whether it is local, remote, authenticated and when its session expires without a second request.
 wss.on('connection',(ws,req)=>ws.send(JSON.stringify(snapshot(req?panel.view({address:req.socket.remoteAddress,host:req.headers.host,cookie:req.headers.cookie,headers:req.headers}):undefined))));
 setInterval(broadcast,1000).unref();
+// Auto-pilot needs two clocks: one fires whatever is due (a delayed step of a rule), the other
+// notices the two facts the GSI feed cannot tell it — that a break countdown ran out and that the
+// next fixture is close. Both are unref'd, so a CLI replay never stays alive because of them.
+setInterval(()=>{void automationEngine?.tick()},500).unref();
+let lastBreakEndsAt:number|null=null;
+setInterval(()=>{
+ const now=Date.now();
+ // Feed watchdog: one transition per gap. The scene change is an ordinary auto-pilot rule, so it obeys
+ // the lease, the suspension and the audit trail exactly like every other rule; the alert is one
+ // message to the operator's own webhook and a failed delivery never touches the broadcast.
+ const lastSeen=store.lastSeen||feed.snapshot().lastPacketAt||null;
+ const transition=feedWatchdog.update({now,lastSeen,mapPhase:store.state.map?.phase,roundPhase:store.state.round?.phase});
+ if(transition.action==='lost'){
+  audit.record({id:'host',name:'SCOUT host',role:'owner'},'feed.lost',`no GSI data for ${Math.round(transition.silenceMs/1000)} s during a live map`);
+  automationEngine?.trigger({type:'feed-lost'});
+  void sendFeedAlert('lost',transition.silenceMs).catch(()=>{});
+ }
+ if(transition.action==='restored'){
+  audit.record({id:'host',name:'SCOUT host',role:'owner'},'feed.restored',`${Math.round(transition.silenceMs/1000)} s of silence ended`);
+  automationEngine?.trigger({type:'feed-restored'});
+  void sendFeedAlert('restored',transition.silenceMs).catch(()=>{});
+ }
+ const endsAt=controls.breakEndsAt??null;
+ if(lastBreakEndsAt!==null&&endsAt===lastBreakEndsAt&&now>=lastBreakEndsAt&&controls.scene==='break') automationEngine?.trigger({type:'break-over'});
+ lastBreakEndsAt=endsAt;
+ if(config.schedule?.length){
+  const soon=slotIsSoon(config.schedule,(controls.lateOffsetMinutes||0)*60_000,now);
+  if(soon) automationEngine?.trigger({type:'slot-soon',minutes:Math.max(0,Math.ceil((soon.effectiveAt-now)/60_000))});
+ }
+},5000).unref();
+// Proof of play for a sponsor layer: sample what is actually on screen. One impression per sponsor per
+// scene per rotation step, deduped by the ledger, so a second OBS source or a page reload cannot
+// inflate the number. The timer only does anything when a sponsor layer is visible.
+setInterval(()=>{
+ const widget=overlay.widgets.find(candidate=>candidate.kind==='sponsor'&&candidate.enabled&&candidate.showOn.includes(controls.scene as any));
+ if(!widget) return;
+ const now=Date.now();
+ const sponsor=activeSponsor(overlay.sponsors,now,widget.rotateMs);
+ if(!sponsor) return;
+ sponsorLedger.record({at:now,sponsorId:sponsor.id,sponsorName:sponsor.name,scene:controls.scene,bucket:rotationBucket(now,widget.rotateMs)});
+},5000).unref();
 // Opt-in only: a normal local host never creates an outbox, sync state or polling timer.
 if(surface==='host'&&platformUrl){
  try{
@@ -514,17 +645,188 @@ function checkedConfig(raw:unknown,res:express.Response){
 app.get('/api/platform/status',async(req,res)=>{
  await refreshPlatformSettings();
  const account:any=await currentAccount(req).catch(()=>null);
- res.json({ownerConfigured:Boolean(platformOwnerEmail()),isOwner:isPlatformOwner(account?.email),account:account?{id:account.id,email:account.email,status:account.status}:null,settings:platform.settings,activeTournamentId:platform.data.activeTournamentId,tournaments:account?platform.listFor(account.id):[],publicStats:platform.settings.publicStatsEnabled?platform.adminSummary([]).totals:null});
+ const entitlements=entitlementsFor(account,Date.now());
+ res.json({ownerConfigured:Boolean(platformOwnerEmail()),isOwner:isPlatformOwner(account?.email),account:account?{id:account.id,email:account.email,status:account.status,plan:account.plan??null,trialEndsAt:account.trialEndsAt??null}:null,entitlements,plans:publicPlanViews(entitlements.plan),billingReady:billingReady(billing),settings:platform.settings,activeTournamentId:platform.data.activeTournamentId,tournaments:account?platform.listFor(account.id):[],publicStats:platform.settings.publicStatsEnabled?platform.adminSummary([]).totals:null});
 });
 app.get('/api/platform/stats',async(_req,res)=>{
  await refreshPlatformSettings(); // public aggregates for /welcome (owner enables them in /admin)
  if(!platform.settings.publicStatsEnabled){res.json({enabled:false,totals:null});return}
  res.json({enabled:true,totals:platform.adminSummary([]).totals,tournaments:platform.data.tournaments.length});
 });
+// ---- Tournament Hub (server/hub.ts). A public page is a projection of a published tournament and
+// nothing else: no session, no host data, no roster detail unless the organiser switched it on.
+// Public reads are cacheable, which is what keeps a shared link cheap on a free-tier deployment.
+app.get('/api/public/tournaments',(_req,res)=>{
+ res.setHeader('Cache-Control','public, max-age=30');
+ res.json({tournaments:platform.hubs()});
+});
+app.get('/api/public/tournaments/:slug',(req,res)=>{
+ const projected=platform.publicTournament(String(req.params.slug));
+ if(!projected){res.status(404).json({error:'That tournament is not published (or no longer exists).',code:'not-found'});return}
+ res.setHeader('Cache-Control','public, max-age=15');
+ res.json({tournament:projected,meta:hubMeta(projected)});
+});
+app.get('/sitemap.xml',(req,res)=>{
+ const base=requestOrigin(req);
+ const escape=(value:string)=>value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+ const urls=[['/welcome','1.0'],['/apply','0.8'],['/privacy','0.3'],['/pricing','0.8']].map(([path,priority])=>`<url><loc>${escape(base+path)}</loc><priority>${priority}</priority></url>`);
+ // Only genuinely public hubs are listed; an unlisted tournament keeps working by link but stays out.
+ for(const hub of platform.hubs()) if(hub&&platform.bySlug(hub.slug)?.publication?.visibility==='public')
+  urls.push(`<url><loc>${escape(`${base}/t/${hub.slug}`)}</loc><lastmod>${new Date(hub.updatedAt).toISOString()}</lastmod><priority>0.9</priority></url>`);
+ res.type('application/xml').send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.join('')}</urlset>`);
+});
+app.put('/api/platform/tournaments/:id/publication',async(req,res)=>{
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return}
+ const account=await requireAccount(req,res);if(!account)return;
+ if(!await requireFeature(req,res,'hub'))return;
+ const parsed=z.object({published:z.boolean().optional(),slug:z.string().trim().max(48).optional(),visibility:z.enum(['public','unlisted','private']).optional(),showRoster:z.boolean().optional(),showSchedule:z.boolean().optional(),stream:z.string().trim().max(300).optional()}).strip().safeParse(req.body||{});
+ if(!parsed.success){res.status(400).json({error:'Invalid publication settings.',code:'invalid-publication'});return}
+ const result=await platform.setPublication(String(req.params.id),account.id,parsed.data as PublicationInput);
+ if(!result.ok){res.status(result.status).json({error:result.message,code:result.code});return}
+ audit.record({id:account.id,name:account.email,role:'owner'},result.value.publication?'tournament.published':'tournament.unpublished',`${result.value.name}${result.value.publication?` · ${result.value.publication.visibility} · /t/${result.value.publication.slug}`:''}`);
+ broadcast();
+ res.json({tournament:{...result.value,config:undefined,hasConfig:result.value.config!==null},publication:result.value.publication??null,hubUrl:result.value.publication?`${requestOrigin(req)}/t/${result.value.publication.slug}`:null});
+});
+// ---- Team portal (server/portal.ts). A captain holds a signed link, not an account. The public side
+// can read the team context and submit; everything that changes the broadcast is an operator action.
+function portalBase(req:express.Request){return `/portal/`}
+app.get('/api/public/portal/:token',(req,res)=>{
+ res.setHeader('Cache-Control','no-store');
+ const resolved=portalStore.resolve(String(req.params.token));
+ if(!resolved){res.status(404).json({error:'This link is not valid. Ask the organiser for a new one.',code:'not-found'});return}
+ const tournament=platform.get(resolved.link.eventId);
+ const config=tournament?.config as ScoutConfig|undefined;
+ const team=config?.teams?.find(candidate=>candidate.id===resolved.teamId)??null;
+ res.json({
+  status:resolved.status,
+  label:resolved.link.label,
+  expiresAt:resolved.link.expiresAt,
+  event:{name:tournament?.name??'',slug:tournament?.publication?.slug??null},
+  team:team?{name:team.name,tag:team.tag,players:team.players.map(player=>({nickname:player.nickname||player.name,role:player.role}))}:null,
+  lastSubmission:resolved.lastSubmission?{at:resolved.lastSubmission.at,status:resolved.lastSubmission.status}:null,
+ });
+});
+app.post('/api/public/portal/:token',async(req,res)=>{
+ // The captain submits from our own page, so the origin check stays on. A rate-limited answer carries
+ // a retry hint — the page shows "try again in 12 s" rather than a dead button.
+ const result=await portalStore.submit(String(req.params.token),req.body||{});
+ if(result.ok){
+  audit.record({id:'portal',name:'Team portal',role:'owner'},'portal.submission',`${result.submission.payload.teamName} · ${result.submission.payload.players.length} players`);
+  res.status(201).json({submission:{id:result.submission.id,at:result.submission.at,status:result.submission.status}});
+  return;
+ }
+ const statusByReason:Record<string,number>={missing:404,expired:410,revoked:410,'rate-limited':429,'too-soon':429,invalid:400};
+ const message:Record<string,string>={
+  missing:'This link is not valid. Ask the organiser for a new one.',
+  expired:'This link has expired. Ask the organiser for a new one.',
+  revoked:'This link was replaced or cancelled. Ask the organiser for a new one.',
+  'rate-limited':'Too many submissions from this link. Try again later.',
+  'too-soon':'That was quick — wait a moment before submitting again.',
+  invalid:'Check the roster: at least one player, names under 32 characters, and links that start with https://.',
+ };
+ res.status(statusByReason[result.reason]??400).json({error:message[result.reason]??'That submission could not be accepted.',code:result.reason,retryAfterMs:result.retryAfterMs??null});
+});
+app.get('/api/portal/links',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ res.json({links:portalStore.list(),queue:portalStore.queue(),ttlDays:Math.round(PORTAL_TTL_MS/86_400_000)});
+});
+app.post('/api/portal/links',async(req,res)=>{
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return}
+ const parsed=z.object({teamId:z.string().trim().min(1).max(80),eventId:z.string().trim().min(1).max(80),label:z.string().trim().max(60).optional().default('')}).strip().safeParse(req.body||{});
+ if(!parsed.success){res.status(400).json({error:'Choose a team and an event first.',code:'invalid-link'});return}
+ const tournament=platform.get(parsed.data.eventId);
+ if(!tournament){res.status(404).json({error:'That tournament no longer exists.',code:'not-found'});return}
+ const team=(tournament.config as ScoutConfig|undefined)?.teams?.find(candidate=>candidate.id===parsed.data.teamId);
+ if(!team){res.status(404).json({error:'That team is not part of this tournament.',code:'not-found'});return}
+ const created=await portalStore.create({...parsed.data,label:parsed.data.label||team.name},Date.now());
+ audit.record(accessPrincipal(res),'portal.link.create',`${tournament.name} · ${team.name}`);
+ broadcast();
+ res.status(201).json({link:created.link,url:created.url});
+});
+app.post('/api/portal/links/:id/rotate',async(req,res)=>{
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return}
+ const rotated=await portalStore.rotate(String(req.params.id));
+ if(!rotated){res.status(404).json({error:'That link no longer exists.',code:'not-found'});return}
+ audit.record(accessPrincipal(res),'portal.link.rotate',String(req.params.id));
+ broadcast();res.json({link:rotated.link,url:rotated.url});
+});
+// Deleting a link revokes it rather than erasing it: a captain who opens a cancelled link deserves to
+// read "this link was cancelled" instead of "not found", and the organiser keeps the history.
+app.delete('/api/portal/links/:id',async(req,res)=>{
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return}
+ const revoked=await portalStore.revoke(String(req.params.id));
+ if(!revoked){res.status(404).json({error:'That link no longer exists.',code:'not-found'});return}
+ audit.record(accessPrincipal(res),'portal.link.revoke',String(req.params.id));
+ broadcast();res.json({links:portalStore.list()});
+});
+// The decision path is constrained, otherwise `/apply` would be swallowed by `:decision` — Express
+// matches in registration order and both routes have the same shape.
+app.post('/api/portal/links/:linkId/submissions/:submissionId/:decision(approve|reject)',async(req,res)=>{
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return}
+ const decision=String(req.params.decision);
+ if(decision!=='approve'&&decision!=='reject'){res.status(400).json({error:'Decision must be approve or reject.',code:'invalid-decision'});return}
+ const principal=accessPrincipal(res);
+ const target:PortalDecision=decision==='approve'?'approved':'rejected';
+ const submission=await portalStore.review(String(req.params.linkId),String(req.params.submissionId),target,principal.name||principal.id,Date.now(),String((req.body||{}).note??''));
+ if(!submission){res.status(404).json({error:'That submission no longer exists.',code:'not-found'});return}
+ audit.record(principal,`portal.submission.${target}`,submission.payload.teamName);
+ broadcast();res.json({submission});
+});
+// Approving decides; applying writes the roster into the tournament. Split in two so an operator can
+// approve a roster without overwriting the names they already corrected by hand.
+app.post('/api/portal/links/:linkId/submissions/:submissionId/apply',async(req,res)=>{
+ if(!sameOrigin(req)){res.status(403).json({error:'Cross-site requests are refused.',code:'untrusted-origin'});return}
+ if(!permit(res,'control'))return;
+ const link=portalStore.list().find(candidate=>candidate.id===String(req.params.linkId));
+ if(!link){res.status(404).json({error:'That link no longer exists.',code:'not-found'});return}
+ const submission=portalStore.submission(link.id,String(req.params.submissionId));
+ if(!submission){res.status(404).json({error:'That submission no longer exists.',code:'not-found'});return}
+ // Applying is the second half of "approve & apply"; an organiser who approved yesterday can still
+ // apply today, but a rejected roster must never be written into a tournament.
+ if(submission.status==='rejected'){res.status(409).json({error:'That roster was rejected. Ask the captain for a new submission.',code:'rejected'});return}
+ const queue={payload:submission.payload};
+ const tournament=platform.get(link.eventId);
+ if(!tournament){res.status(404).json({error:'That tournament no longer exists.',code:'not-found'});return}
+ const current=normalizeConfig(tournament.config as any);
+ const team=current.teams.find(candidate=>candidate.id===link.teamId);
+ if(!team){res.status(404).json({error:'That team is no longer part of the tournament.',code:'not-found'});return}
+ const logo=/^(?:assets|thumbs|icons|radars)\/[\w./-]+\.(?:png|jpe?g|webp|gif)$/i.test(queue.payload.logo)?queue.payload.logo:'';
+ const nextTeams=current.teams.map(candidate=>candidate.id!==team.id?candidate:{...candidate,name:queue.payload.teamName,tag:queue.payload.tag||candidate.tag,logo:logo||candidate.logo,players:queue.payload.players.map(player=>({...emptyPlayer(),name:player.nickname,nickname:player.nickname,role:player.role,steamid:player.steamid}))});
+ const result=await platform.update(tournament.id,tournament.accountId,{config:normalizeConfig({...current,teams:nextTeams})});
+ if(!result.ok){res.status(result.status).json({error:result.message,code:result.code});return}
+ audit.record(accessPrincipal(res),'portal.roster.apply',`${team.name} · ${queue.payload.players.length} players`);
+ broadcast();
+ res.json({tournament:{id:result.value.id,name:result.value.name},teamId:team.id,applied:{players:queue.payload.players.length,logo:Boolean(logo)}});
+});
+// ---- Billing (server/billing.ts). The webhook above is the only route the provider calls; these
+// three are the browser's side, and every one of them needs the account's own session.
+app.get('/api/billing/status',async(req,res)=>{
+ const account=await currentAccount(req).catch(()=>null);
+ const entitlements=entitlementsFor(account,Date.now());
+ res.json({provider:billing.provider,ready:billingReady(billing),plans:publicPlanViews(entitlements.plan),entitlements,billing:account?.billing??null,currency:'EUR'});
+});
+app.post('/api/billing/checkout',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ const account:any=await requireAccount(req,res);if(!account)return;
+ const plan=String(req.body?.plan||'');
+ if(plan!=='organiser'&&plan!=='venue'){res.status(400).json({error:'Choose the Organiser or Venue plan.',code:'invalid-plan'});return}
+ const base=requestOrigin(req);
+ const result=await createCheckoutSession(billing,{plan,accountId:account.id,email:account.email,successUrl:`${base}/profile?checkout=success`,cancelUrl:`${base}/pricing`});
+ if(!result.ok){res.status(result.status).json({error:result.message,code:'checkout-unavailable'});return}
+ audit.record({id:account.id,name:account.email,role:'owner'},'billing.checkout',plan);
+ res.json({url:result.url,id:result.id});
+});
 app.get('/api/platform/tournaments',async(req,res)=>{await refreshPlatformSettings();const a=await requireAccount(req,res);if(a)res.json({tournaments:platform.listFor(a.id),limit:platform.settings.maxTournamentsPerUser,activeTournamentId:platform.data.activeTournamentId})});
 app.post('/api/platform/tournaments',async(req,res)=>{
  await refreshPlatformSettings();
  const a=await requireAccount(req,res); if(!a) return;
+ // The plan is enforced where a tournament *starts*, never on a running one. The platform's own
+ // maxTournamentsPerUser stays as the owner's backstop.
+ const gate=await accountEntitlements(req);
+ if(gate&&!canCreateTournament(gate.entitlements,platform.listFor(a.id).length)){
+  res.status(402).json({error:planRefusal(gate.entitlements,platform.listFor(a.id).length)||'This account cannot start a new tournament right now.',code:'plan-limit',entitlements:gate.entitlements});
+  return;
+ }
  const parsed=tournamentInput.safeParse(req.body||{}); if(!parsed.success){res.status(400).json({error:'Give the tournament a name.',code:'invalid-tournament'});return}
  const cfg=checkedConfig(parsed.data.config,res); if(cfg===null) return;
  sendPlatform(res,await platform.create(a.id,a.email,parsed.data.name||'My tournament',cfg??config),t=>({tournament:{...t,config:undefined,hasConfig:t.config!==null}}));
@@ -559,7 +861,7 @@ app.get('/api/platform/admin',async(req,res)=>{
  const a=await requirePlatformOwner(req,res); if(!a) return;
  await refreshPlatformSettings();
  const accounts=await beta.launcher.applications().catch(()=>[]);
- res.json(platform.adminSummary(accounts.map(x=>({id:x.id,email:x.email,status:x.status}))));
+ res.json(platform.adminSummary(accounts.map(x=>({id:x.id,email:x.email,status:x.status,plan:x.plan,trialEndsAt:x.trialEndsAt,billing:x.billing}))));
 });
 app.put('/api/platform/admin/settings',async(req,res)=>{
  const a=await requirePlatformOwner(req,res); if(!a) return;
@@ -572,6 +874,20 @@ app.put('/api/platform/admin/settings',async(req,res)=>{
  audit.record({id:a.id,name:a.email,role:'owner'},'platform.settings.update',`v${settings.version} · maxTournaments=${settings.maxTournamentsPerUser}`);
  broadcast(); // open panels receive the new settings in their next snapshot (<=1s heartbeat too)
  res.json({settings});
+});
+// Owner desk: the plan override. This is the manual invoice, the Founder grant and the repair after
+// a billing webhook, and it is audited with the reason the owner typed.
+app.post('/api/platform/admin/accounts/:id/plan',async(req,res)=>{
+ const owner=await requirePlatformOwner(req,res);if(!owner)return;
+ if(!beta.launcher.setPlan){res.status(409).json({error:'This account service does not support plan changes.',code:'unsupported'});return}
+ const parsed=z.object({plan:z.enum(['trial','organiser','venue','founder']).nullable().optional(),founder:z.boolean().optional(),trialEndsAt:z.number().int().nullable().optional(),reason:z.string().trim().max(200).optional().default('')}).strip().safeParse(req.body||{});
+ if(!parsed.success){res.status(400).json({error:'Invalid plan change.',code:'invalid-plan'});return}
+ if(parsed.data.plan===undefined&&parsed.data.founder===undefined&&parsed.data.trialEndsAt===undefined){res.status(400).json({error:'Choose a plan.',code:'invalid-plan'});return}
+ const result=await beta.launcher.setPlan(String(req.params.id),{plan:parsed.data.plan,founder:parsed.data.founder,trialEndsAt:parsed.data.trialEndsAt},owner.email);
+ sendBetaResult(res,result,value=>{
+  audit.record({id:owner.id,name:owner.email,role:'owner'},'plan.changed',`${value.account.email} → ${value.account.plan??'none'}${parsed.data.reason?` · ${parsed.data.reason}`:''}`);
+  res.json({account:value.account});
+ });
 });
 // ---- Panel session: unlock with the token the host printed, keep the cookie, or send the token as
 // `X-Scout-Token` / `Authorization: Bearer` on each mutation (that is the path for a script, and for a
@@ -613,6 +929,11 @@ app.post('/api/beta/link/start',async(req,res)=>{
  if(!ownerOnly(res))return;
  const current=installation.view();
  if(current.linked){res.status(409).json({error:`This installation is already linked to ${current.email}. Unlink it first to move it to another account.`,code:'already-linked'});return}
+ const gate=await accountEntitlements(req);
+ if(gate&&gate.account.devices.length>=gate.entitlements.devices){
+  res.status(402).json({error:`The ${gate.entitlements.planName} plan allows ${gate.entitlements.devices} linked host(s). Unlink one in the app dashboard, or upgrade.`,code:'plan-limit'});
+  return;
+ }
  const parsed=linkStartSchema.safeParse(req.body||{});
  const started=await beta.launcher.deviceStart({label:parsed.success&&parsed.data.label?parsed.data.label:hostname(),platform:process.platform},betaContext(req));
  sendBetaResult(res,started,async value=>{
@@ -739,7 +1060,15 @@ if(beta.site){
   const latest=releases.latest();
   // A published release wins over the configured default: it is the file this host actually holds.
   if(view.download&&latest) view.download={url:latest.url,version:`SCOUT-Setup-${latest.version}.exe`,notes:latest.notes||`Published ${new Date(latest.publishedAt).toLocaleString()}`};
-  res.json(view);
+  res.json(enrichBetaView(view));
+ });
+ // Self-serve trial: the same form as an application, answered immediately. The invitation email is
+ // what verifies the address, which is why the store refuses a trial without a mail transport.
+ app.post('/api/beta/trial',async(req,res)=>{
+  if(!sameOrigin(req)){res.sendStatus(403);return}
+  const parsed=applicationSchema.safeParse(req.body);
+  if(!parsed.success){res.status(400).json({error:'Tell us your name and an email address we can reach you at.',code:'invalid-application'});return}
+  sendBetaResult(res,await site.startTrial(parsed.data,betaContext(req)),value=>{res.json({account:value.account,inviteUrl:null,entitlements:entitlementsFor(value.account,Date.now())})});
  });
  app.post('/api/beta/apply',async(req,res)=>{
   if(!sameOrigin(req)){res.sendStatus(403);return}
@@ -861,7 +1190,7 @@ if(beta.site){
     try{
      const view=JSON.parse(text);view.applicationsOpen=platform.settings.applicationsOpen;view.reviewNote=platform.settings.reviewNote;
      if(view.download&&latest)view.download={url:latest.url,version:`SCOUT-Setup-${latest.version}.exe`,notes:latest.notes||`Published ${new Date(latest.publishedAt).toLocaleString()}`};
-     text=JSON.stringify(view);
+     text=JSON.stringify(enrichBetaView(view));
     }catch{}
    }
    res.status(response.status).type(response.headers.get('content-type')||'application/json').send(text);
@@ -874,7 +1203,7 @@ if(beta.site){
    if(method==='GET'&&(route==='/status'||route==='/settings'||route==='/applications'))return true;
    if(method==='PUT'&&route==='/settings')return true;
    if(method==='POST'){
-    if(new Set(['/license/check','/apply','/login','/logout','/activate','/password-recovery','/password-recovery/complete','/device/start','/device/poll','/device/approve','/device/deny','/devices/revoke']).has(route))return true;
+    if(new Set(['/license/check','/apply','/trial','/login','/logout','/activate','/password-recovery','/password-recovery/complete','/device/start','/device/poll','/device/approve','/device/deny','/devices/revoke']).has(route))return true;
     if(/^\/applications\/[^/]+(\/resend-invitation)?$/.test(route))return true;
    }
    return false;
@@ -943,11 +1272,27 @@ app.get('/api/audit',(req,res)=>{
 });
 // ---- Optional OBS Studio bridge (server/obs.ts). Nothing here can affect GSI ingest or the overlay: the bridge only
 // connects outward, every failure stays inside its own status, and with it off no socket is ever opened.
-async function saveControls(next:Controls){
+async function saveControls(next:Controls,options:{suspendAutomation?:boolean}={}){
  await writeFile('config/operator.json.tmp',JSON.stringify(next,null,2));
  await rename('config/operator.json.tmp','config/operator.json');
- controls=next;broadcast();
+ controls=next;
+ // A human (panel, Companion, Stream Deck, OBS scene change) always wins the wheel: auto-pilot
+ // pauses for a minute and drops anything it had queued.
+ if(options.suspendAutomation!==false) automationEngine?.suspend();
+ broadcast();
 }
+// The host's side of the auto-pilot contract: the engine may only change the scene and the break
+// countdown, every action is audited under its own principal, and it never acts while a person
+// holds the control lease (that check lives in the engine, so a queued action cannot slip past it).
+automationEngine=new AutomationEngine({
+ read:()=>({scene:controls.scene,breakEndsAt:controls.breakEndsAt??null}),
+ apply:async(patch,rule)=>{
+  await saveControls({...controls,...patch},{suspendAutomation:false});
+  audit.record({id:'automation',name:`Auto-pilot · ${rule.name}`,role:'producer'},'automation.apply',`${rule.id} · ${patch.scene??'countdown'}${patch.breakEndsAt?` until ${new Date(patch.breakEndsAt).toLocaleTimeString()}`:''}`);
+ },
+ leaseHeld:()=>Boolean(lease.view().holder),
+},{log:message=>console.log(message)});
+automationEngine.setConfig(automationConfig);
 const obs=new ObsBridge({
  password:()=>process.env.OBS_WS_PASSWORD||undefined,
  onChange:()=>broadcast(),
@@ -990,7 +1335,17 @@ app.post('/gsi',(req,res)=>{
   })().catch(error=>console.warn('[platform] could not record metrics:',error.message));
   prevGrenadeIds=grenadeIds;
   for(const kill of derived.kills){archives.addKill(kill);console.log(`[events] round ${kill.round+1}: ${kill.killerName||'unknown'} killed ${kill.victimName}${kill.headshot?' (headshot)':''}`)}
-  if(derived.ended){archives.addRound(derived.ended);console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`)}
+  if(derived.ended){
+   archives.addRound(derived.ended);
+   // Assist, MVP and damage are only in the live state, so they are captured at every round end:
+   // without this the recap could never show more than kills and deaths (server/recap.ts).
+   archives.addSnapshot({...snapshotFromState(store.state,config,derived.ended.endedAt),at:derived.ended.endedAt});
+   console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`);
+   automationEngine?.trigger({type:'round-end'});
+   // A map ending at the match level is the series end; the engine's per-rule cooldown keeps a
+   // repeated gameover packet from firing the winner scene twice.
+   if(store.state.map?.phase==='gameover') automationEngine?.trigger({type:'series-end'});
+  }
   const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}
  else if(feed.late().log) console.warn(`[gsi] ignoring a packet older than the current state (${feed.rejectedLate} ignored). Expected while replaying a recording against a warm host, or when a second observer pushes with an older clock.`);
  res.sendStatus(200); broadcast();
@@ -1041,6 +1396,109 @@ app.post('/api/archive/finish',async(req,res)=>{
  const item=archives.finish();if(!item){res.status(409).json({error:'No match archive is active.'});return}
  await archives.flush();audit.record(accessPrincipal(res),'archive.finish',item.name);broadcast();res.json(item);
 });
+// ---- Sponsors (server/sponsors.ts). Read by the panel's sponsor inspector; the numbers are the
+// host's own samples, and the CSV is the file an organiser forwards to the sponsor.
+app.get('/api/sponsors/report',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ const days=Math.max(1,Math.min(365,Number(req.query.days)||30));
+ const now=Date.now();
+ res.setHeader('Cache-Control','no-store');
+ res.json({...sponsorLedger.report({from:now-days*86_400_000,to:now,now}),days});
+});
+app.get('/api/sponsors/report.csv',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ const days=Math.max(1,Math.min(365,Number(req.query.days)||30));
+ const now=Date.now();
+ const report=sponsorLedger.report({from:now-days*86_400_000,to:now,now});
+ res.type('text/csv; charset=utf-8').setHeader('Content-Disposition','attachment; filename="scout-sponsor-impressions.csv"');
+ res.send(sponsorCsv(report));
+});
+// ---- Recap Kit (server/recap.ts). Everything is derived from the session archive; the same bytes
+// feed the panel, the share card and the CSV, so a number can never differ between them.
+function recapFor(id:string){const archive=archives.detail(id);return archive?buildRecap(archive):null}
+app.get('/api/archive/:id/recap',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ const recap=recapFor(String(req.params.id));
+ if(!recap){res.status(404).json({error:'Match archive not found'});return}
+ res.json(recap);
+});
+app.get('/api/archive/:id/recap.svg',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ const recap=recapFor(String(req.params.id));
+ if(!recap){res.status(404).type('text/plain').send('Match archive not found');return}
+ const size=req.query.size==='story'?'story':'feed';
+ res.type('image/svg+xml; charset=utf-8').setHeader('Cache-Control','no-store');
+ if(req.query.download==='1') res.setHeader('Content-Disposition',`attachment; filename="scout-${recap.archiveId}-${size}.svg"`);
+ res.send(recapCardSvg(recap,size));
+});
+app.get('/api/archive/:id/recap.csv',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ const recap=recapFor(String(req.params.id));
+ if(!recap){res.status(404).json({error:'Match archive not found'});return}
+ res.type('text/csv; charset=utf-8').setHeader('Content-Disposition',`attachment; filename="scout-${recap.archiveId}-recap.csv"`);
+ res.send(recapCsv(recap));
+});
+const deliverSchema=z.object({url:z.string().trim().min(8).max(500)}).strip();
+// Highlight markers (follow-up §4): a wall-clock instant in the archive, usable as an editor timecode
+// and as a Replay Studio seek position. No video is produced here — the editor gets timestamps.
+const markerInput=z.object({at:z.number().int().optional(),label:z.string().trim().max(120).optional().default(''),kind:z.enum(['kill','round','manual']).optional().default('manual'),round:z.number().int().min(0).max(99).nullable().optional().default(null),map:z.string().trim().max(40).optional().default(''),steamid:z.string().trim().max(24).optional().default('')}).strip();
+app.get('/api/archive/:id/markers',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ const archive=archives.detail(String(req.params.id));
+ if(!archive){res.status(404).json({error:'Match archive not found'});return}
+ res.json({startedAt:archive.startedAt,markers:(archive.markers??[]).map(marker=>({...marker,offsetMs:marker.at-archive.startedAt}))});
+});
+app.post('/api/archive/:id/markers',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control'))return;
+ const archive=archives.detail(String(req.params.id));
+ if(!archive){res.status(404).json({error:'Match archive not found'});return}
+ const parsed=markerInput.safeParse(req.body||{});
+ if(!parsed.success){res.status(400).json({error:'Invalid marker.'});return}
+ const now=Date.now();
+ const at=parsed.data.at===undefined?now:parsed.data.at;
+ // A marker outside the session would produce a nonsense timecode in the editor.
+ if(at<archive.startedAt||at>(archive.endedAt??now)+60_000){res.status(400).json({error:'That moment is outside this session.',code:'outside-session'});return}
+ const marker:ClipMarker={id:`mark_${now.toString(36)}${Math.random().toString(36).slice(2,6)}`,at,label:parsed.data.label,kind:parsed.data.kind,round:parsed.data.round,map:parsed.data.map,steamid:parsed.data.steamid};
+ const markers=archives.addMarker(archive.id,marker);
+ audit.record(accessPrincipal(res),'archive.marker.add',`${archive.name} · ${marker.label||marker.kind}`);
+ broadcast();res.json({markers,marker});
+});
+app.delete('/api/archive/:id/markers/:markerId',(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control'))return;
+ const markers=archives.removeMarker(String(req.params.id),String(req.params.markerId));
+ if(!markers){res.status(404).json({error:'Match archive not found'});return}
+ audit.record(accessPrincipal(res),'archive.marker.remove',String(req.params.markerId));
+ broadcast();res.json({markers});
+});
+app.get('/api/archive/:id/markers.csv',(req,res)=>{
+ const archive=archives.detail(String(req.params.id));
+ if(!archive){res.status(404).json({error:'Match archive not found'});return}
+ res.type('text/csv; charset=utf-8').setHeader('Content-Disposition',`attachment; filename="scout-${archive.id}-markers.csv"`);
+ res.send(markersCsv(archive));
+});
+app.post('/api/archive/:id/deliver',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control'))return;
+ if(!await requireFeature(req,res,'recap-delivery'))return;
+ const recap=recapFor(String(req.params.id));
+ if(!recap){res.status(404).json({error:'Match archive not found'});return}
+ const parsed=deliverSchema.safeParse(req.body||{});
+ if(!parsed.success){res.status(400).json({error:'Paste the webhook URL the recap should go to.'});return}
+ let target;try{target=validateWebhookUrl(parsed.data.url)}catch(error:any){
+  res.status(400).json({error:error instanceof WebhookError?error.message:'That webhook URL cannot be used.',code:'invalid-webhook'});return;
+ }
+ const hub=platform.published().find(tournament=>tournament.publication&&tournament.name===recap.name);
+ const payload=target.kind==='discord'
+  ?buildRecapDiscordMessage(recap,hub?.publication?`${requestOrigin(req)}/t/${hub.publication.slug}`:undefined)
+  :{event:'recap',recap,hub:hub?.publication?.slug??null};
+ const result=await deliverWebhook(target,payload);
+ archives.setDelivery(recap.archiveId,{at:Date.now(),status:result.ok?'delivered':'failed',target:target.kind,detail:result.detail});
+ audit.record(accessPrincipal(res),result.ok?'recap.delivered':'recap.delivery.failed',`${recap.name} · ${target.kind} · ${result.status||'no response'}`);
+ broadcast();
+ res.status(result.ok?200:502).json({ok:result.ok,delivery:{target:target.kind,detail:result.detail,status:result.status}});
+});
 app.get('/api/remote/state',(req,res)=>{if(!privateRead(req,res,'control'))return;const principal=accessPrincipal(res),currentLease=lease.view(principal.id);res.json({controls,lease:currentLease,canControl:!currentLease.holder||currentLease.mine,recording:recorder.status,archive:archives.active?{id:archives.active.id,name:archives.active.name,eventCount:archives.active.events.length}:null,scenes:SCENE_IDS,serverTime:Date.now()})});
 const remoteActionSchema=z.object({action:z.string().trim().min(1).max(80),minutes:z.number().int().min(1).max(600).optional()}).strip();
 app.post('/api/remote/action',async(req,res)=>{
@@ -1063,7 +1521,11 @@ app.put('/api/config',async(req,res)=>{
  if(!permit(res,'match-edit'))return;
  const parsed=configSchema.safeParse(req.body);
  if(!parsed.success){res.status(400).json({error:'Invalid configuration: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'config'} ${issue.message}`).slice(0,6).join('; ')});return}
- const next=normalizeConfig(parsed.data);
+ // Rolling upgrade: a launcher built before Run of Show sends no `schedule` key at all. Its legacy
+ // hash (the document with that key removed) matches this host's, so the only difference is the
+ // missing run of show — keep the one already here rather than erasing it on the next save.
+ const staleSchedule=!(parsed.data as any).schedule&&legacyConfigHash(config)===legacyConfigHash(parsed.data);
+ const next=staleSchedule?{...normalizeConfig(parsed.data),schedule:config.schedule}:normalizeConfig(parsed.data);
  try {
   await matchWrite(async()=>{await writeMatchConfig(next);await saveTournamentConfig(next)});
   await pruneUploads(next,radars);
@@ -1085,6 +1547,106 @@ async function pruneUploads(current:ScoutConfig,radarsConfig:any,overlayConfig:O
   for(const file of files) if(isPrunable(file,referenced,kind)){try{await unlink(path.join(dir,file))}catch{}}
  }
 }
+// ---- Launch gate (server/plans.ts): limits and features, computed from the signed-in account.
+// A host with no account cookie is the owner's own machine and is not gated — the same authority
+// model as the panel token. A signed-in account is gated at the *start* of things (a new tournament,
+// a hub, a delivery), never in the middle of a broadcast.
+async function accountEntitlements(req:express.Request):Promise<{account:any;entitlements:Entitlements}|null>{
+ const account=await currentAccount(req).catch(()=>null);
+ return account?{account,entitlements:entitlementsFor(account,Date.now())}:null;
+}
+// The site pages read one object for the commercial state: plan → limits and features, and what the
+// website may show in the plan cards. Computed server-side so a page can never disagree with a gate.
+function enrichBetaView<T extends {account?:any}>(view:T):T&{entitlements:Entitlements;plans:ReturnType<typeof publicPlanViews>;billingReady:boolean}{
+ const entitlements=entitlementsFor(view?.account??null,Date.now());
+ return {...view,entitlements,plans:publicPlanViews(entitlements.plan),billingReady:billingReady(billing)};
+}
+async function requireFeature(req:express.Request,res:express.Response,feature:Feature):Promise<boolean>{
+ const current=await accountEntitlements(req);
+ if(!current) return true;
+ if(hasFeature(current.entitlements,feature)) return true;
+ res.status(402).json({error:`${FEATURE_LABELS[feature]} is not included in ${current.entitlements.planName}. Upgrade in your profile, or ask the SCOUT owner for access.`,code:'upgrade-required',feature,plan:current.entitlements.plan});
+ return false;
+}
+// ---- Auto-pilot (server/automation.ts). A producer configures rules; the engine above executes
+// them through the same control path as a person, so the lease and the audit trail behave normally.
+// The page that reaches a human when the operator is not looking at the panel. It is the operator's own
+// webhook (the same URL they would use for a recap), it is optional, and a failure to deliver one is
+// logged rather than allowed to affect the broadcast.
+async function sendFeedAlert(kind:'lost'|'restored',silenceMs:number){
+ const alerts=automationConfig.alerts;
+ if(!alerts?.webhook||alerts.onFeedLoss===false) return;
+ const target=validateWebhookUrl(alerts.webhook);
+ const message=buildFeedAlert({kind,silenceMs,at:Date.now(),host:hostname(),scene:controls.scene});
+ const result=await deliverWebhook(target,message);
+ if(!result.ok) console.warn(`[watchdog] alert not delivered: ${result.detail}`);
+}
+app.get('/api/automation',(req,res)=>{
+ if(!signedInRead(req,res))return;
+ res.json({config:automationEngine?.configView()??automationConfig,status:automationEngine?.status()??null,defaults:defaultAutomation().rules});
+});
+app.put('/api/automation',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control'))return;
+ if(!await requireFeature(req,res,'automation'))return;
+ const parsed=automationConfigSchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Invalid automation: '+parsed.error.issues.map(issue=>`${issue.path.join('.')||'rule'} ${issue.message}`).slice(0,4).join('; ')});return}
+ const next=normalizeAutomation(parsed.data);
+ try{
+  await writeFile('config/automation.json.tmp',JSON.stringify(next,null,2));
+  await rename('config/automation.json.tmp','config/automation.json');
+  automationConfig=next;automationEngine?.setConfig(next);
+  audit.record(accessPrincipal(res),'automation.update',`${next.enabled?'enabled':'disabled'} · ${next.rules.filter(rule=>rule.enabled).length} active rule(s)`);
+  broadcast();res.json({config:automationEngine?.configView()??next,status:automationEngine?.status()??null});
+ }catch{res.status(500).json({error:'Could not save the automation rules'})}
+});
+app.post('/api/automation/override',(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control'))return;
+ const status=automationEngine?.suspend()??null;
+ audit.record(accessPrincipal(res),'automation.suspend','manual override');
+ broadcast();res.json({status});
+});
+// ---- Run of Show (server/schedule.ts). The calendar is public on purpose: it holds fixtures, which
+// the organiser publishes on the hub anyway, and every calendar app on the crew's phones needs it.
+app.get('/api/schedule.ics',(req,res)=>{
+ const now=Date.now();
+ const body=buildIcs({calendarName:config.event.name||'SCOUT schedule',slots:config.schedule||[],offsetMs:(controls.lateOffsetMinutes||0)*60_000,now,baseUrl:requestOrigin(req)});
+ res.type('text/calendar; charset=utf-8').setHeader('Cache-Control','no-store');
+ res.setHeader('Content-Disposition','inline; filename="scout-schedule.ics"');
+ res.send(body);
+});
+const scheduleApplySchema=z.object({slotId:z.string().trim().min(1).max(32),action:z.enum(['match','break']).optional().default('match')}).strip();
+app.post('/api/schedule/apply',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'control')||!requireControl(req,res))return;
+ const parsed=scheduleApplySchema.safeParse(req.body||{});
+ if(!parsed.success){res.status(400).json({error:'Choose a fixture from the schedule.'});return}
+ const window=nextUps(config.schedule||[],(controls.lateOffsetMinutes||0)*60_000,Date.now());
+ const slot=[...(config.schedule||[])].map(candidate=>({...candidate})).find(candidate=>candidate.id===parsed.data.slotId);
+ if(!slot){res.status(404).json({error:'That fixture is no longer in the schedule.',code:'not-found'});return}
+ if(parsed.data.action==='break'){
+  const effectiveAt=slot.at>Date.now()?slot.at+(controls.lateOffsetMinutes||0)*60_000:slot.at;
+  await saveControls({...controls,scene:'break',breakEndsAt:effectiveAt},{suspendAutomation:false});
+  audit.record(accessPrincipal(res),'schedule.break',`${slot.a.label||'TBD'} vs ${slot.b.label||'TBD'}`);
+  return res.json({ok:true,controls,slot});
+ }
+ // Loading a fixture replaces the current match with the fixture's two sides. Existing team objects
+ // keep their roster, colours and logo when the fixture is bound to them by id; otherwise only the
+ // name changes, which is the honest thing to do when the roster is not in this tournament's config.
+ const rename=(team:ScoutConfig['teams'][number],side:{team?:string;label?:string})=>{
+  const bound=side.team?config.teams.find(candidate=>candidate.id===side.team):undefined;
+  const label=(side.label||'').trim();
+  return label?{...team,name:label,tag:bound?.tag??team.tag,color:bound?.color??team.color,logo:bound?.logo??team.logo}:team;
+ };
+ const [first,second]=config.teams;
+ const next=normalizeConfig({...config,format:slot.format,event:{name:config.event.name,stage:slot.stage||config.event.stage},teams:[rename(first,slot.a),rename(second,slot.b)]});
+ try{
+  await matchWrite(async()=>{await writeMatchConfig(next);await saveTournamentConfig(next)});
+  audit.record(accessPrincipal(res),'schedule.apply',`${slot.a.label||'TBD'} vs ${slot.b.label||'TBD'} · ${slot.stage||'fixture'}`);
+  broadcast();res.json({ok:true,config:next,slot,next:window.next});
+ }catch{res.status(500).json({error:'Could not load the fixture into the overlay'})}
+});
 app.put('/api/controls',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  if(!permit(res,'control')||!requireControl(req,res))return;
@@ -1178,8 +1740,29 @@ if(process.env.NODE_ENV==='production'){
   // redirect would turn the website's `/download` page into `/download/`. The SPA catch-all below
   // serves the page for both spellings; a real file is served by the `/download` mount above.
   app.use(express.static(distDir,{redirect:false}));
-  app.get('*',(_req,res)=>{
+  app.get('*',async(req,res)=>{
     const indexFile=path.join(distDir,'index.html');
+    // A published tournament page is readable by a crawler: the SPA cannot set an OG card before the
+    // shell is fetched, so the shell is rewritten here. A slug that is not published is a real 404,
+    // not a page that renders "not found" with a 200.
+    const match=/^\/(?:t|embed)\/([a-z0-9][a-z0-9-]{1,48})\/?$/i.exec(req.path);
+    if(match&&surface==='site'){
+      const projected=platform.publicTournament(match[1].toLowerCase());
+      if(!projected){
+        res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>Tournament not found — SCOUT</title><meta name="robots" content="noindex"><body style="font:16px system-ui;background:#0b0a0d;color:#efeaf2;padding:48px"><h1>Tournament not found</h1><p style="color:#ab9fb5">That page is not published. Check the link, or ask the organiser for a new one.</p>');
+        return;
+      }
+      try{
+        const shell=await readFile(indexFile,'utf8');
+        const origin=requestOrigin(req);
+        const meta=hubMeta(projected);
+        res.type('html').send(injectHubMeta(shell,{...meta,url:origin+req.path,image:`${origin}/logo/scout-tile.png`}));
+      }catch(error:any){
+        console.error(`[host] failed to serve ${indexFile}: ${error.message}`);
+        if(!res.headersSent) res.status(500).json({error:`Panel assets missing at ${indexFile} — reinstall SCOUT or check SCOUT_APP_ROOT`});
+      }
+      return;
+    }
     res.sendFile(indexFile,err=>{
       if(err){
         console.error(`[host] failed to serve ${indexFile}: ${err.message}`);

@@ -1,4 +1,4 @@
-import {Activity,Archive as ArchiveIcon,BarChart3,Flag,Gamepad2,GitMerge,Layers,LayoutDashboard,Monitor,Palette,Radio,Shield,SlidersHorizontal,Swords,Trophy,Users} from 'lucide-react';
+import {Activity,Archive as ArchiveIcon,BarChart3,Bot,CalendarDays,Flag,Gamepad2,GitMerge,Image as ImageIcon,Layers,LayoutDashboard,Link2,Monitor,Palette,Radio,Shield,SlidersHorizontal,Swords,Trophy,Users} from 'lucide-react';
 import {SCENE_IDS,SCENE_TITLES,type SceneId} from '../server/controls';
 // The panel's two catalogues, in one file because the panel is no longer the only place that has to
 // name them: /welcome lists the same sections and the same scenes. A public page that keeps its own
@@ -12,6 +12,12 @@ export const PANEL_SECTIONS:PanelSection[]=[
  {name:'Match setup',icon:Swords},
  {name:'Teams & players',icon:Users},
  {name:'Tournament tree',icon:GitMerge},
+ // The launch wave: a run of show, the rules that keep the stream moving between matches, and the
+ // post-match kit. They sit next to the tournament tree because that is the order of a broadcast day.
+ {name:'Run of show',icon:CalendarDays},
+ {name:'Team portal',icon:Link2},
+ {name:'Auto-pilot',icon:Bot},
+ {name:'Recap Kit',icon:ImageIcon},
  {name:'Broadcast scenes',icon:Layers},
  {name:'Overlay Studio',icon:Palette},
  {name:'Map radars',icon:SlidersHorizontal},

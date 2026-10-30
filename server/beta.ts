@@ -2,6 +2,7 @@ import {createHash,randomBytes,randomUUID,scryptSync,timingSafeEqual} from 'node
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import type {PlatformSettings} from './platform.js';
+import {TRIAL_DAYS,emptyBilling,isPlanId,type BillingState,type PlanId} from './plans.js';
 import {describeEmailFailure,emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport,type EncryptedEmail} from './email.js';
 // The closed beta: who may download the launcher, and which installation belongs to whom.
 //
@@ -52,6 +53,11 @@ export interface BetaAccount {
  password:AccountSecret|null;invite:{digest:string;expiresAt:number}|null;devices:BetaDevice[];
  /** Why an approved account was revoked. Only ever set when status is 'revoked'. */
  revokedReason?:string|null;
+ // Launch gate (server/plans.ts). Optional on purpose: a store written before plans existed loads
+ // unchanged and is treated as a Founder account, never as an account with no access.
+ plan?:PlanId|null;
+ trialEndsAt?:number|null;
+ billing?:BillingState|null;
 }
 export interface BetaSession {id:string;accountId:string;createdAt:number;lastSeenAt:number;address:string;userAgent:string}
 export interface BetaGrant {
@@ -73,6 +79,11 @@ export interface AccountView {
  useCase:string;events:string;createdAt:number;decidedAt:number|null;devices:LinkedDeviceView[];
  /** Why an approved account was revoked. Only ever set when status is 'revoked'. */
  revokedReason:string|null;
+ // The account's commercial state. `entitlements` is computed from these by server/plans.ts, which
+ // is the only place that decides what they mean.
+ plan?:PlanId|null;
+ trialEndsAt?:number|null;
+ billing?:BillingState|null;
 }
 export interface DownloadView {url:string;version:string;notes:string}
 export interface BetaStatusView {
@@ -100,6 +111,9 @@ export interface SiteBetaService {
  activate(input:{invite:string;password:string},context:BetaContext):Promise<BetaResult<{cookieId:string;account:AccountView}>>;
  requestPasswordRecovery(email:string,context:BetaContext):Promise<BetaResult<{ok:true}>>;
  completePasswordRecovery(input:{token:string;password:string},context:BetaContext):Promise<BetaResult<{ok:true}>>;
+ // Launch gate: an instant, verified-email trial. It creates an approved account whose invitation
+ // email is the verification, so a stranger can broadcast the day they find SCOUT.
+ startTrial(input:ApplicationInput,context:BetaContext):Promise<BetaResult<{account:AccountView;invite:string|null}>>;
 }
 export interface LicenceCheck {status:'active'|'revoked'|'unknown';email?:string;displayName?:string;accountId?:string} // accountId is service-only, never a licence/browser view
 export interface LauncherBetaService {
@@ -117,6 +131,9 @@ export interface LauncherBetaService {
  applicationReview?():Promise<ApplicationReviewView>;
  decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason?:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
  resendInvitation?(id:string,requestedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
+ // Owner desk: move an account between plans (a manual invoice, a Founder grant or a fix after a
+ // billing webhook failed). The reason is recorded by the caller in the audit trail.
+ setPlan?(id:string,patch:{plan?:PlanId|null;trialEndsAt?:number|null;billing?:BillingState|null;founder?:boolean},by:string):Promise<BetaResult<{account:AccountView}>>;
 }
 export interface BetaService extends SiteBetaService,LauncherBetaService {
  readonly mode:BetaMode;
@@ -159,7 +176,7 @@ const isEmail=(value:string)=>/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
 // reviewed by a human. Length, not composition rules: this is an operator tool, not a bank.
 export const MIN_PASSWORD=10;
 export function accountView(account:BetaAccount):AccountView {
- return {id:account.id,email:account.email,displayName:account.displayName,organisation:account.organisation,country:account.country,status:account.status,useCase:account.useCase,events:account.events,createdAt:account.createdAt,decidedAt:account.decidedAt,devices:account.devices.filter(device=>!device.revokedAt).map(device=>({id:device.id,label:device.label,platform:device.platform,createdAt:device.createdAt,lastSeenAt:device.lastSeenAt})),revokedReason:account.status==='revoked'?(account.revokedReason??null):null};
+ return {id:account.id,email:account.email,displayName:account.displayName,organisation:account.organisation,country:account.country,status:account.status,useCase:account.useCase,events:account.events,createdAt:account.createdAt,decidedAt:account.decidedAt,devices:account.devices.filter(device=>!device.revokedAt).map(device=>({id:device.id,label:device.label,platform:device.platform,createdAt:device.createdAt,lastSeenAt:device.lastSeenAt})),revokedReason:account.status==='revoked'?(account.revokedReason??null):null,plan:account.plan??null,trialEndsAt:account.trialEndsAt??null,billing:account.billing??null};
 }
 // ------------------------------------------------------------------ the local beta, on this host
 // One JSON document under the operator data directory. It is written atomically (temp file +
@@ -314,6 +331,51 @@ export class LocalBetaService implements BetaService {
   await this.save();
   if(invite)await this.deliverPending();
   return {ok:true,value:{account:accountView(account),invite}};
+ }
+ // A trial is an application that decides itself: the account is approved immediately with a
+ // 14-day window, and the invitation email is what proves the address belongs to the person who
+ // asked. Without a mail transport the trial is refused rather than granted unverifiably — an
+ // unverified instant account is exactly the abuse a trial must not create.
+ async startTrial(input:ApplicationInput,context:BetaContext):Promise<BetaResult<{account:AccountView;invite:string|null}>>{
+  this.reap();
+  const email=normalizeEmail(input.email);
+  if(!isEmail(email)) return {ok:false,status:400,code:'bad-email',message:'That does not look like an email address.'};
+  if(input.name.trim().length<2) return {ok:false,status:400,code:'bad-name',message:'Tell us the name to put on the account.'};
+  if(!this.mailReady()) return {ok:false,status:503,code:'email-unavailable',message:'This deployment cannot send email yet, so a trial cannot be verified. Apply for access instead — a human will approve you.'};
+  const stamps=(this.stamps.get(context.address)||[]).filter(stamp=>this.now()-stamp<60*60*1000);
+  if(stamps.length>=MAX_APPLICATIONS_PER_HOUR) return {ok:false,status:429,code:'throttled',message:'That address has started several accounts already. Try again in an hour.'};
+  const existing=this.find(email);
+  if(existing){
+   if(existing.status==='revoked') return {ok:false,status:403,code:'revoked',message:'That email address was revoked from SCOUT. Contact the SCOUT team if you believe this is a mistake.'};
+   return {ok:false,status:409,code:'already-exists',message:existing.status==='approved'?'That address already has an account — sign in.':'That address already has an application in review. Sign in if you have set a password.'};
+  }
+  const account:BetaAccount={
+   id:newToken(12),email,displayName:input.name.trim().slice(0,80),organisation:input.organisation.trim().slice(0,120),
+   country:input.country.trim().slice(0,60),useCase:input.useCase.trim().slice(0,600),events:input.events.trim().slice(0,80),
+   status:'approved',createdAt:this.now(),decidedAt:this.now(),decidedBy:'trial (self-serve)',
+   password:null,invite:null,devices:[],
+   plan:'trial',trialEndsAt:this.now()+TRIAL_DAYS*86_400_000,billing:emptyBilling('none'),
+  };
+  this.store.accounts.push(account);
+  stamps.push(this.now());this.stamps.set(context.address,stamps);
+  const invite=this.grantInvite(account,'trial (self-serve)');
+  this.recordAudit('trial.started',account.id);
+  await this.save();
+  await this.deliverPending();
+  return {ok:true,value:{account:accountView(account),invite}};
+ }
+ // Owner desk: a plan change is a deliberate act with a reason, and it is written to the audit trail
+ // by the caller. `founder:true` is the shortcut for "this account predates plans".
+ async setPlan(id:string,patch:{plan?:PlanId|null;trialEndsAt?:number|null;billing?:BillingState|null;founder?:boolean},by:string):Promise<BetaResult<{account:AccountView}>>{
+  const account=this.store.accounts.find(entry=>entry.id===id);
+  if(!account) return {ok:false,status:404,code:'not-found',message:'Unknown account.'};
+  if(patch.founder) account.plan='founder';
+  else if(patch.plan!==undefined) account.plan=patch.plan&&isPlanId(patch.plan)?patch.plan:null;
+  if(patch.trialEndsAt!==undefined) account.trialEndsAt=patch.trialEndsAt;
+  if(patch.billing!==undefined) account.billing=patch.billing;
+  this.recordAudit(`plan.changed:${by}:${account.plan??'none'}`,account.id);
+  await this.save();
+  return {ok:true,value:{account:accountView(account)}};
  }
  // Approval mints a one-time invite; the applicant sets their own password through it, so no
  // password ever travels through a channel the operator — or the host console — can read.
@@ -542,6 +604,10 @@ export class HostedBetaService implements LauncherBetaService {
  async updateSettings(input:Partial<PlatformSettings>,cookie:string){return this.call<{settings:PlatformSettings}>('/settings','PUT',input,{Cookie:cookie})}
  async deviceStart(input:{label:string;platform:string},context:BetaContext){return this.call<DeviceGrantView>('/device/start','POST',{...input,origin:context.origin})}
  async devicePoll(input:{deviceCode:string}){return this.call<DevicePollView>('/device/poll','POST',input)}
+ // The service implements these two; the host only needs them when the website is hosted and the
+ // owner desk (or a trial form) runs from this machine.
+ async startTrial(input:ApplicationInput,_context:BetaContext){return this.call<{account:AccountView;invite:string|null}>('/trial','POST',input)}
+ async setPlan(id:string,patch:{plan?:PlanId|null;trialEndsAt?:number|null;billing?:BillingState|null;founder?:boolean},by:string){return this.call<{account:AccountView}>('/accounts/'+encodeURIComponent(id)+'/plan','POST',{...patch,by})}
 }
 export interface BetaFactoryOptions extends Omit<BetaServiceOptions,'dir'>{dir?:string;apiUrl?:string;apiKey?:string}
 // What the host gets back: the site half is null in hosted mode (the browser's requests are proxied

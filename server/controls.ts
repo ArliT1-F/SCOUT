@@ -18,6 +18,9 @@ export const controlsSchema=z.object({
  // An absolute time (not "minutes left") means every output computes the same remaining time no
  // matter when it connected; operator.json files written before this field existed still load.
  breakEndsAt:z.number().int().nonnegative().nullable().optional().default(null),
+ // Run of Show: how late the day is running, in minutes. It shifts only fixtures that have not
+ // started yet (server/schedule.ts), so a finished match never moves and a live one never jumps.
+ lateOffsetMinutes:z.number().int().min(0).max(720).optional().default(0),
 });
 export type Controls=z.infer<typeof controlsSchema>;
-export const defaultControls:Controls={scene:'live',radar:true,killfeed:true,lowerThird:true,economy:false,techPause:false,swapped:false,breakEndsAt:null};
+export const defaultControls:Controls={scene:'live',radar:true,killfeed:true,lowerThird:true,economy:false,techPause:false,swapped:false,breakEndsAt:null,lateOffsetMinutes:0};

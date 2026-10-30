@@ -1,4 +1,4 @@
-import React,{useEffect,useMemo,useState} from 'react';
+import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {ScoutMark} from './logo';
 import {Activity,AlertCircle,Archive as ArchiveIcon,ArrowDownToLine,Check,ChevronRight,Clock3,Copy,FileClock,FileUp,LockKeyhole,Pause,Play,Radio,RefreshCw,Shield,Square,StopCircle,Trash2,Users,Wifi,WifiOff} from 'lucide-react';
 import {buildPreflight,type CheckState,type PreflightReport} from '../server/preflight';
@@ -69,8 +69,13 @@ function parseRecording(text:string,source:string):ReplayFrame[]{
  if(frames.length===1)frames[0].offset=Math.max(0,lastAt-first);
  return frames;
 }
-export function ReplayStudio({onFrame,recording,onRecordingChange,onNotice,canControl}:{onFrame:(frame:ReplayFrame|null)=>void;recording?:{enabled:boolean;file:string|null;bytes:number};onRecordingChange:(enabled:boolean)=>Promise<void>;onNotice?:(message:string)=>void;canControl:boolean}){
+export function ReplayStudio({onFrame,recording,onRecordingChange,onNotice,canControl,seek}:{onFrame:(frame:ReplayFrame|null)=>void;recording?:{enabled:boolean;file:string|null;bytes:number};onRecordingChange:(enabled:boolean)=>Promise<void>;onNotice?:(message:string)=>void;canControl:boolean;seek?:{at:number;nonce:number}|null}){
  const [files,setFiles]=useState<RecordingFile[]>([]),[frames,setFrames]=useState<ReplayFrame[]>([]),[fileName,setFileName]=useState(''),[error,setError]=useState(''),[playing,setPlaying]=useState(false),[position,setPosition]=useState(0),[speed,setSpeed]=useState(1),[loading,setLoading]=useState(false);
+ // A clip marker carries a wall-clock instant. The recording whose file-name timestamp covers it is the
+ // one to open, and the frame offset is simply "marker minus first frame" — no guessing, no upload.
+ const pendingSeek=useRef<number|null>(null);
+ const appliedSeek=useRef<number>(-1);
+ const loadSavedRef=useRef<(file:RecordingFile)=>Promise<void>>(async()=>{});
  const duration=frames.at(-1)?.offset||0;
  const currentIndex=useMemo(()=>{let result=0;for(let i=0;i<frames.length;i++){if(frames[i].offset<=position)result=i;else break}return result},[frames,position]);
  const current=frames[currentIndex]||null;
@@ -80,8 +85,30 @@ export function ReplayStudio({onFrame,recording,onRecordingChange,onNotice,canCo
  useEffect(()=>{void refresh()},[]);
  async function loadText(text:string,name:string){setLoading(true);setError('');setPlaying(false);try{const parsed=parseRecording(text,name);setFrames(parsed);setFileName(name);setPosition(0);onFrame(parsed[0]);onNotice?.(`Loaded ${parsed.length.toLocaleString()} replay checkpoints. The live /obs output is unchanged.`)}catch(reason:any){setError(reason.message||'Could not load this recording');setFrames([]);onFrame(null)}finally{setLoading(false)}}
  async function loadFile(file:File|undefined){if(!file)return;if(file.size>32*1024*1024){setError('Recording exceeds the 32 MB safe-preview limit.');return}await loadText(await file.text(),file.name)}
+ loadSavedRef.current=loadSaved;
  async function loadSaved(file:RecordingFile){setLoading(true);setError('');try{const response=await fetch(`/api/recordings/${encodeURIComponent(file.name)}`);if(!response.ok)throw Error((await response.json().catch(()=>({}))).error||'Could not download the recording');await loadText(await response.text(),file.name)}catch(reason:any){setError(reason.message||'Could not load recording');setLoading(false)}}
  async function toggleRecording(){try{await onRecordingChange(!recording?.enabled);await refresh()}catch(reason:any){setError(reason.message||'Could not change recording state')}}
+ // Clip marker → recording: the recorder names files after the wall-clock moment it started, so the most
+ // recent file that began before the marker is the one holding that instant.
+ useEffect(()=>{
+  if(!seek||!seek.nonce||seek.nonce===appliedSeek.current||!files.length) return;
+  appliedSeek.current=seek.nonce;
+  const stamp=(name:string)=>{const match=/scout-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/.exec(name);if(!match)return null;return new Date(Number(match[1]),Number(match[2])-1,Number(match[3]),Number(match[4]),Number(match[5]),Number(match[6])).getTime()};
+  const candidates=files.map(file=>({file,at:stamp(file.name)})).filter((entry):entry is {file:RecordingFile;at:number}=>entry.at!==null&&entry.at<=seek.at);
+  const target=candidates.sort((first,second)=>second.at-first.at)[0];
+  if(!target){setError('No saved recording covers that moment — start a recording before the round and mark again.');return}
+  pendingSeek.current=seek.at;
+  void loadSavedRef.current(target.file);
+ },[seek,files]);
+ // The recorded frame nearest the marker becomes the playhead; the operator preview only, never /obs.
+ useEffect(()=>{
+  if(pendingSeek.current===null||!frames.length) return;
+  const target=pendingSeek.current;pendingSeek.current=null;
+  const index=frames.findIndex(frame=>frame.at>=target);
+  const frame=frames[index<0?frames.length-1:index]??frames[0];
+  setPlaying(false);setPosition(frame.offset);
+  onNotice?.(`Jumped to ${formatMs(frame.offset)} from the clip marker.`);
+ },[frames,onNotice]);
  function clear(){setPlaying(false);setFrames([]);setFileName('');setPosition(0);setError('');onFrame(null)}
  return <section className="panel replay-studio">
   <div className="editor-head"><div className="section-label">SAFE QA · NEVER WRITES INTO LIVE GSI STATE</div><h2>Replay Studio</h2><p>Play a real capture through the shared renderer in the operator preview. Seeking, slowing down or loading a recording never posts packets to the host and never changes /obs.</p></div>

@@ -29,7 +29,10 @@ test('the landing structure covers discovery, product, benefits, access, pricing
  assert.equal((page.match(/<h1\b/g)??[]).length,1,'there is one primary heading');
  assert.match(page,/href="#main-content"/);
  assert.match(page,/id="main-content" tabindex="-1"/);
- assert.match(page,/No paid plans are currently offered/);
+ // The beta is still free, but the paid plans are published now: the landing page states the prices
+ // and links the real pricing page instead of implying the product has no plans at all.
+ assert.match(page,/href="\/pricing"/,'the landing page links the pricing page');
+ assert.match(page,/€19\/month/,'the launch prices are stated where the beta offer is');
  assert.match(page,/Sample GSI feed/);
  assert.match(page,/before sharing customer stories/,'do not invent beta testimonials');
 });
@@ -41,7 +44,7 @@ test('public navigation is an accessible disclosure with real page destinations'
  assert.match(nav,/aria-label="Open navigation"/);
  const controls=nav.match(/aria-controls="([^"]+)"/)?.[1];
  assert.ok(controls&&nav.includes(`id="${controls}"`),'the mobile toggle names the actual navigation');
- assert.match(nav,/href="\/welcome#pricing"/);
+ assert.match(nav,/href="\/pricing"/,'pricing has its own page, not only an anchor on the landing page');
  assert.match(nav,/href="\/apply"/);
  assert.match(nav,/href="\/login"/);
 });

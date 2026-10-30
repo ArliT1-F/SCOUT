@@ -3,6 +3,9 @@ import {createHash,randomBytes} from 'node:crypto';
 import path from 'node:path';
 import {normalizeConfig} from './config.js';
 import {SupabasePlatformMirror,supabaseConfiguration,type SupabaseConfiguration} from './supabase-store.js';
+import {normalizePublication,projectTournament,summarizeHub,type Publication,type PublicationInput} from './hub.js';
+import {entitlementsFor,PLANS,type BillingState,type PlanId,publicPlanViews} from './plans.js';
+import type {ApplicationStatus} from './beta.js';
 // Account-owned workspaces and aggregate metrics. Live GSI/WS remains one match per host.
 import {DEFAULT_MAP_ROTATION} from '../src/map-rotation.js';
 export {DEFAULT_MAP_ROTATION};
@@ -30,6 +33,9 @@ export interface MetricLogEntry {id?:string;at:number;kind:MetricKind;count:numb
 export interface Tournament {
  id:string;accountId:string;ownerEmail:string;name:string;
  config:unknown|null; configVersion:number; configHash:string|null;
+ // Set by its owner from /app; a tournament without one is simply not public. Projected by
+ // server/hub.ts — never served as-is.
+ publication?:Publication|null;
  createdAt:number;updatedAt:number;lastActiveAt:number|null;
  totals:MetricTotals;logs:MetricLogEntry[];
 }
@@ -63,6 +69,13 @@ export function sanitizeSettings(input:Partial<PlatformSettings>|undefined,previ
 }
 /** Schema normalization strips unknown fields and fixes property order before hashing. */
 export function configHash(config:unknown){return createHash('sha256').update(JSON.stringify(normalizeConfig(config))).digest('hex')}
+// The hash of the same config as the schema before Run of Show would have normalized it: the schedule
+// key is removed from the *normalized* document, so key order and every other default are identical
+// to a build that predates it. Used only to compare a stale client's config with this host's.
+export function legacyConfigHash(raw:unknown):string {
+ const {schedule:_schedule,...rest}=normalizeConfig(raw);
+ return createHash('sha256').update(JSON.stringify(rest)).digest('hex');
+}
 export function globalTotals(tournaments:Tournament[]):MetricTotals{
  const out=emptyTotals();for(const t of tournaments)for(const k of Object.keys(out) as (keyof MetricTotals)[])out[k]+=t.totals[k];return out;
 }
@@ -197,7 +210,23 @@ export class PlatformStore {
   const receipt:ConfigReceipt={id:eventId,tournamentId:id,configVersion:t.configVersion,configHash:t.configHash,localHash};
   this.markEvent(eventId);this.data.configReceipts[eventId]=receipt;await this.save();return {ok:true,value:receipt};
  }
- adminSummary(accounts:Array<{id:string;email:string;status:string}>){
+ // Publishing is an account-owned decision, like every other change to a tournament. `null` input
+ // unpublishes. Slugs are unique across the platform, because a public URL has to be unambiguous.
+ async setPublication(id:string,accountId:string,input:PublicationInput|undefined,now=this.now()):Promise<PlatformResult<Tournament>>{
+  const t=this.ownedBy(id,accountId);if(!t)return fail(404,'not-found','That tournament is not yours (or does not exist).');
+  const next=normalizePublication(input,t.publication??null,now);
+  if(next){
+   let slug=next.slug,attempt=1;
+   while(this.data.tournaments.some(other=>other!==t&&other.publication?.slug===slug)){slug=`${next.slug.slice(0,44)}-${++attempt}`}
+   next.slug=slug;
+  }
+  t.publication=next;t.updatedAt=now;await this.save();return {ok:true,value:t};
+ }
+ bySlug(slug:string){const t=this.data.tournaments.find(candidate=>candidate.publication?.slug===slug);return t&&t.publication&&t.publication.visibility!=='private'?t:null}
+ published(){return this.data.tournaments.filter(t=>t.publication&&t.publication.visibility!=='private').sort((a,b)=>(b.lastActiveAt||b.updatedAt)-(a.lastActiveAt||a.updatedAt))}
+ hubs(now=this.now()){return this.published().map(t=>summarizeHub(t,now)).filter((hub):hub is NonNullable<ReturnType<typeof summarizeHub>>=>hub!==null)}
+ publicTournament(slug:string,now=this.now()){const t=this.bySlug(slug);return t?projectTournament(t,now):null}
+ adminSummary(accounts:Array<{id:string;email:string;status:string;plan?:PlanId|null;trialEndsAt?:number|null;billing?:BillingState|null}>){
   const byAccount=new Map<string,{accountId:string;email:string;status:string;tournaments:number;totals:MetricTotals;lastActiveAt:number|null}>();
   for(const a of accounts)byAccount.set(a.id,{accountId:a.id,email:a.email,status:a.status,tournaments:0,totals:emptyTotals(),lastActiveAt:null});
   for(const t of this.data.tournaments){
@@ -206,6 +235,24 @@ export class PlatformStore {
    row.tournaments++;const g=globalTotals([t]);(Object.keys(g) as (keyof MetricTotals)[]).forEach(k=>row!.totals[k]+=g[k]);
    row.lastActiveAt=Math.max(row.lastActiveAt||0,t.lastActiveAt||t.updatedAt)||null;
   }
-  return {settings:this.settings,activeTournamentId:this.data.activeTournamentId,totals:globalTotals(this.data.tournaments),tournaments:this.data.tournaments.map(tournamentView),users:[...byAccount.values()].sort((a,b)=>(b.lastActiveAt||0)-(a.lastActiveAt||0)),recentLogs:[...this.data.globalLogs].reverse().slice(0,100)};
+  // Commercial view (Launch gate). Every figure is derived from the accounts the caller passed in
+  // and the tournaments in this store: no separate billing database to drift out of sync.
+  const now=this.now();
+  const entitlementRows=accounts.map(account=>({account,entitlements:entitlementsFor({...account,status:account.status as ApplicationStatus},now)}));
+  const countByPlan:Record<string,number>={};
+  for(const row of entitlementRows){const key=row.entitlements.plan??'none';countByPlan[key]=(countByPlan[key]??0)+1}
+  const mrrCents=entitlementRows.reduce((total,row)=>total+(row.entitlements.status==='active'&&row.entitlements.plan?PLANS[row.entitlements.plan].priceCents:0),0);
+  const commercial={
+   mrrCents,
+   byPlan:countByPlan,
+   trials:entitlementRows.filter(row=>row.entitlements.status==='trial').length,
+   expired:entitlementRows.filter(row=>row.entitlements.status==='expired').length,
+   delinquent:entitlementRows.filter(row=>row.entitlements.status==='delinquent').length,
+   founder:entitlementRows.filter(row=>row.entitlements.plan==='founder').length,
+   trialsEndingSoon:entitlementRows.filter(row=>row.entitlements.status==='trial'&&(row.entitlements.trialDaysLeft??99)<=3).map(row=>({email:row.account.email,daysLeft:row.entitlements.trialDaysLeft})),
+   plans:publicPlanViews(null),
+   hubs:this.hubs(now).length,
+  };
+  return {settings:this.settings,activeTournamentId:this.data.activeTournamentId,totals:globalTotals(this.data.tournaments),tournaments:this.data.tournaments.map(tournamentView),users:[...byAccount.values()].sort((a,b)=>(b.lastActiveAt||0)-(a.lastActiveAt||0)),recentLogs:[...this.data.globalLogs].reverse().slice(0,100),commercial};
  }
 }
