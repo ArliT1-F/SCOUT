@@ -1,10 +1,11 @@
 import {z} from 'zod';
+import {MAX_SPONSORS,SPONSOR_ASSET,SPONSOR_ROTATION_MS} from './sponsor-rotation.js';
 import {SCENE_IDS} from './controls.js';
 
 // Public-facing overlay design data. All styling values are strictly typed and colour/path fields
 // are allow-listed; an operator can personalize a broadcast without allowing saved JSON to inject CSS.
 export const FONT_FAMILIES=['Barlow Condensed','DM Sans','Arial','Oswald','Roboto','Inter'] as const;
-export const OVERLAY_WIDGET_KINDS=['event','scoreboard','radar','killfeed','rosterLeft','rosterRight','lowerThird','economy','footer','signal','phaseBanner','roundResult','phaseCard','text','image','shape','clock'] as const;
+export const OVERLAY_WIDGET_KINDS=['event','scoreboard','radar','killfeed','rosterLeft','rosterRight','lowerThird','economy','footer','signal','phaseBanner','roundResult','phaseCard','text','image','shape','clock','sponsor'] as const;
 export type OverlayWidgetKind=typeof OVERLAY_WIDGET_KINDS[number];
 const hex=z.string().regex(/^#[0-9a-fA-F]{6}$/,'use a six-digit hex colour');
 const scene=z.enum(SCENE_IDS);
@@ -69,6 +70,8 @@ export const overlayWidgetSchema=z.object({
  asset:z.string().max(260).optional().default('').refine(value=>!value||/^(uploads\/overlays\/[\w.\- ]+|radars\/[\w.\-]+\.(?:png|jpg|jpeg|webp)|thumbs\/[\w.\-]+\.(?:png|jpg|jpeg|webp))$/i.test(value),'asset must be a local SCOUT upload'),
  font:z.enum(FONT_FAMILIES).nullable().optional().default(null),
  fit:z.enum(['contain','cover']).optional().default('contain'),
+ // Sponsors rotate on air; this is how long one graphic stays up. Ignored by every other kind.
+ rotateMs:z.number().int().min(5_000).max(300_000).optional().default(SPONSOR_ROTATION_MS),
 }).strip().transform(widget=>({
  ...widget,
  // Layers used to be born with the shipped palette pinned: #f2eef5 type and the Barlow face. Those
@@ -95,9 +98,21 @@ export const DEFAULT_WIDGETS:OverlayWidget[]=[
  widget('roundResult','roundResult','Round result',91),
  widget('phaseCard','phaseCard','Phase cards',95),
 ];
+// Sponsors live on the overlay document, not in a second store: they travel with event packs, they
+// are versioned with the rest of the design, and an exported package contains its own sponsor kit.
+// The asset rule is the upload rule — PNG, JPEG, WEBP or GIF under uploads/overlays/.
+export const sponsorSlotSchema=z.object({
+ id:z.string().trim().regex(/^[a-zA-Z0-9_-]{1,48}$/,'use letters, numbers, dash or underscore'),
+ name:z.string().trim().min(1).max(48),
+ asset:z.string().max(260).regex(SPONSOR_ASSET,'upload a PNG, JPEG, WEBP or GIF'),
+ weight:z.number().int().min(1).max(100).optional().default(1),
+ enabled:z.boolean().optional().default(true),
+}).strip();
+export type SponsorSlotConfig=z.infer<typeof sponsorSlotSchema>;
 export const themePresetSchema=z.object({id:z.string().trim().regex(/^[a-zA-Z0-9_-]{1,48}$/),theme:overlayThemeSchema}).strip();
 export const overlaySchema=z.object({
  version:z.literal(1).optional().default(1),
+ sponsors:z.array(sponsorSlotSchema).max(MAX_SPONSORS).optional().default([]),
  theme:overlayThemeSchema.optional().default(DEFAULT_THEME),
  presets:z.array(themePresetSchema).max(20).optional().default([]),
  widgets:z.array(overlayWidgetSchema).max(60).optional().default(DEFAULT_WIDGETS),
@@ -117,9 +132,12 @@ export type OverlayConfig=z.infer<typeof overlaySchema>;
 export const defaultOverlay=():OverlayConfig=>overlaySchema.parse({});
 
 export function createWidget(kind:OverlayWidgetKind,id?:string):OverlayWidget {
- const nameByKind:Record<OverlayWidgetKind,string>={event:'Event header',scoreboard:'Scoreboard',radar:'Tactical radar',killfeed:'Killfeed',rosterLeft:'Left roster',rosterRight:'Right roster',lowerThird:'Player lower third',economy:'Economy bar',footer:'Broadcast footer',signal:'Signal-lost banner',phaseBanner:'Phase banner',roundResult:'Round result',phaseCard:'Phase cards',text:'Text overlay',image:'Image overlay',shape:'Shape overlay',clock:'Live clock'};
+ const nameByKind:Record<OverlayWidgetKind,string>={event:'Event header',scoreboard:'Scoreboard',radar:'Tactical radar',killfeed:'Killfeed',rosterLeft:'Left roster',rosterRight:'Right roster',lowerThird:'Player lower third',economy:'Economy bar',footer:'Broadcast footer',signal:'Signal-lost banner',phaseBanner:'Phase banner',roundResult:'Round result',phaseCard:'Phase cards',text:'Text overlay',image:'Image overlay',shape:'Shape overlay',clock:'Live clock',sponsor:'Sponsor rotation'};
  const idBase=id||kind;
- return overlayWidgetSchema.parse({id:idBase,kind,name:nameByKind[kind],zIndex:kind==='text'||kind==='image'||kind==='shape'||kind==='clock'?80:20,showOn:['live'],...(kind==='text'?{text:'YOUR TEXT HERE',x:700,y:180,width:520,height:100,fontSize:48}:{}),...(kind==='image'?{x:800,y:120,width:320,height:180,fit:'contain'}:{}),...(kind==='shape'?{x:800,y:500,width:320,height:12}:{}),...(kind==='clock'?{x:850,y:180,width:220,height:90,fontSize:54}:{})});
+ return overlayWidgetSchema.parse({id:idBase,kind,name:nameByKind[kind],zIndex:kind==='text'||kind==='image'||kind==='shape'||kind==='clock'?80:20,showOn:['live'],...(kind==='text'?{text:'YOUR TEXT HERE',x:700,y:180,width:520,height:100,fontSize:48}:{}),...(kind==='image'?{x:800,y:120,width:320,height:180,fit:'contain'}:{}),
+ // A sponsor layer is born visible in every scene: the whole point is that a sponsorship follows the
+ // broadcast, and the operator can still untick any scene in the inspector.
+ ...(kind==='sponsor'?{x:1520,y:900,width:320,height:120,fit:'contain',showOn:[...SCENE_IDS]}:{}),...(kind==='shape'?{x:800,y:500,width:320,height:12}:{}),...(kind==='clock'?{x:850,y:180,width:220,height:90,fontSize:54}:{})});
 }
 export function widgetStyle(widget:OverlayWidget,legacy?:Record<string,string|number>):Record<string,string|number> {
  const style:Record<string,string|number>={...(legacy||{}),opacity:widget.opacity,zIndex:widget.zIndex,scale:widget.scale};

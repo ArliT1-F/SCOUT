@@ -18,7 +18,10 @@ export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'log
  const [error,setError]=useState('');
  async function pick(file:File|undefined){
   if(!file) return;
-  if(!/^image\//.test(file.type)||file.size>5*1024*1024){setError('Use a PNG, JPEG, GIF, WEBP or SVG up to 5 MB');return}
+  // Sponsorship and broadcast graphics are raster only, and the server enforces the same list by
+  // reading the file's own bytes. Keeping the client message identical avoids a surprise rejection.
+  const allowed=kind==='overlay'?['image/png','image/jpeg','image/jpg','image/webp','image/gif']:['image/png','image/jpeg','image/jpg','image/webp','image/gif','image/svg+xml'];
+  if(!allowed.includes(file.type)||file.size>5*1024*1024){setError(kind==='overlay'?'Use a PNG, JPEG, WEBP or GIF up to 5 MB':'Use a PNG, JPEG, GIF, WEBP or SVG up to 5 MB');return}
   setError('');setBusy(true);
   try{
    const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(Error('could not read the file'));reader.readAsDataURL(file)});
@@ -40,7 +43,7 @@ export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'log
    <button type="button" className="mini-button" disabled={busy} onClick={()=>inputRef.current?.click()}><Upload size={12}/>{busy?'Uploading…':value?'Replace':'Upload'}</button>
    {value&&<button type="button" className="mini-button danger" disabled={busy} onClick={()=>{onChange('');setError('')}}><X size={12}/>Remove</button>}
   </div>}
-  <input ref={inputRef} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" onChange={event=>pick(event.target.files?.[0])}/>
+  <input ref={inputRef} type="file" hidden accept={kind==='overlay'?'image/png,image/jpeg,image/webp,image/gif':'image/png,image/jpeg,image/gif,image/webp,image/svg+xml'} onChange={event=>pick(event.target.files?.[0])}/>
   {error&&<small className="field-error">{error}</small>}
  </div>;
 }

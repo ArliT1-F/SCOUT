@@ -60,6 +60,34 @@ export const breakSchema=z.object({
  title:z.string().trim().max(80).optional().default(''),
  message:z.string().trim().max(240).optional().default(''),
 }).strip();
+// Run of Show (server/schedule.ts): the fixtures for one day, in the same file as the match they
+// belong to, so an event package, a linked host and the offline cache carry them for free. A slot
+// stores an absolute instant (epoch ms, UTC) — never a local time, which would mean a different
+// thing on the operator's laptop and on the venue machine.
+export const scheduleTeamSchema=z.object({
+ // The config team binding, when the team is one of the two in the current match. The label is what
+ // the page, the calendar and the overlay show either way — a slot is a fixture, not a roster.
+ team:z.string().trim().max(32).optional().default(''),
+ label:z.string().trim().max(64).optional().default(''),
+}).strip();
+export const scheduleSlotSchema=z.object({
+ id:z.string().trim().min(1).max(32),
+ at:z.number().int().nonnegative(),
+ a:scheduleTeamSchema.optional().default({team:'',label:''}),
+ b:scheduleTeamSchema.optional().default({team:'',label:''}),
+ stage:z.string().trim().max(120).optional().default(''),
+ format:z.enum(['bo1','bo3','bo5']).optional().default('bo3'),
+ stream:z.string().trim().max(300).optional().default(''),
+ note:z.string().trim().max(200).optional().default(''),
+ // Set by bracket generation so "load into overlay" can also mark the tree match as live.
+ bracketMatchId:z.string().trim().max(32).optional().default(''),
+}).strip();
+export type ScheduleSlot=z.infer<typeof scheduleSlotSchema>;
+// The schema version is part of the identity of a saved config: adding a defaulted field changes
+// every hash, and two machines with the same match would otherwise disagree about who is newer.
+// configHash() (server/platform.ts) is the current hash; legacyConfigHash() is the same hash for a
+// config saved before `schedule` existed, so a mixed-version fleet converges instead of conflicting.
+export const CONFIG_SCHEMA_VERSION=2;
 // zod returns object defaults unparsed, so every default below carries the complete output shape.
 const SLOT_DEFAULT={label:'',team:''};
 export const configSchema=z.object({
@@ -68,6 +96,7 @@ export const configSchema=z.object({
  mr:z.number().int().min(1).max(30).optional().default(12),
  otMr:z.number().int().min(1).max(15).optional().default(3),
  break:breakSchema.optional().default({title:'',message:''}),
+ schedule:z.array(scheduleSlotSchema).max(64).optional().default([]),
  teams:z.array(teamSchema).min(2).max(2),
  maps:z.array(mapSchema).min(1).max(9),
  bracket:bracketSchema.optional().default({title:'',rounds:[
@@ -130,6 +159,16 @@ export function normalizeConfig(raw:unknown):ScoutConfig {
  for(const round of parsed.bracket.rounds) for(const match of round.matches){while(matchIds.has(match.id)) match.id=`${match.id}-2`;matchIds.add(match.id)}
  // A match with a winner is finished by definition; anything else keeps the status the admin set.
  for(const round of parsed.bracket.rounds) for(const match of round.matches) if(match.winner) match.status='done';
+ // Schedule slots are ordered by time (then id) so two operators who added the same fixtures in a
+ // different order save the same document, and duplicate ids cannot make the editor target the wrong
+ // row — a duplicate id would make "load this episode" ambiguous.
+ // Fixtures are sorted by start time so two hosts that inserted the same fixtures in a different
+ // order agree on the hash, and duplicate ids are made unique instead of silently replacing one
+ // another (a duplicate id would make "load this fixture" ambiguous).
+ const slotIds=new Set<string>();
+ for(const slot of parsed.schedule){while(slotIds.has(slot.id)) slot.id=`${slot.id}-2`;slotIds.add(slot.id)}
+ parsed.schedule=[...parsed.schedule].sort((first,second)=>first.at-second.at||first.id.localeCompare(second.id));
+
  return {...parsed,bracket:propagateBracket(parsed.bracket)};
 }
 export const emptyPlayer=():PlayerConfig=>({steamid:'',name:'',nickname:'',role:'',alias:'',photo:''});

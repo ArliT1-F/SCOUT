@@ -6,7 +6,7 @@ import type {DatabaseSync} from 'node:sqlite';
  * Version 1 is intentionally an idempotent baseline: deployments made before the migration
  * runner already have these tables, and CREATE IF NOT EXISTS adopts them without rewriting data.
  */
-export const ACCOUNT_DB_SCHEMA_VERSION=4;
+export const ACCOUNT_DB_SCHEMA_VERSION=5;
 
 const MIGRATIONS:Array<{version:number;name:string;sql:string;apply?:(db:DatabaseSync)=>void}>=[
  {
@@ -126,6 +126,18 @@ const MIGRATIONS:Array<{version:number;name:string;sql:string;apply?:(db:Databas
    ALTER TABLE accounts ADD COLUMN revoked_reason TEXT;
    ALTER TABLE email_outbox ADD COLUMN last_error_status INTEGER;
    ALTER TABLE email_outbox ADD COLUMN last_provider_error TEXT;
+  `,
+ },
+ {
+  // Launch gate: the plan an account is on, when its trial ends, and the billing state the payment
+  // provider reported. All nullable: an account that predates plans keeps reading as a Founder
+  // account, which is decided in server/plans.ts, not by a default in the database.
+  version:5,
+  name:'plans-trials-and-billing-state',
+  sql:`
+   ALTER TABLE accounts ADD COLUMN plan TEXT;
+   ALTER TABLE accounts ADD COLUMN trial_ends_at INTEGER;
+   ALTER TABLE accounts ADD COLUMN billing TEXT;
   `,
  },
 ];

@@ -16,6 +16,11 @@ test('website boundary allows account/owner/device sync but not broadcast contro
  assert.throws(()=>surfaceFromEnv({SCOUT_SURFACE:'typo'}));
  for(const route of ['/profile','/admin','/api/beta/apply','/api/beta/device/approve','/api/platform/admin/settings','/api/platform/device/sync'])assert.equal(websitePathAllowed(route),true,route);
  for(const route of ['/app','/panel/','/obs','/game','/gsi','/ws','/api/config','/api/status','/api/upload','/api/session','/api/beta/link/start','/api/beta/license','/api/platform/tournaments'])assert.equal(websitePathAllowed(route),false,route);
+ // The launch wave is served by the website and only by the website: public hubs are a projection,
+ // billing is the account's own checkout, and the pricing page is a real page, not an anchor.
+ for(const route of ['/pricing','/t/autumn-cup','/embed/autumn-cup','/sitemap.xml','/api/public/tournaments','/api/public/tournaments/autumn-cup','/api/billing/status','/api/billing/webhook'])assert.equal(websitePathAllowed(route),true,route);
+ // The host's own state is still not on the website's menu.
+ for(const route of ['/t/','/embed/','/api/schedule.ics','/api/automation','/api/archive/x/recap'])assert.equal(websitePathAllowed(route),route==='/t/'||route==='/embed/'?true:false,route);
 });
 
 test('real website redirects root, serves profile/admin, refuses host pages and mutations',async(t)=>{

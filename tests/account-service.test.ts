@@ -578,3 +578,49 @@ test('/status tells a desk client whether the session belongs to a reviewer',asy
  const visitor=await call('/status');
  assert.equal(visitor.body.reviewer,false,'a visitor may not');
 });
+
+// Launch gate (docs/LAUNCH-FEATURES.md §5). Two new service routes: a self-serve trial that is
+// verified by the invitation email, and the owner desk's manual plan change.
+test('a trial is a real account with a window, and it needs a mail transport to prove the address',async(t)=>{
+ const {call}=await start({},t);
+ const created=await call('/trial',{body:{...application,email:'trial@example.com'}});
+ assert.equal(created.status,200,JSON.stringify(created.body));
+ assert.equal(created.body.account.status,'approved','a trial is usable immediately');
+ assert.equal(created.body.account.plan,'trial');
+ assert.ok(created.body.account.trialEndsAt>Date.now()+13*86_400_000);
+ assert.ok(created.body.invite,'the invitation is what verifies the address');
+ // Same address twice is an account already, not a second trial.
+ const again=await call('/trial',{body:{...application,email:'trial@example.com'}});
+ assert.equal(again.status,409);
+ assert.equal(again.body.code,'already-exists');
+ // The throttle is per address, like applications.
+ for(let index=0;index<10;index++)await call('/trial',{body:{...application,email:`burst${index}@example.com`}});
+ const throttled=await call('/trial',{body:{...application,email:'another@example.com'}});
+ assert.equal(throttled.status,429);
+ assert.equal(throttled.body.code,'throttled');
+});
+
+test('a trial cannot be started where no mail can leave the building',async(t)=>{
+ const {call}=await start({emailTransport:null as any,emailEncryptionKey:undefined},t);
+ const blocked=await call('/trial',{body:{...application,email:'nomail@example.com'}});
+ assert.equal(blocked.status,503);
+ assert.equal(blocked.body.code,'email-unavailable');
+});
+
+test('the owner desk can move an account between plans, and only with the service key',async(t)=>{
+ const {call}=await start({},t);
+ const trial=await call('/trial',{body:{...application,email:'plan@example.com'}});
+ const id=trial.body.account.id;
+ const denied=await call(`/accounts/${id}/plan`,{body:{plan:'organiser'}});
+ assert.equal(denied.status,401,'a plan change is an owner act');
+ const changed=await call(`/accounts/${id}/plan`,{key:true,body:{plan:'organiser',billing:{status:'active',customerId:'cus_1',subscriptionId:'sub_1',currentPeriodEnd:Date.now()+86_400_000,updatedAt:Date.now()},by:'owner@example.com'}});
+ assert.equal(changed.status,200);
+ assert.equal(changed.body.account.plan,'organiser');
+ assert.equal(changed.body.account.billing.status,'active');
+ const founder=await call(`/accounts/${id}/plan`,{key:true,body:{founder:true,by:'owner@example.com'}});
+ assert.equal(founder.body.account.plan,'founder');
+ const reset=await call(`/accounts/${id}/plan`,{key:true,body:{plan:null}});
+ assert.equal(reset.body.account.plan,null,'a plan can be removed, which returns the account to Founder');
+ const missing=await call('/accounts/nope/plan',{key:true,body:{plan:'venue'}});
+ assert.equal(missing.status,404);
+});

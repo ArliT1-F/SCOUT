@@ -1,10 +1,21 @@
-import React from 'react';
+import React,{useEffect,useState} from 'react';
 import {assetUrl} from './assets';
 import {getWidget,interpolateWidgetText,widgetShown,widgetStyle,type OverlayConfig} from '../server/overlay';
+import {activeSponsor,SPONSOR_ROTATION_MS} from '../server/sponsor-rotation';
 import type {SceneId} from '../server/controls';
 
 export function CustomOverlays({config,scene,context,arranging=false,onMove}:{config?:OverlayConfig;scene:SceneId;context:Record<string,string|number|undefined>;arranging?:boolean;onMove?:(id:string,x:number,y:number)=>void}){
- const widgets=(config?.widgets||[]).filter(widget=>['text','image','shape','clock'].includes(widget.kind)&&widgetShown(widget,scene));
+ const widgets=(config?.widgets||[]).filter(widget=>['text','image','shape','clock','sponsor'].includes(widget.kind)&&widgetShown(widget,scene));
+ // A sponsor layer follows the clock, not the GSI feed: between maps there are no state updates at
+ // all, and a sponsorship that froze when CS2 went quiet is exactly the one a sponsor would notice.
+ // The tick only runs while such a layer is actually visible in this scene.
+ const hasSponsor=widgets.some(widget=>widget.kind==='sponsor');
+ const [now,setNow]=useState(()=>Date.now());
+ useEffect(()=>{
+  if(!hasSponsor) return;
+  const timer=setInterval(()=>setNow(Date.now()),1000);
+  return()=>clearInterval(timer);
+ },[hasSponsor]);
  const startDrag=(id:string,event:React.PointerEvent<HTMLDivElement>)=>{
   if(!arranging||!onMove)return;event.preventDefault();event.stopPropagation();
   const hud=event.currentTarget.closest('.hud');if(!hud)return;
@@ -20,6 +31,12 @@ export function CustomOverlays({config,scene,context,arranging=false,onMove}:{co
   // No colour or face here: widgetStyle already pins them when the operator chose one, and an
   // unpinned graphic inherits the .hud rule that reads the theme, so a theme change moves it.
   const decorated:React.CSSProperties={...base as React.CSSProperties,fontSize:widget.fontSize??38,textShadow:config?.theme.glow?'0 2px 14px rgba(0,0,0,.55)':'none',border:widget.borderColor?`1px solid ${widget.borderColor}`:undefined,pointerEvents:arranging?'auto':'none',touchAction:'none',cursor:arranging?'move':'default'};
+  if(widget.kind==='sponsor'){
+   const sponsor=activeSponsor(config?.sponsors,now,widget.rotateMs??SPONSOR_ROTATION_MS);
+   // Nothing is drawn when there is no artwork: an empty "SPONSOR" box on air is worse than no box.
+   if(!sponsor) return null;
+   return <div className="custom-overlay custom-sponsor" style={decorated} key={widget.id} onPointerDown={event=>startDrag(widget.id,event)}><img src={assetUrl(sponsor.asset)} alt={sponsor.name} style={{objectFit:widget.fit,width:'100%',height:'100%'}}/></div>;
+  }
   if(widget.kind==='image')return <div className="custom-overlay custom-image" style={decorated} key={widget.id} onPointerDown={event=>startDrag(widget.id,event)}>{widget.asset?<img src={assetUrl(widget.asset)} alt="" style={{objectFit:widget.fit,width:'100%',height:'100%'}}/>:<span>ADD GRAPHIC</span>}</div>;
   if(widget.kind==='shape')return <div className="custom-overlay custom-shape" style={{...decorated,background:widget.fill||widget.color||'var(--accent)',borderRadius:config?.theme.cornerRadius||0}} key={widget.id} onPointerDown={event=>startDrag(widget.id,event)}/>;
   const template=widget.kind==='clock'?(widget.text||'{clock}'):widget.text;

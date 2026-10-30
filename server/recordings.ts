@@ -55,9 +55,36 @@ export class GsiRecorder {
 }
 
 export interface ArchivedEvent {at:number;type:'kill'|'round';data:KillEvent|RoundEvent}
-export interface MatchArchive {id:string;name:string;startedAt:number;endedAt:number|null;event:string;stage:string;teams:string[];maps:string[];format:string;events:ArchivedEvent[]}
-export interface ArchiveSummary extends Omit<MatchArchive,'events'>{eventCount:number;kills:number;rounds:number}
-const MAX_ARCHIVES=40,MAX_ARCHIVED_EVENTS=10_000;
+// Archive schema v2, additive so every v1 file still loads: a per-round player snapshot at the moment
+// the round ends. GSI reports assists, MVPs and per-round damage only in the live state, so this is
+// the one chance to keep them. Without a snapshot the recap says "not captured" instead of guessing.
+export interface SnapshotPlayer {steamid:string;name:string;side:string;kills:number;deaths:number;assists:number;mvps:number;roundKills:number;roundKillhs:number;roundDamage:number;teamIndex:number}
+export interface RoundSnapshot {at:number;map:string;round:number;players:SnapshotPlayer[]}
+// Highlight markers (follow-up §4). A marker is a wall-clock instant inside the archive, so it can be
+// turned into a timecode for an editor and into a seek position for Replay Studio without guessing.
+export interface ClipMarker {
+ id:string; at:number; label:string; kind:'kill'|'round'|'manual';
+ round:number|null; map:string; steamid:string;
+}
+export const MAX_MARKERS=500;
+export function markerTimecode(startedAt:number,at:number):string {
+ const total=Math.max(0,Math.round(at-startedAt));
+ const hours=Math.floor(total/3_600_000),minutes=Math.floor((total%3_600_000)/60_000),seconds=Math.floor((total%60_000)/1000),ms=total%1000;
+ const pad=(value:number,width=2)=>String(value).padStart(width,'0');
+ return `${pad(hours,2)}:${pad(minutes)}:${pad(seconds)}.${pad(ms,3)}`;
+}
+export function markersCsv(archive:MatchArchive):string {
+ const rows:string[][]=[['marker','kind','timecode','seconds','label','map','round','steamid']];
+ for(const marker of [...(archive.markers??[])].sort((first,second)=>first.at-second.at)){
+  const seconds=((marker.at-archive.startedAt)/1000).toFixed(3);
+  rows.push([marker.id,marker.kind,markerTimecode(archive.startedAt,marker.at),seconds,marker.label,marker.map,marker.round===null?'':String(marker.round),marker.steamid]);
+ }
+ return rows.map(row=>row.map(value=>{const safe=/^[=+\-@]/.test(value)?`'${value}`:value;return /[",\n]/.test(safe)?`"${safe.replace(/"/g,'""')}"`:safe}).join(',')).join('\n')+'\n';
+}
+export interface RecapDelivery {at:number;status:'delivered'|'failed';target:'discord'|'webhook';detail:string}
+export interface MatchArchive {id:string;name:string;startedAt:number;endedAt:number|null;event:string;stage:string;teams:string[];maps:string[];format:string;events:ArchivedEvent[];snapshots?:RoundSnapshot[];markers?:ClipMarker[];delivery?:RecapDelivery|null}
+export interface ArchiveSummary extends Omit<MatchArchive,'events'|'snapshots'|'markers'>{eventCount:number;kills:number;rounds:number;hasSnapshot:boolean;markers:number;delivery:RecapDelivery|null}
+const MAX_ARCHIVES=40,MAX_ARCHIVED_EVENTS=10_000,MAX_SNAPSHOTS=200;
 export class MatchArchiveStore {
  private archives:MatchArchive[]=[];private pending:Promise<void>=Promise.resolve();
  constructor(private readonly file='recordings/matches.json'){}
@@ -65,7 +92,7 @@ export class MatchArchiveStore {
   try{const parsed=JSON.parse(await readFile(this.file,'utf8'));if(parsed?.version===1&&Array.isArray(parsed.archives))this.archives=parsed.archives.filter(validArchive).slice(-MAX_ARCHIVES)}catch{}
  }
  get active(){return this.archives.slice().reverse().find(archive=>!archive.endedAt)||null}
- list():ArchiveSummary[]{return this.archives.slice().reverse().map(archive=>({id:archive.id,name:archive.name,startedAt:archive.startedAt,endedAt:archive.endedAt,event:archive.event,stage:archive.stage,teams:archive.teams,maps:archive.maps,format:archive.format,eventCount:archive.events.length,kills:archive.events.filter(event=>event.type==='kill').length,rounds:archive.events.filter(event=>event.type==='round').length}))}
+ list():ArchiveSummary[]{return this.archives.slice().reverse().map(archive=>({id:archive.id,name:archive.name,startedAt:archive.startedAt,endedAt:archive.endedAt,event:archive.event,stage:archive.stage,teams:archive.teams,maps:archive.maps,format:archive.format,eventCount:archive.events.length,kills:archive.events.filter(event=>event.type==='kill').length,rounds:archive.events.filter(event=>event.type==='round').length,hasSnapshot:Boolean(archive.snapshots?.length),markers:archive.markers?.length??0,delivery:archive.delivery??null}))}
  detail(id:string){return this.archives.find(archive=>archive.id===id)||null}
  start(name:string,config:ScoutConfig,now=Date.now()):MatchArchive {
   if(this.active)throw new Error(`Match session “${this.active.name}” is already recording`);
@@ -76,6 +103,20 @@ export class MatchArchiveStore {
  finish(now=Date.now()):MatchArchive|null {const item=this.active;if(!item)return null;item.endedAt=now;this.scheduleSave();return item}
  addKill(event:KillEvent){const active=this.active;if(!active)return;active.events.push({at:event.at,type:'kill',data:event});this.trim(active);this.scheduleSave()}
  addRound(event:RoundEvent){const active=this.active;if(!active)return;active.events.push({at:event.endedAt,type:'round',data:event});this.trim(active);this.scheduleSave()}
+ addSnapshot(snapshot:RoundSnapshot){
+  const active=this.active;if(!active)return;
+  // One snapshot per round per map: a late-arriving duplicate must not double-count damage.
+  const existing=(active.snapshots??[]).findIndex(entry=>entry.map===snapshot.map&&entry.round===snapshot.round);
+  const snapshots=active.snapshots??[];
+  if(existing>=0) snapshots[existing]=snapshot; else snapshots.push(snapshot);
+  active.snapshots=snapshots.slice(-MAX_SNAPSHOTS);
+  this.scheduleSave();
+ }
+ // Markers are bounded and de-duplicated by id; the label is operator text, capped like every other
+ // free-text field that ends up in a CSV.
+ addMarker(id:string,marker:ClipMarker){const item=this.detail(id);if(!item)return null;const markers=(item.markers??[]).filter(existing=>existing.id!==marker.id);markers.push({...marker,label:marker.label.slice(0,120)});item.markers=markers.slice(-MAX_MARKERS);this.scheduleSave();return item.markers}
+ removeMarker(id:string,markerId:string){const item=this.detail(id);if(!item)return null;item.markers=(item.markers??[]).filter(marker=>marker.id!==markerId);this.scheduleSave();return item.markers}
+ setDelivery(id:string,delivery:RecapDelivery){const item=this.detail(id);if(!item)return null;item.delivery=delivery;this.scheduleSave();return item}
  private trim(archive:MatchArchive){if(archive.events.length>MAX_ARCHIVED_EVENTS)archive.events.splice(0,archive.events.length-MAX_ARCHIVED_EVENTS)}
  private scheduleSave(){
   this.pending=this.pending.then(async()=>{await mkdir(path.dirname(this.file),{recursive:true});const tmp=this.file+'.tmp';await writeFile(tmp,JSON.stringify({version:1,archives:this.archives},null,2));await rename(tmp,this.file)}).catch(error=>console.warn('[archive] could not persist match archive:',error instanceof Error?error.message:String(error)));

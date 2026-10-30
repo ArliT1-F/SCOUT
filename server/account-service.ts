@@ -8,6 +8,7 @@ import path from 'node:path';
 import {loadEnvFile} from './env.js';
 import {describeEmailFailure,emailConfiguration,invitationEmail,openEmail,recoveryEmail,resendTransport,sealEmail,type EmailTransport} from './email.js';
 import {DEFAULT_PLATFORM_SETTINGS,isPlatformOwner,sanitizeSettings,type PlatformSettings} from './platform.js';
+import {TRIAL_DAYS,emptyBilling,isPlanId,type BillingState,type PlanId} from './plans.js';
 import {SupabaseAccountMirror,supabaseConfiguration,type SupabaseConfiguration} from './supabase-store.js';
 import {
  ACCOUNT_COOKIE,ACCOUNT_TTL_MS,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
@@ -123,6 +124,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
  // The limits are in memory on purpose (as in the local store): they exist to blunt a burst, not to
  // be an audit trail, and a restart is a legitimate way to clear them.
  const applications=new Map<string,number[]>();
+ const trialStarts=new Map<string,number[]>();
  const recoveries=new Map<string,number[]>();
  const recoveryTargets=new Map<string,number[]>();
  const failures=new Map<string,{count:number;first:number}>();
@@ -209,7 +211,16 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
    country:String(row.country),status:String(row.status) as AccountView['status'],useCase:String(row.use_case),events:String(row.events),
    createdAt:Number(row.created_at),decidedAt:row.decided_at===null?null:Number(row.decided_at),devices:deviceViews(String(row.id)),
    revokedReason:String(row.status)==='revoked'?(row.revoked_reason==null?null:String(row.revoked_reason)):null,
+   plan:isPlanId(row.plan)?row.plan:null,
+   trialEndsAt:row.trial_ends_at==null?null:Number(row.trial_ends_at),
+   billing:parseBilling(row.billing),
   };
+ }
+ // Billing is stored as JSON produced by the host's billing runtime. A row written by an older build
+ // (or hand-edited) that does not parse is treated as "no billing", never as an active subscription.
+ function parseBilling(raw:unknown):BillingState|null{
+  if(raw===null||raw===undefined||raw==='') return null;
+  try{const parsed=typeof raw==='string'?JSON.parse(raw):raw;return parsed&&typeof parsed==='object'?parsed as BillingState:null}catch{return null}
  }
  function grantInvite(accountId:string,decidedBy:string){
   const {baseUrl}=requireEmail();
@@ -451,6 +462,57 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      stamps.push(now());applications.set(from,stamps);
      log('a beta application was submitted');
      return json(res,200,{account:view(accountRow(id)!),invite:null});
+    }
+
+    // Self-serve trial (Launch gate): an approved account with a 14-day window, created the moment
+    // the address is verified by the invitation email this queues. No mail transport means no trial —
+    // an unverified instant account is the one thing a trial must not create.
+    if(method==='POST'&&route==='/trial'){
+     if(!settings().applicationsOpen)fail(403,'applications-closed','SCOUT is not taking new accounts right now.');
+     if(!(mailTransport&&mailKey&&mailBaseUrl))fail(503,'email-unavailable','This deployment cannot send email yet, so a trial cannot be verified. Apply for access instead — a human will approve you.');
+     const input=(await body(req)) as Partial<ApplicationInput>&{address?:string};
+     const email=normalizeEmail(String(input.email||''));
+     if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))fail(400,'bad-email','That does not look like an email address.');
+     if(String(input.name||'').trim().length<2)fail(400,'bad-name','Tell us the name to put on the account.');
+     const from=String(input.address||address(req));
+     const stamps=(trialStarts.get(from)||[]).filter(stamp=>now()-stamp<60*60*1000);
+     if(stamps.length>=MAX_APPLICATIONS_PER_HOUR)fail(429,'throttled','That address has started several accounts already. Try again in an hour.');
+     const existing=get('SELECT * FROM accounts WHERE normalized_email = ?',email);
+     if(existing)fail(409,'already-exists',String(existing.status)==='approved'?'That address already has an account — sign in.':'That address already has an application in review. Sign in if you have set a password.');
+     const id=newToken(12),trialEndsAt=now()+TRIAL_DAYS*86_400_000;
+     db.exec('BEGIN IMMEDIATE');
+     try{
+      run(`INSERT INTO accounts (id,email,normalized_email,display_name,organisation,country,use_case,events,status,password,created_at,decided_at,decided_by,plan,trial_ends_at,billing)
+           VALUES (?,?,?,?,?,?,?,?,?,NULL,?,?,'trial (self-serve)',?,?,?)`,
+       id,email,email,String(input.name||'').trim().slice(0,80),String(input.organisation||'').trim().slice(0,120),
+       String(input.country||'').trim().slice(0,60),String(input.useCase||'').trim().slice(0,600),String(input.events||'').trim().slice(0,80),
+       'approved',now(),now(),'trial',trialEndsAt,JSON.stringify(emptyBilling('none')));
+      const invite=grantInvite(id,'trial (self-serve)');
+      writeEvent('trial.started',id);
+      db.exec('COMMIT');
+      void flushSupabase().catch(()=>{});
+      stamps.push(now());trialStarts.set(from,stamps);
+      void deliverPending();
+      log('a self-serve trial was started');
+      return json(res,200,{account:view(accountRow(id)!),invite});
+     }catch(error){try{db.exec('ROLLBACK')}catch{};throw error}
+    }
+    // Owner desk: move an account between plans. Service-key only — this is the manual invoice, the
+    // Founder grant and the fix after a mis-delivered billing webhook, all in one deliberate act.
+    if(method==='POST'&&/^\/accounts\/[^/]+\/plan$/.test(route)){
+     requireServiceKey(req);
+     const accountId=decodeURIComponent(route.split('/')[2]||'');
+     const input=(await body(req)) as {plan?:PlanId|null;trialEndsAt?:number|null;billing?:BillingState|null;founder?:boolean;by?:string};
+     const row=accountRow(accountId);
+     if(!row)fail(404,'not-found','Unknown account.');
+     const target=row!;
+     const plan=input.founder?'founder':input.plan===undefined?undefined:input.plan===null?null:isPlanId(input.plan)?input.plan:null;
+     if(plan!==undefined)run('UPDATE accounts SET plan = ? WHERE id = ?',plan,accountId);
+     if(input.trialEndsAt!==undefined)run('UPDATE accounts SET trial_ends_at = ? WHERE id = ?',input.trialEndsAt===null?null:Number(input.trialEndsAt),accountId);
+     if(input.billing!==undefined)run('UPDATE accounts SET billing = ? WHERE id = ?',input.billing===null?null:JSON.stringify(input.billing),accountId);
+     setAccountActor(String(target.id));
+     writeEvent(`plan.changed:${String(input.by||'service')}`,String(target.id));
+     return json(res,200,{account:view(accountRow(accountId)!)});
     }
     if(method==='POST'&&route==='/login'){
      const input=await body(req);

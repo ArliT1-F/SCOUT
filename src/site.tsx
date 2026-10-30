@@ -5,6 +5,7 @@ import {apiFetch,rememberToken} from './session';
 import {DEFAULT_WIDGETS} from '../server/overlay';
 import type {SceneId} from '../server/controls';
 import {PANEL_SECTIONS,SCENE_LIST} from './panel-catalog';
+import {PricingPage} from './site-hub';
 import {HudStage} from './showcase';
 import type {AccountView,BetaStatusView,InstallationView} from '../server/beta';
 import {TournamentsCard,PublicStats} from './platform-admin';
@@ -29,7 +30,7 @@ import type {PanelSessionView} from '../server/auth';
 //      shown with a banner that says what it is.
 //   3. The launcher download is behind the account: a pending applicant sees what they are waiting
 //      for, an approved one sees the button.
-export const SITE_ROUTES=['/welcome','/login','/apply','/download','/profile','/privacy'] as const;
+export const SITE_ROUTES=['/welcome','/login','/apply','/download','/profile','/privacy','/pricing'] as const;
 export type SiteRoute=typeof SITE_ROUTES[number];
 export const isSiteRoute=(path:string):path is SiteRoute=>(SITE_ROUTES as readonly string[]).includes(path);
 // Per-page document metadata (title, description, canonical, robots). The website is an SPA, so the
@@ -44,6 +45,7 @@ export const PAGE_META:Record<SiteRoute,{title:string;description:string;robots:
  '/download':{title:'Download SCOUT — SCOUT',description:'The Windows installer for approved closed-beta accounts.',robots:'noindex, follow'},
  '/profile':{title:'Your profile — SCOUT',description:'Your SCOUT account, beta status and linked installations.',robots:'noindex, follow'},
  '/privacy':{title:'Privacy — SCOUT',description:'What SCOUT collects, what never leaves your machine, and how to get your data deleted.',robots:'index, follow'},
+ '/pricing':{title:'Pricing — SCOUT',description:'SCOUT pricing for community tournaments, venues and production crews. Fourteen-day trial, no card up front, and a lapsed payment never stops a running broadcast.',robots:'index, follow'},
 };
 export function useDocumentMeta(meta:{title:string;description:string;robots:string}){
  useEffect(()=>{
@@ -129,7 +131,7 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
    <a href="/welcome#product">Product</a>
    <a href="/welcome#scenes">Scenes</a>
    <a href="/welcome#maps">Maps</a>
-   <a href="/welcome#pricing">Pricing</a>
+   <a href="/pricing">Pricing</a>
    <a href="/welcome#how">Under the hood</a>
    <a href="/welcome#faq">FAQ</a>
   </nav>
@@ -148,7 +150,7 @@ export function SiteFooter(){
  return <footer className="site-footer">
   <div className="site-footer-brand"><SiteBrand/><p>Broadcast-ready CS2 overlays, built on Game State Integration alone. Nothing is injected into the game and nothing is read out of its memory.</p></div>
   <div className="site-footer-cols">
-   <div><b>Product</b><a href="/welcome#product">What it does</a><a href="/welcome#scenes">Broadcast scenes</a><a href="/welcome#beta">Closed beta</a></div>
+   <div><b>Product</b><a href="/welcome#product">What it does</a><a href="/welcome#scenes">Broadcast scenes</a><a href="/pricing">Pricing</a><a href="/welcome#beta">Closed beta</a></div>
    <div><b>Operators</b><a href="/login">Sign in</a><a href="/download">Download</a><a href="/apply">Apply for access</a></div>
    <div><b>Account</b><a href="/profile">User profile</a><a href="/admin">Owner dashboard</a><a href="/privacy">Privacy</a></div>
   </div>
@@ -365,7 +367,7 @@ export function LandingPage(){
    </section>}
    <section className="site-section landing-pricing" id="pricing">
     <div className="site-section-head"><span className="site-section-eyebrow">SMALL CREW. SMALLER BARRIER TO ENTRY.</span><h2>Your next broadcast.<br/>On us, during the beta.</h2><p>We’re opening access a few organisers at a time. Help shape SCOUT around real events, real workflows, and the details that matter on match day.</p><div className="landing-pricing-note"><ShieldCheck size={20}/><span>The overlay runs on your machine.<br/><b>Your match data stays there, too.</b></span></div></div>
-    <article className="landing-price"><div className="landing-price-top"><span>SCOUT CLOSED BETA</span><span className="landing-price-badge">EARLY ACCESS</span></div><div className="landing-price-value">€0<span>/ during closed beta</span></div><p>A complete broadcast toolkit. A chance to shape what’s next.</p><ul>{['Live HUD + eight full-canvas scenes','Overlay Studio & team customisation','Nine included maps & calibrated radars','Multi-operator roles & local recording','Windows launcher with bundled runtime'].map(item=><li key={item}><Check size={16}/>{item}</li>)}</ul><a className="button primary" href="/apply">Apply for free access<ArrowUpRight size={16}/></a><small>Human-reviewed applications. Access by invitation.<br/>No paid plans are currently offered.</small></article>
+    <article className="landing-price"><div className="landing-price-top"><span>SCOUT CLOSED BETA</span><span className="landing-price-badge">EARLY ACCESS</span></div><div className="landing-price-value">€0<span>/ during closed beta</span></div><p>A complete broadcast toolkit. A chance to shape what’s next.</p><ul>{['Live HUD + eight full-canvas scenes','Overlay Studio & team customisation','Nine included maps & calibrated radars','Multi-operator roles & local recording','Windows launcher with bundled runtime'].map(item=><li key={item}><Check size={16}/>{item}</li>)}</ul><a className="button primary" href="/apply">Apply for free access<ArrowUpRight size={16}/></a><small>Human-reviewed applications. Access by invitation.<br/>After the beta: Organiser €19/month, Venue €49/month.<br/><a className="landing-price-link" href="/pricing">See what each plan includes<ArrowRight size={12}/></a></small></article>
    </section>
    <section className="site-section landing-feedback" id="community" aria-labelledby="feedback-heading">
     <span className="landing-feedback-icon"><Quote size={24}/></span><div><span className="site-section-eyebrow">THE NEXT CHAPTER IS YOURS</span><h2 id="feedback-heading">Built with organisers.<br/>Not just for them.</h2><p>SCOUT is in closed beta. We’re gathering real event feedback before sharing customer stories. Bring your next tournament, tell us what works, and help shape what comes next.</p></div><a className="button" href="/apply">Be part of the beta<ArrowUpRight size={15}/></a>
@@ -859,9 +861,45 @@ export function ProfilePage(){
   <div className="site-page-head"><span className="site-section-eyebrow">YOUR ACCOUNT</span><h1>User profile</h1><p>Your beta access and linked installations. Open SCOUT on the observer machine to host a match.</p></div>
   {loading?<p className="site-loading">Checking your account…</p>:offline?<OfflineBanner>{accountOfflineText(failure,'signin')}</OfflineBanner>:!account?<section className="site-card"><h2>Sign in to see your profile</h2><a className="button primary" href="/login">Sign in</a></section>:<>
    <section className="site-card"><h2>{account.displayName}</h2><p>{account.email}</p><p>{account.organisation}</p><span className={'site-status '+statusTone(account.status)}>{statusLabel(account.status)}</span><div className="site-cta"><a className="button primary" href="/download">Download SCOUT</a>{isOwner&&<a className="button" href="/admin">Owner dashboard</a>}<button className="button" onClick={()=>void logout()}>Sign out</button></div></section>
+   <PlanCard account={account}/>
    <section className="site-card site-devices"><h3>Linked launchers</h3>{error&&<Notice>{error}</Notice>}{account.devices?.length?<ul className="site-device-list">{account.devices.map(device=><li key={device.id}><div><b>{device.label}</b><small>{device.platform} · last seen {new Date(device.lastSeenAt).toLocaleString()}</small></div><button className="button" disabled={busy===device.id} onClick={()=>void revoke(device.id)}>Unlink</button></li>)}</ul>:<p>No linked installations. Start SCOUT and approve the code it displays at <a href="/login">Sign in / link launcher</a>.</p>}</section>
   </>}
  </main><SiteFooter/></div>;
+}
+// The plan, on the page where an account already is. Every number here came from the host's own
+// entitlements (server/plans.ts): the site never computes a limit of its own.
+function PlanCard({account}:{account:AccountView|null}){
+ const [state,setState]=useState<{entitlements:any;plans:any[];ready:boolean;billing:any}|null>(null);
+ const [busy,setBusy]=useState('');
+ const [error,setError]=useState('');
+ useEffect(()=>{
+  let live=true;
+  fetch('/api/billing/status').then(response=>response.ok?response.json():null).then(body=>{if(live&&body)setState(body)}).catch(()=>{});
+  return()=>{live=false};
+ },[account?.email]);
+ if(!state) return null;
+ const entitlements=state.entitlements;
+ const checkout=async(plan:string)=>{
+  setBusy(plan);setError('');
+  try{
+   const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan})});
+   const body=await response.json().catch(()=>({}));
+   if(!response.ok) throw new Error(body?.error||'Checkout is not available right now.');
+   location.href=body.url;
+  }catch(failure:any){setError(failure?.message||'Checkout is not available right now.')}
+  finally{setBusy('')}
+ };
+ return <section className="site-card site-plan">
+  <h3>Your plan</h3>
+  {error&&<Notice>{error}</Notice>}
+  <p className="site-plan-name"><b>{entitlements?.planName||'No plan'}</b>{entitlements?.status==='trial'&&<span className="site-status warn">Trial · {entitlements.trialDaysLeft} day{entitlements.trialDaysLeft===1?'':'s'} left</span>}{entitlements?.status==='delinquent'&&<span className="site-status warn">Payment failed</span>}</p>
+  <p>{entitlements?.message||'Every approved account can run a broadcast.'}</p>
+  <p className="site-plan-limits">{entitlements?.tournaments??0} tournament{entitlements?.tournaments===1?'':'s'} at a time · {entitlements?.devices??0} linked host{entitlements?.devices===1?'':'s'}</p>
+  <div className="site-cta">
+   {(state.plans||[]).filter((plan:any)=>!plan.current&&plan.priceCents>0).map((plan:any)=><button key={plan.id} className="button primary" disabled={Boolean(busy)||!state.ready} onClick={()=>void checkout(plan.id)}>{busy===plan.id?'Opening checkout…':`Upgrade to ${plan.name}`}</button>)}
+   <a className="button" href="/pricing">Compare plans</a>
+  </div>
+ </section>;
 }
 // ------------------------------------------------------------------ privacy
 // The one legal page the beta needs: what is collected, why, for how long, and how to get it
@@ -940,5 +978,6 @@ export function SiteRouter({route}:{route:SiteRoute}){
  if(route==='/download') return <DownloadPage/>;
  if(route==='/profile') return <ProfilePage/>;
  if(route==='/privacy') return <PrivacyPage/>;
+ if(route==='/pricing') return <PricingPage/>;
  return <LoginPage linkCode={linkCode} invite={invite} reset={reset} next={next}/>;
 }
