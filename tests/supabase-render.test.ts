@@ -4,9 +4,11 @@ import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {createAccountService} from '../server/account-service.js';
+import {DatabaseSync} from 'node:sqlite';
+import {createAccountService,LAST_SEEN_RESOLUTION_MS} from '../server/account-service.js';
+import {migrateAccountDatabase} from '../server/account-migrations.js';
 import {PlatformStore} from '../server/platform.js';
-import {supabaseConfiguration} from '../server/supabase-store.js';
+import {SupabaseAccountMirror,supabaseConfiguration} from '../server/supabase-store.js';
 import {platformHost} from './helpers/platform-host.js';
 
 const TEST_EMAIL_ENV = {
@@ -16,8 +18,16 @@ const TEST_EMAIL_ENV = {
  SCOUT_ACCOUNT_BASE_URL: 'https://accounts.example.test',
 };
 
-/** In-memory PostgREST server emulating Supabase `/rest/v1/<table>` endpoints. */
-async function startMockSupabaseServer(t: {after: (fn: () => Promise<void>) => void}) {
+/**
+ * In-memory PostgREST server emulating Supabase `/rest/v1/<table>` endpoints, including the parts
+ * that bite in production: a response holds at most `maxRows` rows (Supabase's default is 1,000),
+ * `limit`/`offset` page through the rest, `Prefer: count=exact` reports the total in Content-Range,
+ * `events` has no key column, and `audit_logs.id` is generated. `control.failWrites` makes every
+ * write answer 503, the way a Supabase outage looks to the mirror.
+ */
+async function startMockSupabaseServer(t: {after: (fn: () => Promise<void>) => void}, options: {maxRows?: number} = {}) {
+ const maxRows = options.maxRows ?? 1000;
+ const control = {failWrites: false, writes: [] as {method: string; table: string; rows: number}[]};
  const tables = new Map<string, Record<string, unknown>[]>([
   ['accounts', []],
   ['sessions', []],
@@ -37,7 +47,7 @@ async function startMockSupabaseServer(t: {after: (fn: () => Promise<void>) => v
   devices: ['id'],
   grants: ['code'],
   platform_settings: ['id'],
-  events: ['id'],
+  events: [],
   audit_logs: ['id'],
   account_roles: ['account_id', 'role'],
   password_recovery_tokens: ['id'],
@@ -63,14 +73,23 @@ async function startMockSupabaseServer(t: {after: (fn: () => Promise<void>) => v
   if (req.method === 'GET') {
    let result = [...rows];
    for (const [k, v] of url.searchParams.entries()) {
-    if (k === 'select' || k === 'order') continue;
+    if (k === 'select' || k === 'order' || k === 'limit' || k === 'offset') continue;
     if (v.startsWith('eq.')) {
      const expected = v.slice(3);
      result = result.filter(r => String(r[k]) === expected);
     }
    }
-   res.writeHead(200, {'Content-Type': 'application/json'});
-   res.end(JSON.stringify(result));
+   const offset = Number(url.searchParams.get('offset') || 0);
+   const limit = Math.min(Number(url.searchParams.get('limit') || Infinity), maxRows);
+   const page = result.slice(offset, offset + limit);
+   const total = String(req.headers.prefer || '').includes('count=exact') ? String(result.length) : '*';
+   res.writeHead(200, {'Content-Type': 'application/json', 'Content-Range': `${page.length ? `${offset}-${offset + page.length - 1}` : '*'}/${total}`});
+   res.end(JSON.stringify(page));
+   return;
+  }
+  if (req.method !== 'GET' && control.failWrites) {
+   res.writeHead(503, {'Content-Type': 'application/json'});
+   res.end(JSON.stringify({message: 'Service Unavailable'}));
    return;
   }
   if (req.method === 'POST') {
@@ -79,7 +98,13 @@ async function startMockSupabaseServer(t: {after: (fn: () => Promise<void>) => v
    const parsed = raw ? JSON.parse(raw) : [];
    const incoming: Record<string, unknown>[] = Array.isArray(parsed) ? parsed : [parsed];
    const pk = primaryKeys[table] || ['id'];
+   control.writes.push({method: 'POST', table, rows: incoming.length});
    for (const item of incoming) {
+    if (table === 'audit_logs' && item.id == null) item.id = rows.reduce((max, row) => Math.max(max, Number(row.id) || 0), 0) + 1;
+    if (!pk.length) {
+     rows.push({...item});
+     continue;
+    }
     const idx = rows.findIndex(existing => pk.every(k => String(existing[k]) === String(item[k])));
     if (idx >= 0) rows[idx] = {...rows[idx], ...item};
     else rows.push({...item});
@@ -118,6 +143,7 @@ async function startMockSupabaseServer(t: {after: (fn: () => Promise<void>) => v
   url: `http://127.0.0.1:${port}`,
   serviceRoleKey: 'test-supabase-service-role-key',
   tables,
+  control,
  };
 }
 
@@ -351,4 +377,113 @@ test('Website surface with embedded account service + Supabase serves /api/beta/
  });
  assert.equal(authorizedSettings.status, 200);
  assert.equal(authorizedSettings.body.settings.applicationsOpen, true);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Durability of the Supabase mirror: an in-memory database on Render is only as safe as its copy.
+
+const applicant = (email: string) => ({name: 'Late Applicant', email, organisation: 'SCOUT Studio', country: 'AL', useCase: 'Weekly cups', events: '2 per month'});
+const countRows = (db: DatabaseSync, table: string) => Number((db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as {n: number}).n);
+async function waitFor(check: () => boolean, ms: number, what: string) {
+ const deadline = Date.now() + ms;
+ while (!check()) {
+  if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+  await new Promise(resolve => setTimeout(resolve, 50));
+ }
+}
+function serviceOptions(supa: {url: string; serviceRoleKey: string}, extra: Record<string, unknown> = {}) {
+ return {
+  file: ':memory:', port: 0, host: '127.0.0.1', apiKey: 'render-service-key', ownerEmail: 'owner@example.com',
+  emailBaseUrl: 'https://scout.example.test', emailEncryptionKey: Buffer.alloc(32, 7), emailTransport: async () => {},
+  supabase: {url: supa.url, serviceRoleKey: supa.serviceRoleKey}, ...extra,
+ };
+}
+const post = (url: string, body: unknown, headers: Record<string, string> = {}) =>
+ fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', ...headers}, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000)});
+
+test('startup reads every row, not just the first page Supabase answers with', async t => {
+ const supa = await startMockSupabaseServer(t);
+ const now = Date.now();
+ // Three events share each timestamp: ties are where a careless page order loses rows.
+ for (let i = 0; i < 2345; i++) supa.tables.get('events')!.push({at: now + Math.floor(i / 3), kind: 'apply', account_id: null, detail: ''});
+ for (let i = 0; i < 1203; i++) supa.tables.get('sessions')!.push({id: `s${String(i).padStart(5, '0')}`, account_id: 'a1', created_at: now, last_seen_at: now, address: '', user_agent: ''});
+ for (let i = 1; i <= 1500; i++) supa.tables.get('audit_logs')!.push({id: i, occurred_at: i, request_id: null, actor_type: 'service', actor_id: null, action: 'test', target_type: 'account', target_id: null, metadata: {}});
+ const db = new DatabaseSync(':memory:');
+ migrateAccountDatabase(db);
+ await new SupabaseAccountMirror({url: supa.url, serviceRoleKey: supa.serviceRoleKey}).hydrate(db);
+ assert.equal(countRows(db, 'events'), 2345);
+ assert.equal(countRows(db, 'sessions'), 1203);
+ assert.equal(countRows(db, 'audit_logs'), 1500);
+ assert.equal(supa.tables.get('events')!.length, 2345, 'hydrating pushes nothing back');
+ db.close();
+});
+
+test('a write Supabase refused is retried on its own and survives a restart', async t => {
+ const supa = await startMockSupabaseServer(t);
+ const service = await createAccountService(serviceOptions(supa));
+ t.after(async () => {await service.close().catch(() => {})});
+ supa.control.failWrites = true;
+ const refused = await post(service.url + '/apply', applicant('late@example.com'));
+ assert.equal(refused.status, 500, 'the applicant is told the save failed');
+ supa.control.failWrites = false;
+ // No further request arrives: only the service's own retry can carry the row to Supabase.
+ await waitFor(() => supa.tables.get('accounts')!.some(row => row.normalized_email === 'late@example.com'), 5000, 'the background retry');
+ await service.close();
+ const restarted = await createAccountService(serviceOptions(supa));
+ t.after(async () => {await restarted.close().catch(() => {})});
+ assert.ok(restarted.db.list().some(account => account.email === 'late@example.com'), 'the application outlived the instance');
+});
+
+test('signed-in page views do not write to the database each time', async t => {
+ const supa = await startMockSupabaseServer(t);
+ let clock = Date.now();
+ const service = await createAccountService(serviceOptions(supa, {now: () => clock}));
+ t.after(async () => {await service.close().catch(() => {})});
+ const applied = await (await post(service.url + '/apply', applicant('owner@example.com'))).json();
+ const approved = await (await post(service.url + `/applications/${applied.account.id}`, {decision: 'approve', decidedBy: 'Owner'}, {Authorization: 'Bearer render-service-key'})).json();
+ const activated = await post(service.url + '/activate', {invite: approved.invite, password: 'RenderSupabasePassword!123'});
+ const cookie = (activated.headers.getSetCookie?.() ?? []).map(c => c.split(';')[0]).join('; ');
+ const status = () => fetch(service.url + '/status', {headers: {Cookie: cookie}, signal: AbortSignal.timeout(10_000)});
+ supa.control.writes.length = 0;
+ for (let i = 0; i < 5; i++) {
+  clock += 1000;
+  const res = await status();
+  assert.equal((await res.json()).account?.email, 'owner@example.com');
+ }
+ assert.deepEqual(supa.control.writes.filter(write => write.table === 'sessions'), [], 'five page views inside the window write nothing');
+ clock += LAST_SEEN_RESOLUTION_MS + 1;
+ await status();
+ assert.equal(supa.control.writes.filter(write => write.table === 'sessions').length, 1, 'the session is still kept alive');
+});
+
+test('a persistent local database keeps mirroring the events and audit rows it writes after startup', async t => {
+ const supa = await startMockSupabaseServer(t);
+ for (let i = 0; i < 5; i++) supa.tables.get('events')!.push({at: i, kind: 'remote-history', account_id: null, detail: ''});
+ for (let i = 1; i <= 300; i++) supa.tables.get('audit_logs')!.push({id: i, occurred_at: i, request_id: null, actor_type: 'service', actor_id: null, action: 'remote-history', target_type: 'account', target_id: null, metadata: {}});
+ const db = new DatabaseSync(':memory:');
+ migrateAccountDatabase(db);
+ const addEvent = (kind: string) => db.prepare('INSERT INTO events (at, kind, account_id, detail) VALUES (?, ?, NULL, ?)').run(Date.now(), kind, '');
+ const addAudit = (action: string) => db.prepare("INSERT INTO audit_logs (occurred_at, actor_type, action, target_type) VALUES (?, 'service', ?, 'account')").run(Date.now(), action);
+ addEvent('local-history');addEvent('local-history');addAudit('local-history');addAudit('local-history');
+ const mirror = new SupabaseAccountMirror({url: supa.url, serviceRoleKey: supa.serviceRoleKey});
+ await mirror.hydrate(db);
+ addEvent('after-startup');addAudit('after-startup');
+ await mirror.flush(db);
+ assert.equal(supa.tables.get('events')!.filter(row => row.kind === 'after-startup').length, 1, 'a new local event reaches Supabase');
+ assert.equal(supa.tables.get('audit_logs')!.filter(row => row.action === 'after-startup').length, 1, 'a new local audit row reaches Supabase');
+ db.close();
+});
+
+test('stopping the website pushes changes Supabase has not acknowledged yet', async t => {
+ const supa = await startMockSupabaseServer(t);
+ const site = await platformHost(t, {SCOUT_SURFACE: 'site', SCOUT_EMBED_ACCOUNT_SERVICE: '1', SCOUT_BETA_API_KEY: 'shared-render-key', SUPABASE_URL: supa.url, SUPABASE_SERVICE_ROLE_KEY: supa.serviceRoleKey});
+ supa.control.failWrites = true;
+ const refused = await site.request('/api/beta/apply', applicant('spin-down@example.com'));
+ assert.notEqual(refused.status, 200);
+ supa.control.failWrites = false;
+ // Render's spin-down, straight away: the shutdown path has to do the saving.
+ const exited = new Promise<number | null>(resolve => site.child.once('exit', code => resolve(code)));
+ site.child.kill('SIGTERM');
+ assert.equal(await exited, 0, 'a clean exit on SIGTERM');
+ assert.ok(supa.tables.get('accounts')!.some(row => row.normalized_email === 'spin-down@example.com'), 'the application was saved before the process ended');
 });

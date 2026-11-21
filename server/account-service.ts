@@ -77,6 +77,7 @@ export interface AccountService {
 }
 interface Row extends Record<string,unknown>{}
 const nowMs=Date.now;
+export const LAST_SEEN_RESOLUTION_MS=5*60*1000;
 type RequestContext={requestId:string;actorType:'anonymous'|'account'|'service';actorId?:string};
 const requestContext=new AsyncLocalStorage<RequestContext>();
 export async function createAccountService(options:AccountServiceOptions={}):Promise<AccountService>{
@@ -132,10 +133,32 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   if(Number(result.changes)>0) dbDirty=true;
   return result;
  };
+ // A failed flush leaves the change committed in this process but not yet in Supabase. With an
+ // in-memory database that copy is the only one, so the rows stay marked unsynced and a timer keeps
+ // retrying (1 s doubling to 60 s) — the change must not depend on another request arriving before
+ // the instance spins down.
+ let syncRetry:ReturnType<typeof setTimeout>|null=null;
+ let syncRetryDelay=0;
+ let closing=false;
+ const scheduleSyncRetry=()=>{
+  if(syncRetry||closing) return;
+  syncRetryDelay=Math.min(syncRetryDelay?syncRetryDelay*2:1000,60_000);
+  syncRetry=setTimeout(()=>{syncRetry=null;void flushSupabase().catch(()=>{})},syncRetryDelay);
+  syncRetry.unref?.();
+ };
  const flushSupabase=async()=>{
   if(!supabaseMirror||!dbDirty) return;
   dbDirty=false;
-  await supabaseMirror.flush(db);
+  try{await supabaseMirror.flush(db)}
+  catch(error){
+   dbDirty=true;
+   const waiting=syncRetry!==null;
+   scheduleSyncRetry();
+   // ensureOk's message names the operation and HTTP status only, never a key or a row.
+   if(!waiting&&!closing) log(`Supabase sync failed (${error instanceof Error?error.message:'unknown error'}); retrying in ${syncRetryDelay/1000} s`);
+   throw error;
+  }
+  if(syncRetryDelay){syncRetryDelay=0;log('Supabase sync recovered — pending changes are saved')}
  };
  const get=(sql:string,...values:unknown[])=>(db.prepare(sql).get(...values as never[])??null) as Row|null;
  const all=(sql:string,...values:unknown[])=>db.prepare(sql).all(...values as never[]) as Row[];
@@ -252,6 +275,11 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
    return {account:view(accountRow(id)!),invite};
   }catch(error){try{db.exec('ROLLBACK')}catch{};throw error}
  }
+ // "Last seen" only has to be roughly right (sessions last 30 days; the device list shows a date).
+ // Writing it on every request made each signed-in page view and every 15-second launcher sync a
+ // database write — and, with Supabase, a round trip before the response — so it moves at most
+ // once per LAST_SEEN_RESOLUTION_MS.
+ const stale=(lastSeen:unknown)=>!(Number(lastSeen)>=now()-LAST_SEEN_RESOLUTION_MS);
  // Sessions are rows with a hashed id: the cookie value itself is never stored, so a database copy
  // cannot be replayed as a sign-in.
  function sessionAccount(cookieId:string|undefined){
@@ -262,7 +290,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
    run('DELETE FROM sessions WHERE id = ?',row.id);
    return null;
   }
-  run('UPDATE sessions SET last_seen_at = ? WHERE id = ?',now(),row.id);
+  if(stale(row.last_seen_at)) run('UPDATE sessions SET last_seen_at = ? WHERE id = ?',now(),row.id);
   const account=accountRow(String(row.account_id));
   return account?{session:row,account}:null;
  }
@@ -689,7 +717,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      const refused:LicenceCheck={status:'revoked',email:account?String(account.email):undefined,displayName:account?String(account.display_name):undefined};
      if(device.revoked_at!==null) return json(res,200,refused);
      if(!token||hashToken(token)!==String(device.token_digest)) return json(res,200,refused);
-     run('UPDATE devices SET last_seen_at = ? WHERE id = ?',now(),deviceId);
+     if(stale(device.last_seen_at)) run('UPDATE devices SET last_seen_at = ? WHERE id = ?',now(),deviceId);
      if(!account||String(account.status)!=='approved') return json(res,200,refused);
      return json(res,200,{status:'active',email:String(account.email),displayName:String(account.display_name),...(input.resolveAccount?{accountId:String(account.id)}:{})} as LicenceCheck);
     }
@@ -721,7 +749,10 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   // file before the runner tears it down.
   async close(){
    clearInterval(outboxTimer);
-   await flushSupabase().catch(()=>{});
+   closing=true;
+   if(syncRetry){clearTimeout(syncRetry);syncRetry=null}
+   // The last chance for an in-memory database: say so if it is missed rather than exit quietly.
+   await flushSupabase().catch(error=>log(`Supabase sync failed while shutting down — changes since the last successful sync are not saved (${error instanceof Error?error.message:'unknown error'})`));
    await new Promise<void>(resolve=>{try{server.close(()=>resolve())}catch{resolve()}});
    try{db.close()}catch{}
   },
@@ -780,4 +811,7 @@ if(isEntry){
  console.log(`[accounts] account service listening on ${service.url} (SQLite: ${service.db.file}, ${service.db.list().length} account(s))`);
  console.log(`[accounts] point the SCOUT host here: SCOUT_BETA_API_URL=${service.url.replace('127.0.0.1','<this machine>')} and set the same SCOUT_BETA_API_KEY on both.`);
  if(!process.env.SCOUT_BETA_API_KEY) console.log('[accounts] warning: SCOUT_BETA_API_KEY is not set, so the owner-only routes (/applications) are closed.');
+ // A host platform stops the service with SIGTERM (Render on every deploy and spin-down). Closing
+ // pushes anything Supabase has not acknowledged yet before the process goes.
+ for(const signal of ['SIGTERM','SIGINT'] as const) process.once(signal,()=>{console.log(`[accounts] ${signal} — saving and shutting down`);const forced=setTimeout(()=>process.exit(0),8000);forced.unref();void service.close().finally(()=>process.exit(0))});
 }
