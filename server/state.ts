@@ -9,14 +9,20 @@ export interface PlayerState { steamid:string; name:string; observer_slot?:numbe
 export interface GrenadeState { type?:string; owner?:string; lifetime?:string|number; effecttime?:string|number; position?:string; velocity?:string }
 export interface MatchState { provider?:{steamid?:string;timestamp?:number};map?:{name:string;phase:string;round:number;team_ct:{name:string;score:number};team_t:{name:string;score:number}};round?:{phase:string;win_team?:'CT'|'T';bomb?:string};player?:PlayerState;allplayers?:Record<string,PlayerState>;phase_countdowns?:{phase:string;phase_ends_in:string|number};bomb?:{state:string;countdown?:string;position?:string};grenades?:Record<string,GrenadeState> }
 
-export function mergeDelta(base: Record<string,any>, delta: Record<string,any>): Record<string,any> {
+// Top-level blocks CS2 always sends whole. It *leaves out* a key that no longer applies instead of
+// clearing it: `round.win_team` and `round.bomb` disappear when the next round starts, and
+// `bomb.countdown` once the bomb is no longer ticking. Deep-merging these carried last round's winner
+// and bomb outcome into the next round, so a block that arrives replaces the old one. A block that is
+// absent from a packet is still kept, as before.
+const WHOLE_BLOCKS=new Set(['round','bomb','phase_countdowns']);
+export function mergeDelta(base: Record<string,any>, delta: Record<string,any>, top=true): Record<string,any> {
  const out = {...base};
  for (const [key,value] of Object.entries(delta)) {
   if(BLOCKED_KEYS.has(key)) continue;
   if(value === null) { delete out[key]; continue; }
   // Dynamic inventories are authoritative when supplied; omission retains them.
-  if(['weapons','allplayers','grenades'].includes(key)) out[key]=sanitize(value);
-  else if(value && typeof value==='object' && !Array.isArray(value)) out[key]=mergeDelta(out[key] && typeof out[key]==='object'?out[key]:{},value);
+  if(['weapons','allplayers','grenades'].includes(key)||(top&&WHOLE_BLOCKS.has(key))) out[key]=sanitize(value);
+  else if(value && typeof value==='object' && !Array.isArray(value)) out[key]=mergeDelta(out[key] && typeof out[key]==='object'?out[key]:{},value,false);
   else out[key]=value;
  }
  return out;
@@ -67,13 +73,16 @@ export class FeedMonitor {
  }
  snapshot(now=Date.now()):GsiDiagnostics {return {accepted:this.accepted,rejectedAuth:this.rejectedAuth,rejectedShape:this.rejectedShape,rejectedLate:this.rejectedLate,subtreeIssues:this.subtreeIssues,lastPacketAt:this.lastPacketAt,lastPacketAge:this.lastPacketAt?now-this.lastPacketAt:0,lastRejectedAt:this.lastRejectedAt,lastRejectedReason:this.lastRejectedReason,blocks:this.blocks,allplayers:this.allplayers,allplayersSeen:this.allplayersSeen,observerGap:this.accepted>=100&&!this.allplayersSeen,provider:this.provider,tokenSource:this.tokenSource,port:this.port,uri:this.uri}}
 }
+// The rejection reason recorded when CS2 on another machine uses the built-in token (server/index.ts).
+export const DEFAULT_TOKEN_REMOTE='built-in token from another machine';
 // Exactly one next action for the operator, keyed to the failure modes seen in the field.
 export function feedNextAction(gsi?:GsiDiagnostics|null):string {
  if(!gsi) return 'Host not reporting diagnostics yet — reload the dashboard or restart the host.';
+ if(gsi.accepted===0&&gsi.rejectedAuth>0&&gsi.lastRejectedReason===DEFAULT_TOKEN_REMOTE) return `CS2 on another machine is sending the built-in CHANGE_ME token, which this host only accepts from itself (${gsi.rejectedAuth} refused so far). Set GSI_TOKEN on the host to a private token, put the same token in that PC's cfg, and restart both.`;
  if(gsi.accepted===0&&gsi.rejectedAuth>0) return `CS2 reaches the host but every packet is rejected on its token (${gsi.rejectedAuth} so far). Put the cfg auth token into GSI_TOKEN and restart the host — the current token comes from ${gsi.tokenSource==='env'?'the environment':'the built-in default'}.`;
  if(gsi.accepted===0&&gsi.rejectedShape>0) return `Packets arrive but fail the shape check (${gsi.rejectedShape} so far): ${gsi.lastRejectedReason||'missing provider'}. Confirm the cfg was not saved as .cfg.txt and that CS2 was fully restarted.`;
  if(gsi.accepted===0) return `Nothing has reached ${gsi.uri}. Check the cfg sits in game/csgo/cfg/ (not .cfg.txt), that CS2 was fully restarted, and that the cfg uri port matches the host port ${gsi.port}.`;
- if(gsi.rejectedLate>0&&gsi.rejectedLate>=gsi.accepted-gsi.rejectedLate) return `${gsi.rejectedLate} packets were ignored because the host already holds a newer provider timestamp. Restart the host before replaying an older recording, and check that only one observer is pushing.`;
+ if(gsi.rejectedLate>0&&gsi.rejectedLate>=gsi.accepted-gsi.rejectedLate) return `${gsi.rejectedLate} packets were ignored because the host already holds a newer provider timestamp. Check that only one observer is pushing; to replay an older recording, stop the live feed and wait 5 seconds first.`;
  if(gsi.lastPacketAge>5000) return `Last packet was ${Math.round(gsi.lastPacketAge/1000)}s ago. The match may have ended, or CS2 lost the endpoint — check the host is still running.`;
  if(!gsi.allplayersSeen&&gsi.accepted>=100) return `Receiving packets (${gsi.accepted}) but no allplayers block: CS2 is playing, not spectating. Join as observer/GOTV so rosters and the killfeed have data.`;
  return `Feed healthy: ${gsi.accepted} packets accepted, blocks ${Object.keys(gsi.blocks).join(', ')||'(none)'}. Switch the preview to GSI feed to watch live data.`;
@@ -85,8 +94,14 @@ export class MatchStore {
  ingest(payload:MatchState, now=Date.now()):{issues:Issue[];reset:boolean}|false {
   const old=this.state, {payload:clean,issues}=validateGsi(payload);
   const next=clean as MatchState;
-  if(next.provider?.timestamp && old.provider?.timestamp && next.provider.timestamp<old.provider.timestamp) return false;
-  const reset = now-this.lastSeen>5000 || !!(next.map?.name && old.map?.name!==next.map.name) || !!(next.provider?.steamid && old.provider?.steamid!==next.provider.steamid);
+  // "Older than the state" only means stale inside one continuous feed. After more than 5 s of
+  // silence the feed starts over (the state is reset below anyway), so a recording replayed after a
+  // live session — older timestamps by definition — is a new feed, not a late packet to drop until the
+  // host restarts. While packets keep arriving, an older one is still dropped: that is how a second
+  // observer pushing alongside the first is kept from taking over.
+  const idle=now-this.lastSeen>5000;
+  if(!idle && next.provider?.timestamp && old.provider?.timestamp && next.provider.timestamp<old.provider.timestamp) return false;
+  const reset = idle || !!(next.map?.name && old.map?.name!==next.map.name) || !!(next.provider?.steamid && old.provider?.steamid!==next.provider.steamid);
   this.state=mergeDelta(reset?{}:old,next); this.lastSeen=now; this.revision++; return {issues,reset};
  }
 }

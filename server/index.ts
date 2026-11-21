@@ -6,7 +6,7 @@ import {WebSocketServer,WebSocket} from 'ws';
 import {readFile,writeFile,rename,mkdir,readdir,unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {z} from 'zod';
-import {MatchStore,FeedMonitor,type TokenSource} from './state.js';
+import {MatchStore,FeedMonitor,DEFAULT_TOKEN_REMOTE,type TokenSource} from './state.js';
 import {EventTracker} from './events.js';
 import {SideTracker,configSides} from './sides.js';
 import {seriesState} from './series.js';
@@ -17,13 +17,13 @@ import {OperatorDirectory} from './operators.js';
 import {ControlLease,type LeasePrincipal} from './lease.js';
 import {AuditTrail} from './audit.js';
 import {GsiRecorder,MatchArchiveStore} from './recordings.js';
-import {createEventPack,eventPackSchema,restoreEventPack} from './packs.js';
+import {createEventPack,eventPackSchema,restoreEventPack,detectImageMime} from './packs.js';
 import {radarsSchema} from './radars.js';
 import {UPLOAD_DIRS,referencedUploads,isPrunable} from './uploads.js';
 import {controlsSchema,defaultControls,SCENE_IDS,type Controls} from './controls.js';
 import {ObsBridge} from './obs.js';
 import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './obs-config.js';
-import {PanelAuth,PANEL_COOKIE,cookieValue,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
+import {PanelAuth,PANEL_COOKIE,cookieValue,isLoopbackAddress,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
 import {appPath,resolveDistDir,readInstalledEnv} from './runtime.js';
 import {hostname} from 'node:os';
 import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_REVOKE_REASON,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
@@ -34,12 +34,17 @@ import {ReleaseRegistry,RequestLog,healthSnapshot} from './operations.js';
 import {loadEnvFile} from './env.js';
 import {createAccountService} from './account-service.js';
 import {supabaseConfiguration} from './supabase-store.js';
+import {forwardAsyncErrors} from './async-routes.js';
 // Optional `.env` next to the working directory (copy .env.example). Real environment variables win;
 // a missing file is silent. This runs before any setting below is read, so `npm start` needs no shell
 // wrapper on Windows and systemd units can keep using EnvironmentFile=.
 loadEnvFile();
 const surface=surfaceFromEnv();
-const app=express();
+// A broadcast host must outlive one failed request: async route rejections go to the error handler
+// (server/async-routes.ts), and a stray rejection elsewhere (a fire-and-forget OBS call, a timer) is
+// logged instead of exiting the process, which is Node's default.
+const app=forwardAsyncErrors(express());
+process.on('unhandledRejection',reason=>console.error('[host] unhandled promise rejection — the host keeps running:',reason instanceof Error?reason.stack||reason.message:String(reason)));
 // Route matching is exact, including path case; configure before the first middleware initializes Express's router.
 app.set('case sensitive routing',true);
 // Give every HTTP response a server-generated correlation ID. Preserve all established response
@@ -145,6 +150,9 @@ const licence=new LicenceMonitor({
 const releases=await new ReleaseRegistry('recordings/ops/releases.json','public/download').load();
 const requests=new RequestLog();
 const startedAt=Date.now();
+// What /healthz and the operations tab report: the manifest next to the program. The installer writes
+// the release version into it; a checkout reports the repository's own.
+const hostVersion=await readFile(appPath('package.json'),'utf8').then(text=>String(JSON.parse(text).version||'unknown')).catch(()=>'unknown');
 const betaContext=(req:express.Request):BetaContext=>({address:req.socket.remoteAddress||'unknown',userAgent:req.get('user-agent')||'',origin:betaOrigin(req),secure:requestIsSecure(req.headers)});
 // The origin an invite link or a launcher code points at: the address the operator actually used,
 // so the link works on the observer machine and on the phone that approves a launcher.
@@ -379,6 +387,11 @@ app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
  const buffer=Buffer.from(match[2],'base64');
  if(buffer.length<8||buffer.length>5*1024*1024){res.status(400).json({error:'Image must be between 8 bytes and 5 MB'});return}
  const mime=match[1].toLowerCase(), ext=spec.exts[mime];
+ // The label in the data URL is the uploader's claim; the bytes decide. An SVG is accepted only when
+ // it cannot run script or load anything (server/packs.ts), the same rule event packs follow.
+ if(detectImageMime(buffer)!==(mime==='image/jpg'?'image/jpeg':mime)){
+  res.status(400).json({error:mime==='image/svg+xml'?'That SVG contains scripts, event handlers or external links. Export it as a plain SVG, or upload a PNG.':'The file is not the image type it claims to be — upload a PNG, JPEG, GIF, WEBP or SVG'});return;
+ }
  const slug=(name.replace(/\.[a-z0-9]+$/i,'').replace(/[^a-z0-9-_]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,48)||'image').toLowerCase();
  const file=`${Date.now()}-${slug}.${ext}`, dir=path.join(UPLOAD_ROOT,spec.dir);
  await mkdir(dir,{recursive:true});
@@ -386,6 +399,12 @@ app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
  audit.record(accessPrincipal(res),'asset.upload',`uploads/${spec.dir}/${file} · ${buffer.length} bytes`);
  res.json({path:`uploads/${spec.dir}/${file}`});
 });
+// Operator artwork is served from this origin, so a file opened directly (a link to /uploads/x.svg)
+// becomes a document of this origin, able to act with the viewer's panel or account session. The
+// sandboxing CSP gives such a document no script and an opaque origin, and nosniff stops a browser
+// second-guessing the type. Images drawn with <img> or CSS never run script, so they are unaffected.
+const ASSET_HEADERS={'Content-Security-Policy':"default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",'X-Content-Type-Options':'nosniff'};
+app.use(['/uploads','/radars','/thumbs'],(_req,res,next)=>{res.set(ASSET_HEADERS);next()});
 // Uploaded assets must be reachable in production too, where the Vite public/ copy in dist/ is a
 // build-time snapshot and would miss anything the admin uploads later.
 app.use('/uploads',express.static(UPLOAD_ROOT,{immutable:true,maxAge:'7d'}));
@@ -415,7 +434,7 @@ app.get('/api/beta/license',async(req,res)=>{
 app.get(['/healthz','/api/healthz'],(_req,res)=>{
  const gsi=feed.snapshot();
  const age=gsi.lastPacketAt?Date.now()-gsi.lastPacketAt:null;
- res.json({ok:true,uptimeMs:Date.now()-startedAt,version:'0.1.0',gsi:Boolean(gsi.accepted&&age!==null&&age<5000),outputs:wss.clients.size});
+ res.json({ok:true,uptimeMs:Date.now()-startedAt,version:hostVersion,gsi:Boolean(gsi.accepted&&age!==null&&age<5000),outputs:wss.clients.size});
 });
 // Event packs include locally uploaded, validated artwork; only this route gets a larger parser.
 app.use('/api/pack/import',express.json({limit:'70mb'}));
@@ -689,7 +708,7 @@ app.get('/api/ops/health',(req,res)=>{
   const gsi=feed.snapshot();
   const list=releases.list();
   const snapshot=healthSnapshot({
-   startedAt,version:'0.1.0',pid:process.pid,
+   startedAt,version:hostVersion,pid:process.pid,
    beta:{mode:beta.mode,applications:{pending:applications.filter(entry=>entry.status==='pending').length,approved:applications.filter(entry=>entry.status==='approved').length,rejected:applications.filter(entry=>entry.status==='rejected').length,revoked:applications.filter(entry=>entry.status==='revoked').length},devices:applications.reduce((sum,entry)=>sum+entry.devices.length,0)},
    licence:{state:licenceView.state,enforced:licenceView.enforced,email:licenceView.email},
    releases:{published:list.length,latest:list[0]?.version??null,downloads:list.reduce((sum,entry)=>sum+entry.downloads,0)},
@@ -964,6 +983,15 @@ app.post('/gsi',(req,res)=>{
   if(log) console.warn(`[gsi] rejected a packet with an invalid token (${feed.rejectedAuth} rejected${feed.accepted?' so far, '+feed.accepted+' accepted':''}). The cfg auth token and GSI_TOKEN must match; this host is using the ${tokenSource} token.`);
   res.status(401).json({error:'Invalid GSI token'});return
  }
+ // The built-in token is printed in this repository and in every default cfg, so it proves nothing.
+ // The host listens on every interface, so without this anyone on the venue network could push a
+ // made-up score to air. With the built-in token only CS2 on this machine may feed the overlay; the
+ // installer and GSI_TOKEN set a private token, which is accepted from anywhere as before.
+ if(tokenSource==='default'&&!isLoopbackAddress(req.socket.remoteAddress)){
+  const {log}=feed.reject('auth',DEFAULT_TOKEN_REMOTE);
+  if(log) console.warn(`[gsi] refused a packet from ${req.socket.remoteAddress||'another machine'} carrying the built-in CHANGE_ME token. Only CS2 on this machine may use it — to feed the host from another PC, set GSI_TOKEN to a private token here and put the same token in that PC's cfg.`);
+  res.status(403).json({error:'The built-in GSI token is only accepted from this machine. Set GSI_TOKEN on the host and the same token in the cfg.'});return
+ }
  if(!req.body || typeof req.body!=='object' || Array.isArray(req.body) || !req.body.provider || typeof req.body.provider!=='object'){
   const {log}=feed.reject('shape','missing provider block');
   if(log) console.warn(`[gsi] rejected a packet without a provider block (${feed.rejectedShape} shape-rejected). Confirm the cfg is not saved as .cfg.txt and that CS2 was fully restarted.`);
@@ -992,7 +1020,7 @@ app.post('/gsi',(req,res)=>{
   for(const kill of derived.kills){archives.addKill(kill);console.log(`[events] round ${kill.round+1}: ${kill.killerName||'unknown'} killed ${kill.victimName}${kill.headshot?' (headshot)':''}`)}
   if(derived.ended){archives.addRound(derived.ended);console.log(`[events] round ${derived.ended.round+1} won by ${derived.ended.winner||'unknown'} (${derived.ended.reason}) — ${derived.ended.ctScore}:${derived.ended.tScore}`)}
   const issues=feed.issues(ingested.issues); if(issues.log) console.warn(`[gsi] repaired ${issues.count} invalid field${issues.count===1?'':'s'} (${feed.subtreeIssues} total) — last: ${issues.last.path} ${issues.last.reason}`)}
- else if(feed.late().log) console.warn(`[gsi] ignoring a packet older than the current state (${feed.rejectedLate} ignored). Expected while replaying a recording against a warm host, or when a second observer pushes with an older clock.`);
+ else if(feed.late().log) console.warn(`[gsi] ignoring a packet older than the current state (${feed.rejectedLate} ignored). Expected when a recording is replayed while a live feed is still arriving, or when a second observer pushes with an older clock.`);
  res.sendStatus(200); broadcast();
 });
 app.get('/api/status',(req,res)=>res.json(snapshot(panel.view(panelRequest(req)))));
@@ -1188,16 +1216,35 @@ if(process.env.NODE_ENV==='production'){
     });
   });
 }else{const {createServer}=await import('vite');const vite=await createServer({server:{middlewareMode:true,allowedHosts:true},appType:'spa'});app.use(vite.middlewares)}
-app.use((err:any,_req:any,res:any,_next:any)=>{
+app.use((err:any,req:any,res:any,next:any)=>{
   // Log the real cause — the previous generic message hid missing-dist and JSON errors.
-  console.error(`[host] request error: ${err?.message||err} status=${err?.status||500} stack=${err?.stack||''}`);
-  res.status(err.status||500).json({error:err.status===400?'Invalid JSON':'Request failed'});
+  console.error(`[host] request error: ${req.method} ${req.path} ${err?.message||err} status=${err?.status||500} stack=${err?.stack||''}`);
+  // A handler that failed after it began answering cannot be given a second response; Express's own
+  // final handler closes that connection.
+  if(res.headersSent){next(err);return}
+  const status=Number(err?.status)>=400&&Number(err?.status)<600?Number(err.status):500;
+  res.status(status).json({error:status===400?'Invalid JSON':status===413?'Request body is too large':'Request failed'});
 });
 // A packaged install starts the host from a launcher (installer/README.md). Recording the process id
 // lets scout-stop.cmd - and the uninstaller - stop this host instead of guessing among node
 // processes; the value is only ever used after checking it is really a node.exe. A checkout never
 // sets the variable, so nothing is written next to the sources.
 if(process.env.SCOUT_PID_FILE) await writeFile(process.env.SCOUT_PID_FILE,String(process.pid)).catch(()=>{});
+// Render stops the website with SIGTERM on every deploy and spin-down; an operator stops the host with
+// Ctrl+C. Queued match-archive writes and the embedded account service's unsynced Supabase changes are
+// saved first, within a bounded time so a stuck write cannot keep a stopped host alive. A second
+// signal exits at once.
+let stopping=false;
+for(const signal of ['SIGTERM','SIGINT'] as const) process.on(signal,()=>{
+ if(stopping) process.exit(1);
+ stopping=true;
+ console.log(`[host] ${signal} — saving and shutting down`);
+ const forced=setTimeout(()=>process.exit(0),8000);forced.unref();
+ void (async()=>{
+  await archives.flush().catch(()=>{});
+  await embeddedAccountService?.close().catch(()=>{});
+ })().finally(()=>process.exit(0));
+});
 platformSync?.start();
 // Settings also refresh without a browser open. Keep the last persisted copy during outages.
 if(surface==='host'&&beta.mode==='hosted'){

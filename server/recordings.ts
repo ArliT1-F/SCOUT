@@ -77,8 +77,15 @@ export class MatchArchiveStore {
  addKill(event:KillEvent){const active=this.active;if(!active)return;active.events.push({at:event.at,type:'kill',data:event});this.trim(active);this.scheduleSave()}
  addRound(event:RoundEvent){const active=this.active;if(!active)return;active.events.push({at:event.endedAt,type:'round',data:event});this.trim(active);this.scheduleSave()}
  private trim(archive:MatchArchive){if(archive.events.length>MAX_ARCHIVED_EVENTS)archive.events.splice(0,archive.events.length-MAX_ARCHIVED_EVENTS)}
+ // Up to 40 archives of up to 10,000 events are one pretty-printed file, and a busy round brings
+ // several kills in one packet. Each write serializes the archives as they are when it starts, so a
+ // write already queued covers every change made before it runs: one more is queued only after it
+ // has begun, instead of one full rewrite per kill.
+ private saveQueued=false;
  private scheduleSave(){
-  this.pending=this.pending.then(async()=>{await mkdir(path.dirname(this.file),{recursive:true});const tmp=this.file+'.tmp';await writeFile(tmp,JSON.stringify({version:1,archives:this.archives},null,2));await rename(tmp,this.file)}).catch(error=>console.warn('[archive] could not persist match archive:',error instanceof Error?error.message:String(error)));
+  if(this.saveQueued)return;
+  this.saveQueued=true;
+  this.pending=this.pending.then(async()=>{this.saveQueued=false;await mkdir(path.dirname(this.file),{recursive:true});const tmp=this.file+'.tmp';await writeFile(tmp,JSON.stringify({version:1,archives:this.archives},null,2));await rename(tmp,this.file)}).catch(error=>console.warn('[archive] could not persist match archive:',error instanceof Error?error.message:String(error)));
  }
  async flush(){await this.pending}
 }

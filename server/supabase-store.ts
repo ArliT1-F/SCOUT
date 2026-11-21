@@ -80,6 +80,17 @@ const KEYED_TABLES:readonly KeyedTableSpec[]=[
  },
 ];
 
+// Hydration reads tables a page at a time (see selectAll). 1,000 matches Supabase's default
+// `max_rows`; a project configured lower still works, it just reads more, shorter pages.
+const PAGE_SIZE=1000;
+const MAX_PAGES=10_000;
+/** A stable page order for a keyed table: its conflict key, which is unique. */
+function keyOrder(table:string):string{
+ const spec=KEYED_TABLES.find(entry=>entry.name===table);
+ if(!spec) throw new Error(`No key is known for table ${table}.`);
+ return spec.conflictKey.split(',').map(column=>`${column}.asc`).join(',');
+}
+
 function inferSupabaseUrlFromDatabaseUrl(databaseUrl:string):string{
  const trimmed=databaseUrl.trim();
  if(!trimmed) return '';
@@ -192,15 +203,37 @@ export class SupabaseAccountMirror {
   for(const spec of KEYED_TABLES) this.snapshots.set(spec.name,new Map());
  }
 
- private async selectAll(table:string,query='select=*'):Promise<Row[]>{
+ private async selectOne(table:string,query:string):Promise<Row[]>{
   const res=await supabaseFetch(this.config,this.fetchImpl,`${table}?${query}`,{method:'GET'});
   await ensureOk(res,`select ${table}`);
   const body=await res.json();
   return Array.isArray(body)?(body as Row[]):[];
  }
 
+ /**
+  * Every row of a table. Supabase's Data API answers one request with at most its `max_rows`
+  * setting (1,000 by default) and says nothing about the rest, so one select silently drops rows
+  * once a table outgrows it. Pages are read in a stable order (`order` must name a unique key, or
+  * every column) until the total the server reports has been read.
+  */
+ private async selectAll(table:string,order:string,query='select=*'):Promise<Row[]>{
+  const rows:Row[]=[];
+  for(let pages=0;;pages++){
+   if(pages>=MAX_PAGES) throw new Error(`Supabase select ${table} did not finish after ${MAX_PAGES} pages.`);
+   const res=await supabaseFetch(this.config,this.fetchImpl,`${table}?${query}&order=${order}&limit=${PAGE_SIZE}&offset=${rows.length}`,{method:'GET',headers:{Prefer:'count=exact'}});
+   await ensureOk(res,`select ${table}`);
+   const body=await res.json();
+   const page=Array.isArray(body)?(body as Row[]):[];
+   rows.push(...page);
+   // `Content-Range: 0-999/2412` with count=exact. Without a total, a short page is the last one.
+   const total=Number(/\/(\d+)\s*$/.exec(res.headers.get('content-range')||'')?.[1]);
+   if(page.length===0||(Number.isFinite(total)?rows.length>=total:page.length<PAGE_SIZE)) return rows;
+  }
+ }
+
  /** Pull all account tables from Supabase into the local SQLite database at startup. */
  async hydrate(db:DatabaseSync):Promise<void>{
+  const keyed=(name:string)=>this.selectAll(name,keyOrder(name));
   const [
    accounts,
    devices,
@@ -213,16 +246,18 @@ export class SupabaseAccountMirror {
    events,
    audits,
   ]=await Promise.all([
-   this.selectAll('accounts'),
-   this.selectAll('devices'),
-   this.selectAll('sessions'),
-   this.selectAll('grants'),
-   this.selectAll('account_roles'),
-   this.selectAll('password_recovery_tokens'),
-   this.selectAll('email_outbox'),
-   this.selectAll('platform_settings','select=id,data&order=id.asc&limit=1'),
-   this.selectAll('events','select=at,kind,account_id,detail&order=at.asc'),
-   this.selectAll('audit_logs','select=id,occurred_at,request_id,actor_type,actor_id,action,target_type,target_id,metadata&order=id.asc'),
+   keyed('accounts'),
+   keyed('devices'),
+   keyed('sessions'),
+   keyed('grants'),
+   keyed('account_roles'),
+   keyed('password_recovery_tokens'),
+   keyed('email_outbox'),
+   this.selectOne('platform_settings','select=id,data&order=id.asc&limit=1'),
+   // `events` has no key column, so the page order is every column: rows that tie on all of them
+   // are identical, and which copy lands on which page cannot change what is read.
+   this.selectAll('events','at.asc,kind.asc,account_id.asc.nullsfirst,detail.asc','select=at,kind,account_id,detail'),
+   this.selectAll('audit_logs','id.asc','select=id,occurred_at,request_id,actor_type,actor_id,action,target_type,target_id,metadata'),
   ]);
 
   const remoteByTable:Record<string,Row[]>={
@@ -275,7 +310,10 @@ export class SupabaseAccountMirror {
     }
     this.syncedEventsCount=events.length;
    }else{
-    this.syncedEventsCount=events.length;
+    // A persistent local database (SCOUT_ACCOUNT_DB plus Supabase) already holds its own history.
+    // The flush appends local rows past this offset, so the offset has to count *local* rows: the
+    // remote count would skip every new event until the local table outgrew the remote one.
+    this.syncedEventsCount=localEventsBefore;
    }
 
    if(localAuditsBefore===0&&audits.length>0){
@@ -300,8 +338,10 @@ export class SupabaseAccountMirror {
      );
     }
     this.lastSyncedAuditId=maxId;
-   }else if(audits.length>0){
-    this.lastSyncedAuditId=Math.max(...audits.map(a=>Number(a.id)||0));
+   }else{
+    // Same reasoning as events: local ids come from SQLite's own sequence, not from Postgres, so
+    // only rows written after this point are new.
+    this.lastSyncedAuditId=Number((db.prepare('SELECT COALESCE(MAX(id),0) AS n FROM audit_logs').get() as {n?:number}|undefined)?.n||0);
    }
 
    db.exec('COMMIT');

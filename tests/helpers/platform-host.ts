@@ -40,5 +40,5 @@ export async function platformHost(t:{after:(fn:()=>Promise<void>)=>void},extra:
   const text=await res.text();let json:any=null;try{json=JSON.parse(text)}catch{}
   return {status:res.status,body:json,cookie:(res.headers.getSetCookie?.()??[]).map(c=>c.split(';')[0]).join('; ')};
  };
- return {directory,url,request,emails};
+ return {directory,url,request,emails,child};
 }

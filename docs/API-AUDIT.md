@@ -101,9 +101,11 @@ Regression test: *operator data reads need a signed-in panel session*.
 
 ## Residual risks (not code defects, but operator-facing)
 
-- **GSI token default.** With `GSI_TOKEN` unset, the built-in `CHANGE_ME` token is accepted and the host logs it on
-  start. Anyone on the venue network who knows that default can push fake game states into the scoreboard. The
-  installer sets a token; a development checkout does not. Set `GSI_TOKEN` before any real event.
+- **GSI token default.** With `GSI_TOKEN` unset, the built-in `CHANGE_ME` token is accepted **only from this
+  machine** (a loopback socket); the same token from another address is refused with 403 and reported in the
+  dashboard's next action, so nobody on the venue network can push fake game states with a published default.
+  The installer sets a private token; a development checkout does not. Set `GSI_TOKEN` before any real event,
+  and always when CS2 runs on a different PC from the host.
 - **Plain HTTP.** No TLS is added (documented in the README). The token is only as private as the network.
 - **Public snapshot.** `GET /api/status` and the WebSocket carry the match state, which is what the overlay shows by
   design. Anything that should not be on the public screen must not be entered in the match config.

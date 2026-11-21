@@ -96,7 +96,7 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 
 - **`.env` is optional.** Copy `.env.example` to `.env` to set any of the variables above without a shell wrapper. The host, `npm run replay` and `npm run account-service` load it once at startup; a name already present in the real environment is never overwritten, so `SCOUT_OWNER_EMAIL=… npm start` beats a stale file. A missing file prints nothing; a malformed line is reported with its line number and skipped. Values are never echoed to the log. `.env` is gitignored — it holds tokens once filled in.
 - A cookie session lasts 12 hours of use and lives in memory; restarting signs everyone out. There are at most 32 concurrent sessions. Header tokens are checked on every request, so Companion/native clients do not depend on a process-local cookie.
-- Five wrong tokens from one address lock that address for ten minutes. The host does not log the candidate token.
+- Five wrong tokens from one address, typed into the unlock form or carried by a `?token=` link, lock that address out of unlocking for ten minutes. A wrong token sent as a header (`X-Scout-Token`, `Authorization: Bearer`) is refused with 401 but not counted, so a misconfigured Companion cannot lock out the browser on the same machine; the tokens are 192-bit random values, so the count is not what keeps them from being guessed. The host does not log the candidate token.
 - Public-host rebinding, cross-site mutations and WebSocket handshakes from a different site are refused. If a proxy rewrites `Host`, list only your own hostname in `SCOUT_ALLOWED_HOSTS`.
 - No TLS is added. On a plain-HTTP LAN the token is only as private as the network it crosses. Keep the panel on a trusted LAN/VPN or use a TLS reverse proxy; do not expose port 8080 to the public internet.
 - `GET /api/remote/state` is an authenticated Producer/Owner feedback endpoint; `POST /api/remote/action` is role- and lease-protected. Private operator/audit and event-pack export routes enforce their own capabilities. Public match/output reads remain intentionally public.
@@ -200,7 +200,7 @@ that.
 ### CS2 connection
 
 1. Copy `config/gamestate_integration_overlay.cfg` to `Counter-Strike Global Offensive/game/csgo/cfg/`.
-2. Replace `CHANGE_ME` with your own local token, and start the host with matching `GSI_TOKEN`. Default token exists only for initial local setup.
+2. Replace `CHANGE_ME` with your own local token, and start the host with matching `GSI_TOKEN`. Default token exists only for initial local setup: the host accepts `CHANGE_ME` from CS2 on the same machine only, so a game client on another PC needs a real token.
 3. Restart CS2. Use Fullscreen Windowed (borderless) and observer/GOTV mode for all-player blocks.
 4. Configure native HUD visibility for your observer environment. Console permissions vary; validate your cvars before going on air.
 5. Confirm the panel says Receiving live data, check the **CS2 feed** panel for accepted packets and an `allplayers` chip, then switch the preview from Demo feed to GSI feed. If it stays on "Waiting for CS2", work through [Why is nothing showing?](#why-is-nothing-showing-cs2-feed-panel).

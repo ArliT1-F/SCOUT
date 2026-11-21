@@ -12,16 +12,40 @@ const assetPath=z.string().regex(/^uploads\/(?:logos|maps|players|radars|overlay
 const MIME_BY_EXT:Record<string,string>={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',svg:'image/svg+xml'};
 const IMAGE_MIMES=['image/png','image/jpeg','image/gif','image/webp','image/svg+xml'] as const;
 const base64Pattern=/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-function detectedMime(buffer:Buffer):string|undefined {
+// SVG is markup, not pixels: a script inside it runs whenever the file is opened directly from this
+// origin. The whole document is checked \u2014 reading only the first 4 KB let a <script> placed after a
+// long comment through \u2014 and anything that can run code or fetch from elsewhere is refused. The
+// upload routes are also served under a sandboxing CSP (server/index.ts), so this is the second of
+// two locks rather than the only one.
+const SVG_ROOT=/^(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+svg[^>]*>\s*)?<svg(?:\s|>)/i;
+const SVG_ACTIVE=/<(?:[\w-]+:)?(?:script|foreignObject|iframe|embed|object|handler|listener)\b|\son[a-z]+\s*=|javascript:|url\(\s*["']?\s*(?:https?:|\/\/|javascript:)|attributeName\s*=\s*["']\s*(?:xlink:)?href|<!ENTITY/i;
+const RASTER_DATA_URL=/^data:image\/(?:png|jpe?g|gif|webp)[;,]/i;
+// A reference may point inside the document (#id), at an embedded raster, or at a relative path;
+// never at a scheme that runs (javascript:), renders markup (data:text/html, data:image/svg+xml) or
+// leaves this host. Browsers drop whitespace inside URLs and decode character references, so both
+// are taken out of the question before the scheme is read.
+function referenceIsInert(raw:string):boolean {
+ const value=raw.replace(/[\u0000- ]/g,'');
+ if(value.includes('&')) return false;
+ if(/^[a-z][a-z0-9+.\-]*:/i.test(value)) return RASTER_DATA_URL.test(value);
+ return !value.startsWith('//')&&!value.startsWith('\\');
+}
+export function svgIsInert(text:string):boolean {
+ if(SVG_ACTIVE.test(text)) return false;
+ for(const match of text.matchAll(/\s(?:xlink:)?href\s*=\s*(["'])([\s\S]*?)\1/gi)) if(!referenceIsInert(match[2])) return false;
+ return true;
+}
+/** The image type the bytes actually are, or undefined when they are not an image SCOUT accepts. */
+export function detectImageMime(buffer:Buffer):string|undefined {
  if(buffer.length>=8&&buffer.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])))return 'image/png';
  if(buffer.length>=3&&buffer[0]===0xff&&buffer[1]===0xd8&&buffer[2]===0xff)return 'image/jpeg';
  if(buffer.length>=6&&(buffer.toString('ascii',0,6)==='GIF87a'||buffer.toString('ascii',0,6)==='GIF89a'))return 'image/gif';
  if(buffer.length>=12&&buffer.toString('ascii',0,4)==='RIFF'&&buffer.toString('ascii',8,12)==='WEBP')return 'image/webp';
- const svg=buffer.toString('utf8',0,Math.min(buffer.length,4096)).replace(/^\uFEFF/,'').trimStart();
- const root=/^(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!doctype\s+svg[^>]*>\s*)?<svg(?:\s|>)/i.test(svg);
- if(root&&!/<(?:script|foreignObject)\b|\son[a-z]+\s*=|(?:href|xlink:href)\s*=\s*["']\s*(?:javascript:|https?:|\/\/)|url\(\s*["']?\s*(?:https?:|\/\/)/i.test(svg))return 'image/svg+xml';
+ const svg=buffer.toString('utf8').replace(/^\uFEFF/,'').trimStart();
+ if(SVG_ROOT.test(svg)&&svgIsInert(svg))return 'image/svg+xml';
  return undefined;
 }
+const detectedMime=detectImageMime;
 const assetSchema=z.object({path:assetPath,mime:z.enum(IMAGE_MIMES),base64:z.string().max(7_000_000).regex(base64Pattern,'asset data must be valid base64')}).strip();
 export const eventPackSchema=z.object({
  format:z.literal('scout-event-pack'),version:z.literal(1),exportedAt:z.number().int().nonnegative(),
