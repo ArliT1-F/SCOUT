@@ -152,7 +152,7 @@ export function SiteFooter(){
    <div><b>Operators</b><a href="/login">Sign in</a><a href="/download">Download</a><a href="/apply">Apply for access</a></div>
    <div><b>Account</b><a href="/profile">User profile</a><a href="/admin">Owner dashboard</a><a href="/privacy">Privacy</a></div>
   </div>
-  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><span>GSI only<i/><span className="status-dot"/>No injection<i/>No memory reading</span><a href="/privacy">What we collect, and what we never do</a></div>
+  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><span className="site-footer-principles"><span className="status-dot"/>GSI only<i/>No injection<i/>No memory reading</span><a href="/privacy">What we collect, and what we never do</a></div>
  </footer>;
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
@@ -426,7 +426,7 @@ export function ApplyPage(){
  }
  const account=status?.account??null;
  const errorId=(key:keyof ApplicationForm)=>fieldErrors[key]?`apply-${key}-error`:undefined;
- return <div className="site">
+ return <div className="site landing site-inner">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
    {offline&&<OfflineBanner>{accountOfflineText(failure,'apply')}</OfflineBanner>}
@@ -547,7 +547,7 @@ export function LoginPage({linkCode,invite,reset,next='/profile'}:{linkCode?:str
   setTimeout(()=>location.assign(next),700);
  }
  const localSession=session?.local&&session.authenticated;
- return <div className="site">
+ return <div className="site landing site-inner">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
    {offline&&<OfflineBanner>{accountOfflineText(failure,'signin')}</OfflineBanner>}
@@ -625,7 +625,7 @@ export function DownloadPage(){
  const {status,offline,loading,failure}=useBetaStatus();
  const surface=useSurface();
  const account=status?.account??null;
- return <div className="site">
+ return <div className="site landing site-inner">
   <SiteNav account={account} onHost={!offline&&!!status?.host}/>
   <main className="site-main site-narrow">
    {offline&&<OfflineBanner>{accountOfflineText(failure,'signin')}</OfflineBanner>}
@@ -672,7 +672,7 @@ export function DownloadPage(){
 // page explains where the desk went instead of quietly showing the operator panel.
 export function MovedDashboardPage(){
  useDocumentMeta({title:'The dashboard moved — SCOUT',description:'The dashboard now lives in the installed SCOUT app.',robots:'noindex, follow'});
- return <div className="site">
+ return <div className="site landing site-inner">
   <SiteNav account={null}/>
   <main className="site-main site-narrow">
    <div className="site-page-head">
@@ -855,7 +855,7 @@ export function ProfilePage(){
   try{const result=await betaRequest('/api/beta/devices/revoke',{deviceId});if(!result.ok)setError(result.body?.error||'Could not unlink this launcher.');else await reload()}catch{setError('The service could not be reached.')}finally{setBusy('')}
  }
  async function logout(){await betaRequest('/api/beta/logout');location.assign('/login')}
- return <div className="site"><SiteNav account={account}/><main className="site-main site-narrow">
+ return <div className="site landing site-inner"><SiteNav account={account}/><main className="site-main site-narrow">
   <div className="site-page-head"><span className="site-section-eyebrow">YOUR ACCOUNT</span><h1>User profile</h1><p>Your beta access and linked installations. Open SCOUT on the observer machine to host a match.</p></div>
   {loading?<p className="site-loading">Checking your account…</p>:offline?<OfflineBanner>{accountOfflineText(failure,'signin')}</OfflineBanner>:!account?<section className="site-card"><h2>Sign in to see your profile</h2><a className="button primary" href="/login">Sign in</a></section>:<>
    <section className="site-card"><h2>{account.displayName}</h2><p>{account.email}</p><p>{account.organisation}</p><span className={'site-status '+statusTone(account.status)}>{statusLabel(account.status)}</span><div className="site-cta"><a className="button primary" href="/download">Download SCOUT</a>{isOwner&&<a className="button" href="/admin">Owner dashboard</a>}<button className="button" onClick={()=>void logout()}>Sign out</button></div></section>
@@ -876,7 +876,7 @@ export const ANALYTICS_EVENT_ALLOWLIST:ReadonlyArray<{event:string;why:string;co
  {event:'update-success / update-failure',why:'Reliability of installer releases.',collected:false},
 ];
 export function PrivacyPage(){
- return <div className="site">
+ return <div className="site landing site-inner">
   <SiteNav account={null}/>
   <main className="site-main site-narrow">
    <div className="site-page-head">
