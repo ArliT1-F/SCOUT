@@ -16,6 +16,18 @@ import {createWidget,defaultOverlay,overlayThemeStyle,widgetShown} from '../serv
 
 const principal=(id:string,name:string,role:'owner'|'producer'|'designer'|'viewer')=>({id,name,role});
 
+test('a long-running venue can keep issuing operators after many revocations',()=>{
+ const directory=new OperatorDirectory();
+ let at=1_700_000_000_000;
+ const first=directory.issue({label:'Shift 0',role:'viewer',now:at++});directory.revoke(first.operator.id,at++);
+ for(let index=1;index<200;index++){const {operator}=directory.issue({label:`Shift ${index}`,role:'viewer',now:at++});directory.revoke(operator.id,at++)}
+ const current=directory.issue({label:'Tonight',role:'producer',now:at++});
+ const saved=new OperatorDirectory(JSON.parse(directory.serialize()));
+ assert.equal(saved.verify(current.token)?.id,current.operator.id,'the newest credential is persisted and works');
+ assert.equal(saved.list(true).length,128,'the file stays within its cap');
+ assert.equal(saved.list(true).some(entry=>entry.id===first.operator.id),false,'the longest-revoked entry made room');
+});
+
 test('operator tokens are one-time secrets, role-scoped, and revoked immediately',()=>{
  const directory=new OperatorDirectory();
  const issued=directory.issue({label:'Main desk',role:'producer',now:1_700_000_000_000});

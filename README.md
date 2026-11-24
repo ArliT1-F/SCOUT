@@ -83,6 +83,7 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 | `SCOUT_REMOTE=off` | Rejects remote panel sessions and tokens; local host operation still works, and public overlay output is unaffected. |
 | `SCOUT_REQUIRE_TOKEN=1` | Even the host machine has to unlock the panel. |
 | `SCOUT_ALLOWED_HOSTS` | Comma-separated names accepted for a reverse proxy/tunnel that rewrites `Host`. |
+| `SCOUT_TRUST_PROXY` | Number of reverse proxies in front of the host (Render: `1`). Their `X-Forwarded-For` entries identify the visitor, so the beta's sign-in, application and recovery limits apply per visitor. Unset, the header is ignored. Panel authority never uses it. |
 | `SCOUT_BETA_API_URL` | Account-service URL for applications, sign-in, device linking and licence checks; the host proxies browser account routes. This is **not** the platform URL. See [docs/BETA.md](docs/BETA.md). |
 | `SCOUT_PLATFORM_URL` | Opt-in launcher sync: URL of the **central SCOUT host**, not the account service. Polls every 15 s for the account’s active tournament/settings and flushes a persistent metrics/config outbox. Unset leaves local operation unchanged. See [docs/PLATFORM.md](docs/PLATFORM.md#launcher-sync). |
 | `SCOUT_BETA_API_KEY` | Account-service key for the central host’s application administration, settings reads and internal device identity lookup. Configure the same key on the service and central host; do not ship it to venues just to enable sync. |

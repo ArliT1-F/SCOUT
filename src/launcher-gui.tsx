@@ -46,7 +46,8 @@ export function AppHome(){
  // A pending code is the one thing an operator needs in front of them, so fill it in automatically.
  useEffect(()=>{if(link?.link?.pending?.userCode) setCode(current=>current||link.link.pending!.userCode)},[link]);
  const account=beta?.account??null;
- const receiving=!!(gsi?.accepted&&gsi?.lastPacketAt&&Date.now()-gsi.lastPacketAt<5000);
+ // The age the host measured on its own clock; this window may run on a machine whose clock differs.
+ const receiving=!!(gsi?.accepted&&gsi?.lastPacketAt&&gsi.lastPacketAge<5000);
  const licenceState=licence?.state||'unknown';
  const licenceRunnable=['active','unknown','offline'].includes(licenceState);
  const pending=link?.link?.pending||null;

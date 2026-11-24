@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 // Where the read-only half of an installation lives — the built panel in dist/.
 //
 // In a checkout nothing sets SCOUT_APP_ROOT, so the app root is the working directory and every
@@ -36,8 +36,9 @@ export function readInstalledEnv(name:string):string|undefined{
   };
   const file=mapping[name];
   if(!file) return undefined;
+  // A static import, not require(): the packaged host is compiled ES modules, where `require` does
+  // not exist — the ReferenceError landed in the catch below and every file read as "not set".
   try{
-    const { readFileSync }=require('node:fs') as typeof import('node:fs');
     const value=readFileSync(file,'utf8').trim();
     return value||undefined;
   }catch{return undefined}

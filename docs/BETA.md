@@ -101,6 +101,12 @@ directory, so an installer update never loses it and an uninstall can remove it 
 
 Rate limits: 3 applications per address per hour, 8 failed sign-ins per address per 15 minutes, 5 password-recovery requests per address per hour and 5 per normalized account address per hour, and at most 20 pending launcher codes at a time. They live in memory and reset with the service.
 
+"Address" is the visitor's, not the proxy's. The host's `/api/beta` proxy presents the service key and
+names the browser it forwards in `X-Scout-Client-Address`; the service believes that header (or a legacy
+`address` body field) only together with a valid service key, and otherwise uses the socket address. Behind
+a reverse proxy set `SCOUT_TRUST_PROXY` to the number of proxies (Render: `1`) so the host reads the
+visitor from `X-Forwarded-For`; without it every visitor would share the proxy's single bucket.
+
 ## The REST contract a hosted service has to implement
 
 Everything is JSON, errors are `{error, code}` with a meaningful HTTP status, and success is the raw
@@ -110,10 +116,10 @@ value. The host proxies `GET|POST /api/beta/<path>` to `${SCOUT_BETA_API_URL}/<p
 | Method | Path | Body | Answer |
 | --- | --- | --- | --- |
 | GET | `/status` | — | `BetaStatusView` (includes `reviewer` for the signed-in session on the hosted service) |
-| POST | `/apply` | `ApplicationInput` + `address` | `{account, invite:null}`; invitation is never returned to browser |
-| POST | `/login` | `{email, password, address, userAgent}` | `{account}` + `Set-Cookie: scout_account=…` |
+| POST | `/apply` | `ApplicationInput` (+ legacy `address`, honoured only with the service key) | `{account, invite:null}`; invitation is never returned to browser |
+| POST | `/login` | `{email, password}` (visitor in `X-Scout-Client-Address` + service key) | `{account}` + `Set-Cookie: scout_account=…` |
 | POST | `/logout` | — (cookie) | `{ok:true}` + cleared cookie |
-| POST | `/activate` | `{invite, password, address}` | `{account}` + cookie |
+| POST | `/activate` | `{invite, password}` | `{account}` + cookie |
 | GET | `/applications` | — (service key) | `{applications, invitations}` delivery metadata |
 | POST | `/applications/:id` | `{decision: approve\|reject\|revoke, decidedBy, reason?}` | `{account, invite, invitationDelivery}`; service-key-only backend response, not exposed to browser |
 | POST | `/applications/:id/resend-invitation` | `{requestedBy}` | account and invitation delivery metadata |

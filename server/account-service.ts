@@ -10,7 +10,7 @@ import {describeEmailFailure,emailConfiguration,invitationEmail,openEmail,recove
 import {DEFAULT_PLATFORM_SETTINGS,isPlatformOwner,sanitizeSettings,type PlatformSettings} from './platform.js';
 import {SupabaseAccountMirror,supabaseConfiguration,type SupabaseConfiguration} from './supabase-store.js';
 import {
- ACCOUNT_COOKIE,ACCOUNT_TTL_MS,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
+ ACCOUNT_COOKIE,ACCOUNT_TTL_MS,CLIENT_ADDRESS_HEADER,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
  DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_APPLICATIONS_PER_HOUR,MAX_LOGIN_FAILURES,MAX_REVOKE_REASON,MIN_PASSWORD,
  accountCookie,clearedAccountCookie,digestSecret,hashToken,newToken,newUserCode,normalizeEmail,normalizeUserCode,secretMatches,
  type AccountView,type ApplicationInput,type BetaStatusView,type DeviceGrantView,type DevicePollView,type DownloadView,type LicenceCheck,
@@ -358,7 +358,20 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   for(const part of header.split(';')){const [name,...rest]=part.trim().split('=');if(name===ACCOUNT_COOKIE)return decodeURIComponent(rest.join('='))}
   return undefined;
  };
- const address=(req:IncomingMessage)=>req.socket.remoteAddress||'unknown';
+ // The visitor a request is rate limited by and recorded under. Behind the SCOUT host's proxy every
+ // request arrives from the host's own loopback socket, so keying the limits on the socket made them
+ // site-wide: eight wrong passwords from anyone locked every visitor out of signing in. A caller that
+ // holds the service key is that trusted proxy, and names the browser it forwards in
+ // X-Scout-Client-Address (or, for older callers, an `address` body field). Nobody else can choose
+ // their bucket: without the key, the socket address is the only one used.
+ const address=(req:IncomingMessage,claimed?:unknown)=>{
+  if(serviceKeyMatches(req)){
+   const header=req.headers[CLIENT_ADDRESS_HEADER];
+   const named=String((Array.isArray(header)?header[0]:header)||(typeof claimed==='string'?claimed:'')).trim();
+   if(named) return named.slice(0,64);
+  }
+  return req.socket.remoteAddress||'unknown';
+ };
  function setCookie(res:ServerResponse,req:IncomingMessage,value:string,ttlMs:number){
   const secure=secureCookies==='auto'?String(req.headers['x-forwarded-proto']||'').split(',')[0].trim()==='https'||Boolean((req.socket as any).encrypted):secureCookies;
   res.setHeader('Set-Cookie',value?accountCookie(value,ttlMs,secure):clearedAccountCookie(secure));
@@ -381,13 +394,17 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
  }
  // A launcher code brings its own throttle: at most 20 pending at a time, started from one address per
  // minute. Codes are cheap to mint but not free to guess, and a human has to approve one anyway.
- function checkServiceKey(req:IncomingMessage){
-  if(!apiKey) fail(503,'service-key-required','This account service has no SCOUT_BETA_API_KEY set, so the owner-only routes are closed.');
+ function serviceKeyMatches(req:IncomingMessage){
+  if(!apiKey) return false;
   const header=req.headers.authorization||'';
   const candidate=header.startsWith('Bearer ')?header.slice(7):'';
   const expectedDigest=createHash('sha256').update(apiKey).digest();
   const candidateDigest=createHash('sha256').update(candidate).digest();
-  if(!header.startsWith('Bearer ')||!timingSafeEqual(candidateDigest,expectedDigest)) fail(401,'bad-service-key','The service key is missing or wrong.');
+  return header.startsWith('Bearer ')&&timingSafeEqual(candidateDigest,expectedDigest);
+ }
+ function checkServiceKey(req:IncomingMessage){
+  if(!apiKey) fail(503,'service-key-required','This account service has no SCOUT_BETA_API_KEY set, so the owner-only routes are closed.');
+  if(!serviceKeyMatches(req)) fail(401,'bad-service-key','The service key is missing or wrong.');
  }
  const server=createServer((req,res)=>{
   const requestId=randomUUID();
@@ -456,7 +473,7 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
      const email=normalizeEmail(String(input.email||''));
      if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) fail(400,'bad-email','That does not look like an email address.');
      if(String(input.name||'').trim().length<2) fail(400,'bad-name','Tell us the name to put on the account.');
-     const from=String(input.address||address(req));
+     const from=address(req,input.address);
      const stamps=(applications.get(from)||[]).filter(stamp=>now()-stamp<60*60*1000);
      if(stamps.length>=MAX_APPLICATIONS_PER_HOUR) fail(429,'throttled','That address has sent several applications already. Try again in an hour.');
      const existing=get('SELECT * FROM accounts WHERE normalized_email = ?',email);

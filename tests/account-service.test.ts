@@ -289,6 +289,20 @@ test('applications are rate limited per address, and the service says so in the 
  assert.ok(service.db.list().length===3,'the refused application was not stored');
 });
 
+test('only a caller holding the service key may name the visitor a request is limited by',async(t)=>{
+ const {call}=await start({},t);
+ // Without the key a claimed address, in the body or the header, is ignored: these all count
+ // against this test's own socket, so the fourth is refused.
+ const claim=(index:number)=>({body:{...application,email:`direct${index}@example.com`,address:`198.51.100.${index}`},headers:{'X-Scout-Client-Address':`198.51.100.${index}`}});
+ for(const index of [0,1,2]) assert.equal((await call('/apply',claim(index))).status,200,`application ${index+1}`);
+ const refused=await call('/apply',claim(3));
+ assert.equal(refused.status,429,'a stranger cannot choose a fresh rate-limit bucket');
+ // The SCOUT host's proxy presents the key and names the browser it forwards: a different visitor
+ // has a bucket of their own, even though the request arrives over the same socket.
+ const proxied=await call('/apply',{key:true,body:{...application,email:'proxied@example.com'},headers:{'X-Scout-Client-Address':'198.51.100.50'}});
+ assert.equal(proxied.status,200);
+});
+
 test('a hosted deployment is selected by SCOUT_BETA_API_URL and has no local site half',async()=>{
  const runtime=createBetaService({apiUrl:'https://accounts.example.test',apiKey:'k'});
  assert.equal(runtime.mode,'hosted');

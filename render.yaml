@@ -19,6 +19,10 @@ services:
         value: site
       - key: SCOUT_EMBED_ACCOUNT_SERVICE
         value: "1"
+      # Render's load balancer is the one proxy in front of the service: its X-Forwarded-For entry
+      # names the visitor, so sign-in/application/recovery limits are per visitor, not site-wide.
+      - key: SCOUT_TRUST_PROXY
+        value: "1"
       - key: SUPABASE_URL
         value: https://qtfbtfkthtvfpjvghyop.supabase.co
       - key: SUPABASE_SERVICE_ROLE_KEY

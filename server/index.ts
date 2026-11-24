@@ -26,7 +26,7 @@ import {obsConfigSchema,defaultObsConfig,planObsToScout,type ObsConfig} from './
 import {PanelAuth,PANEL_COOKIE,cookieValue,isLoopbackAddress,originTrusted,requestIsSecure,clearedCookie,panelUrls,hasCapability,type PanelSessionView,type PanelCapability,type Principal,type PanelRole} from './auth.js';
 import {appPath,resolveDistDir,readInstalledEnv} from './runtime.js';
 import {hostname} from 'node:os';
-import {createBetaService,Installation,ACCOUNT_COOKIE,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_REVOKE_REASON,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
+import {createBetaService,Installation,ACCOUNT_COOKIE,CLIENT_ADDRESS_HEADER,ACCOUNT_TTL_MS,accountCookie,clearedAccountCookie,DEVICE_POLL_INTERVAL_MS,DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_REVOKE_REASON,type BetaContext,type BetaResult,type BetaRuntime} from './beta.js';
 import {LicenceMonitor} from './licensing.js';
 import {PlatformStore,isPlatformOwner,platformOwnerEmail,normalizeEmail,METRIC_KINDS,type MetricKind,type MetricEvent,configHash} from './platform.js';
 import {PlatformDeviceService,PlatformSyncAgent,SyncOutbox} from './platform-sync.js';
@@ -47,6 +47,14 @@ const app=forwardAsyncErrors(express());
 process.on('unhandledRejection',reason=>console.error('[host] unhandled promise rejection — the host keeps running:',reason instanceof Error?reason.stack||reason.message:String(reason)));
 // Route matching is exact, including path case; configure before the first middleware initializes Express's router.
 app.set('case sensitive routing',true);
+// Behind a reverse proxy (Render, nginx, a tunnel) every visitor arrives from the proxy's own address,
+// so the beta's per-visitor limits (sign-in failures, applications, password recovery) would count
+// everybody together. SCOUT_TRUST_PROXY is the number of proxies in front of this host: their
+// X-Forwarded-For entries name the visitor. Unset, the header is ignored, because anyone can write it.
+// Panel authority never uses this — a request is "this machine" only by its own socket (server/auth.ts).
+const trustedProxyHops=Math.max(0,Number.parseInt(process.env.SCOUT_TRUST_PROXY||'',10)||0);
+if(trustedProxyHops) app.set('trust proxy',trustedProxyHops);
+const clientAddress=(req:express.Request)=>(trustedProxyHops?req.ip:undefined)||req.socket.remoteAddress||'unknown';
 // Give every HTTP response a server-generated correlation ID. Preserve all established response
 // fields; error JSON gains only an additive requestId so existing local clients remain compatible.
 app.use((req,res,next)=>{
@@ -153,7 +161,7 @@ const startedAt=Date.now();
 // What /healthz and the operations tab report: the manifest next to the program. The installer writes
 // the release version into it; a checkout reports the repository's own.
 const hostVersion=await readFile(appPath('package.json'),'utf8').then(text=>String(JSON.parse(text).version||'unknown')).catch(()=>'unknown');
-const betaContext=(req:express.Request):BetaContext=>({address:req.socket.remoteAddress||'unknown',userAgent:req.get('user-agent')||'',origin:betaOrigin(req),secure:requestIsSecure(req.headers)});
+const betaContext=(req:express.Request):BetaContext=>({address:clientAddress(req),userAgent:req.get('user-agent')||'',origin:betaOrigin(req),secure:requestIsSecure(req.headers)});
 // The origin an invite link or a launcher code points at: the address the operator actually used,
 // so the link works on the observer machine and on the phone that approves a launcher.
 function betaOrigin(req:express.Request){
@@ -308,9 +316,14 @@ function privateRead(req:express.Request,res:express.Response,capability:PanelCa
 // rows an operator needs when something is wrong.
 app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
  const at=Date.now();
- res.on('finish',()=>requests.record({at,method:req.method,path:req.path,status:res.statusCode,ms:Date.now()-at,address:req.socket.remoteAddress||''}));
  const downloaded=req.path.startsWith('/download/')?req.path.slice('/download/'.length):'';
- if(downloaded&&req.method==='GET'&&res.statusCode<400) void releases.noteDownload(downloaded);
+ res.on('finish',()=>{
+  requests.record({at,method:req.method,path:req.path,status:res.statusCode,ms:Date.now()-at,address:req.socket.remoteAddress||''});
+  // Counted once the answer is known: before routing the status is always the default 200, so a
+  // missing file (404) counted as a download, and so did every 206 slice a download manager or a
+  // resumed transfer asks for. Only a whole file served counts.
+  if(downloaded&&req.method==='GET'&&res.statusCode===200) void releases.noteDownload(downloaded);
+ });
  next();
 });
 app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
@@ -488,7 +501,7 @@ for(const route of ['sync','metrics'] as const){
 // tournaments; only the SCOUT owner (SCOUT_OWNER_EMAIL) administers the platform at /admin.
 async function currentAccount(req:express.Request){
  if(beta.site){const v=await beta.site.status(accountCookieId(req));return v.account}
- try{const r=await fetch((betaApiUrl||'').replace(/\/$/,'')+'/status',{headers:{...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{})}});const v:any=await r.json().catch(()=>null);return v?.account??null}catch{return null}
+ try{const r=await fetch((betaApiUrl||'').replace(/\/$/,'')+'/status',{signal:AbortSignal.timeout(30_000),headers:{...(req.get('cookie')?{Cookie:req.get('cookie') as string}:{})}});const v:any=await r.json().catch(()=>null);return v?.account??null}catch{return null}
 }
 async function betaReviewAccess(req:express.Request,res:express.Response):Promise<{id:string;email:string}|null>{
  if(!sameOrigin(req)){res.status(403).json({error:'Cross-site reviewer requests are refused.',code:'untrusted-origin'});return null}
@@ -617,7 +630,10 @@ app.post('/api/session',(req,res)=>{
 app.delete('/api/session',(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  const current=panel.view(panelRequest(req));
- if(current.principalId&&current.role){const principal={id:current.principalId,name:current.operator,role:current.role};if(current.role==='owner')lease.release(principal);audit.record(principal,'session.logout',`${current.address} · ${current.via||'session'}`)}
+ // Signing out hands back broadcast control whoever held it: a producer's lease used to outlive their
+ // session and lock everyone else out of the scene controls until it expired. release() only ever
+ // drops a lease this principal holds.
+ if(current.principalId&&current.role){const principal={id:current.principalId,name:current.operator,role:current.role};if(lease.view(principal.id).mine){lease.release(principal);broadcast()}audit.record(principal,'session.logout',`${current.address} · ${current.via||'session'}`)}
  if(panel.logout(cookieValue(req.get('cookie'),PANEL_COOKIE))) console.log(`[panel] a remote session ended — ${panel.sessionCount} active`);
  res.setHeader('Set-Cookie',clearedCookie(requestIsSecure(req.headers)));
  res.json(panel.view({...panelRequest(req),headers:{},cookie:''}));
@@ -634,13 +650,15 @@ app.post('/api/beta/link/start',async(req,res)=>{
  if(current.linked){res.status(409).json({error:`This installation is already linked to ${current.email}. Unlink it first to move it to another account.`,code:'already-linked'});return}
  const parsed=linkStartSchema.safeParse(req.body||{});
  const started=await beta.launcher.deviceStart({label:parsed.success&&parsed.data.label?parsed.data.label:hostname(),platform:process.platform},betaContext(req));
- sendBetaResult(res,started,async value=>{
-  installation.beginLink(value);
-  await installation.save();
-  watchInstallationLink();
-  console.log(`[beta] launcher link started — approve ${value.userCode} while signed in at ${value.verificationUrl}`);
-  res.json({link:installation.view(),code:value.userCode,expiresAt:value.expiresAt,verificationUrl:value.verificationUrl,interval:value.interval});
- });
+ if(!started.ok){sendBetaResult(res,started);return}
+ // Awaited in the handler itself, so a failed save reaches the error handler instead of leaving the
+ // request without an answer.
+ const value=started.value;
+ installation.beginLink(value);
+ await installation.save();
+ watchInstallationLink();
+ console.log(`[beta] launcher link started — approve ${value.userCode} while signed in at ${value.verificationUrl}`);
+ res.json({link:installation.view(),code:value.userCode,expiresAt:value.expiresAt,verificationUrl:value.verificationUrl,interval:value.interval});
 });
 app.post('/api/beta/link/unlink',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
@@ -701,22 +719,23 @@ app.post('/api/beta/applications/:id/resend-invitation',async(req,res)=>{
 });
 // ---- Operations (server/operations.ts): the deployment's own desk. Owner-only, because publishing
 // an installer and reading traffic counters is running the beta, not broadcasting a match.
-app.get('/api/ops/health',(req,res)=>{
+// An async handler, not a fire-and-forget block inside a sync one: a failure here (an unreadable
+// store, an account service that throws) reaches the error handler instead of leaving the request
+// open forever.
+app.get('/api/ops/health',async(req,res)=>{
  if(!privateRead(req,res,'view-audit'))return;
- void (async()=>{
-  const [applications,licenceView]=await Promise.all([beta.launcher.applications(),licence.view(installation,false)]);
-  const gsi=feed.snapshot();
-  const list=releases.list();
-  const snapshot=healthSnapshot({
-   startedAt,version:hostVersion,pid:process.pid,
-   beta:{mode:beta.mode,applications:{pending:applications.filter(entry=>entry.status==='pending').length,approved:applications.filter(entry=>entry.status==='approved').length,rejected:applications.filter(entry=>entry.status==='rejected').length,revoked:applications.filter(entry=>entry.status==='revoked').length},devices:applications.reduce((sum,entry)=>sum+entry.devices.length,0)},
-   licence:{state:licenceView.state,enforced:licenceView.enforced,email:licenceView.email},
-   releases:{published:list.length,latest:list[0]?.version??null,downloads:list.reduce((sum,entry)=>sum+entry.downloads,0)},
-   requests:requests.summary(),
-   output:{clients:wss.clients.size,gsiPackets:gsi.accepted,gsiAgeMs:gsi.lastPacketAt?Date.now()-gsi.lastPacketAt:null,gsiRejected:gsi.rejectedAuth+gsi.rejectedShape+gsi.rejectedLate,recording:recorder.status.enabled},
-  });
-  res.json({health:snapshot,releases:list,licence:licenceView,link:installation.view(),download:{folder:'public/download',defaultUrl:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,defaultVersion:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION}});
- })();
+ const [applications,licenceView]=await Promise.all([beta.launcher.applications(),licence.view(installation,false)]);
+ const gsi=feed.snapshot();
+ const list=releases.list();
+ const snapshot=healthSnapshot({
+  startedAt,version:hostVersion,pid:process.pid,
+  beta:{mode:beta.mode,applications:{pending:applications.filter(entry=>entry.status==='pending').length,approved:applications.filter(entry=>entry.status==='approved').length,rejected:applications.filter(entry=>entry.status==='rejected').length,revoked:applications.filter(entry=>entry.status==='revoked').length},devices:applications.reduce((sum,entry)=>sum+entry.devices.length,0)},
+  licence:{state:licenceView.state,enforced:licenceView.enforced,email:licenceView.email},
+  releases:{published:list.length,latest:list[0]?.version??null,downloads:list.reduce((sum,entry)=>sum+entry.downloads,0)},
+  requests:requests.summary(),
+  output:{clients:wss.clients.size,gsiPackets:gsi.accepted,gsiAgeMs:gsi.lastPacketAt?Date.now()-gsi.lastPacketAt:null,gsiRejected:gsi.rejectedAuth+gsi.rejectedShape+gsi.rejectedLate,recording:recorder.status.enabled},
+ });
+ res.json({health:snapshot,releases:list,licence:licenceView,link:installation.view(),download:{folder:'public/download',defaultUrl:process.env.SCOUT_DOWNLOAD_URL||DEFAULT_DOWNLOAD_URL,defaultVersion:process.env.SCOUT_DOWNLOAD_VERSION||DEFAULT_DOWNLOAD_VERSION}});
 });
 const releaseSchema=z.object({version:z.string().trim().min(1).max(40),file:z.string().trim().max(160).optional(),url:z.string().trim().max(500).optional(),notes:z.string().max(400).optional()}).strip();
 app.post('/api/ops/releases',async(req,res)=>{
@@ -867,6 +886,9 @@ if(beta.site){
      ...(req.get('user-agent')?{'User-Agent':req.get('user-agent') as string}:{}),
      ...(requestIsSecure(req.headers)?{'X-Forwarded-Proto':'https'}:{}),
      ...(betaApiKey?{Authorization:`Bearer ${betaApiKey}`}:{}),
+     // This proxy presents the service key, so the service limits by the browser named here instead of
+     // by this host's own address. The browser's own copy of the header is never forwarded.
+     [CLIENT_ADDRESS_HEADER]:clientAddress(req),
     },
     body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
    });
@@ -912,6 +934,9 @@ if(beta.site){
       ...(req.get('host')?{Host:req.get('host') as string}:{}),
       ...(req.get('user-agent')?{'User-Agent':req.get('user-agent') as string}:{}),
       ...(requestIsSecure(req.headers)?{'X-Forwarded-Proto':'https'}:{}),
+      // A venue host proxying its own browsers names them here alongside its service key; the service
+      // honours the header only together with that key, so a browser cannot pick its own bucket.
+      [CLIENT_ADDRESS_HEADER]:req.get(CLIENT_ADDRESS_HEADER)||clientAddress(req),
      },
      body:req.method==='GET'||req.method==='HEAD'?undefined:JSON.stringify(req.body??{}),
     });
