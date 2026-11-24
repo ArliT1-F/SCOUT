@@ -23,7 +23,7 @@ test('the redesigned page preserves every shipped marketing image and map thumbn
 });
 
 test('the landing structure covers discovery, product, benefits, access, pricing and questions',()=>{
- for(const id of ['product','scenes','maps','benefits','beta','how','pricing','community','faq']){
+ for(const id of ['product','scenes','maps','benefits','beta','how','pricing','faq']){
   assert.equal((page.match(new RegExp(`id="${id}"`,'g'))??[]).length,1,`${id} has one unique anchor`);
  }
  assert.equal((page.match(/<h1\b/g)??[]).length,1,'there is one primary heading');
@@ -31,7 +31,7 @@ test('the landing structure covers discovery, product, benefits, access, pricing
  assert.match(page,/id="main-content" tabindex="-1"/);
  assert.match(page,/No paid plans are currently offered/);
  assert.match(page,/Sample GSI feed/);
- assert.match(page,/before sharing customer stories/,'do not invent beta testimonials');
+ assert.equal(/testimonial|customer stories|<blockquote/i.test(page),false,'do not invent beta testimonials');
 });
 
 test('public navigation is an accessible disclosure with real page destinations',()=>{

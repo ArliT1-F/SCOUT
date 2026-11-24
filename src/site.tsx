@@ -1,6 +1,6 @@
 import React,{useEffect,useState} from 'react';
 import {ScoutMark} from './logo';
-import {Archive as ArchiveIcon,ArrowRight,ArrowUpRight,Check,ChevronRight,CircleCheck,Copy,Download,Gamepad2,KeyRound,Layers,LayoutDashboard,Link2,Loader2,LogIn,Monitor,Menu,X,Play,ChevronDown,Quote,Palette,Radio,RefreshCw,ShieldCheck,SlidersHorizontal,Unplug,Users,Wifi,Zap} from 'lucide-react';
+import {Archive as ArchiveIcon,ArrowRight,ArrowUpRight,Check,ChevronRight,CircleCheck,Copy,Download,Gamepad2,KeyRound,Layers,LayoutDashboard,Link2,Loader2,LogIn,Monitor,Menu,X,Play,ChevronDown,Palette,Radio,RefreshCw,ShieldCheck,SlidersHorizontal,Unplug,Users,Wifi,Zap} from 'lucide-react';
 import {apiFetch,rememberToken} from './session';
 import {DEFAULT_WIDGETS} from '../server/overlay';
 import type {SceneId} from '../server/controls';
@@ -38,7 +38,7 @@ export const isSiteRoute=(path:string):path is SiteRoute=>(SITE_ROUTES as readon
 // Tested by tests/site-public.test.ts — every site route must have an entry, and only genuinely
 // public pages may say index.
 export const PAGE_META:Record<SiteRoute,{title:string;description:string;robots:'index, follow'|'noindex, follow'}>={
- '/welcome':{title:'SCOUT — A better broadcast for every CS2 tournament',description:'Turn one observer PC into a complete CS2 broadcast: live overlays, nine scenes and one operator panel, built for community tournaments. Apply for the free closed beta.',robots:'index, follow'},
+ '/welcome':{title:'SCOUT: CS2 broadcast overlays for community tournaments',description:'Live HUD, scoreboards and between-round scenes for CS2, driven by the game and added to OBS as a browser source. Free during the closed beta.',robots:'index, follow'},
  '/apply':{title:'Apply for the closed beta — SCOUT',description:'Apply for SCOUT closed-beta access. A human reads every application; approved organisers receive a single-use email invitation.',robots:'index, follow'},
  '/login':{title:'Sign in — SCOUT',description:'Sign in to your SCOUT account, set a password from an invite, or approve a launcher link.',robots:'noindex, follow'},
  '/download':{title:'Download SCOUT — SCOUT',description:'The Windows installer for approved closed-beta accounts.',robots:'noindex, follow'},
@@ -130,7 +130,7 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
    <a href="/welcome#scenes">Scenes</a>
    <a href="/welcome#maps">Maps</a>
    <a href="/welcome#pricing">Pricing</a>
-   <a href="/welcome#how">Under the hood</a>
+   <a href="/welcome#how">Technical</a>
    <a href="/welcome#faq">FAQ</a>
   </nav>
   <div className="site-nav-actions">
@@ -146,13 +146,13 @@ export function SiteNav({account,link,onHost=false,section=''}:{account:AccountV
 }
 export function SiteFooter(){
  return <footer className="site-footer">
-  <div className="site-footer-brand"><SiteBrand/><p>Broadcast-ready CS2 overlays, built on Game State Integration alone. Nothing is injected into the game and nothing is read out of its memory.</p></div>
+  <div className="site-footer-brand"><SiteBrand/><p>CS2 broadcast overlays for community tournaments and league nights.</p></div>
   <div className="site-footer-cols">
    <div><b>Product</b><a href="/welcome#product">What it does</a><a href="/welcome#scenes">Broadcast scenes</a><a href="/welcome#beta">Closed beta</a></div>
    <div><b>Operators</b><a href="/login">Sign in</a><a href="/download">Download</a><a href="/apply">Apply for access</a></div>
    <div><b>Account</b><a href="/profile">User profile</a><a href="/admin">Owner dashboard</a><a href="/privacy">Privacy</a></div>
   </div>
-  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><span className="site-footer-principles"><span className="status-dot"/>GSI only<i/>No injection<i/>No memory reading</span><a href="/privacy">What we collect, and what we never do</a></div>
+  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><a href="/privacy">Privacy</a></div>
  </footer>;
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
@@ -180,12 +180,12 @@ function Notice({tone='bad',children}:{tone?:'bad'|'ok'|'warn';children:React.Re
 //   - the closed-beta flow is untouched: apply, a human reads it, an invite sets your password, the
 //     download page hands over the installer, and the app itself is the dashboard.
 const FEATURES=[
- {icon:Radio,title:'Let the game tell the story',body:'Live scores, economy, kills and rounds, straight from CS2’s own game-state feed. Less manual work. More attention on the match.'},
- {icon:Monitor,title:'Every detail. Nothing in the way.',body:'A transparent HUD with the scoreboard, tactical radar, rosters and observed player. Built to complement the action, not cover it.'},
- {icon:Layers,title:'From first pick to final trophy',body:'Nine connected scenes take your broadcast from matchup and lineups to the break, round recap and series winner.'},
- {icon:Palette,title:'Your tournament. Your identity.',body:'Make it yours in Overlay Studio. Edit teams, colours, rosters and individual layers while every output stays in sync.'},
- {icon:Users,title:'Give everyone their own seat',body:'Owner, producer, designer and viewer roles keep your crew in sync, without sharing a single all-access password.'},
- {icon:Gamepad2,title:'Less setup. More showtime.',body:'One Windows launcher brings the host, panel, overlay and CS2 config together. No separate runtime or build tools to install.'},
+ {icon:Radio,title:'Driven by the game',body:'Scores, economy, kills and round state come straight from CS2. Nobody has to update the scoreboard by hand between rounds.'},
+ {icon:Monitor,title:'A HUD that leaves room for the game',body:'Scoreboard, radar, rosters and the observed player, laid out around the action instead of on top of it.'},
+ {icon:Layers,title:'Scenes for the whole show',body:'Matchup, lineups, map series, bracket, break screen, round recap, player stats and the series winner, alongside the live HUD.'},
+ {icon:Palette,title:'Your colours and logos',body:'Change team names, colours, rosters and individual layers in Overlay Studio. Every output picks up the change straight away.'},
+ {icon:Users,title:'Logins for the whole crew',body:'Owner, producer, designer and viewer roles, each with their own account. No more passing one admin password around the group chat.'},
+ {icon:Gamepad2,title:'One installer',body:'The Windows launcher sets up the host, the panel, the overlay and the CS2 config file. You don’t need Node or any build tools.'},
 ];
 // Whatever is in public/thumbs/site/ is what the page shows: the same nine included maps the
 // broadcast scenes use, resized once for the web (see public/thumbs/README.txt). The showcase is a
@@ -204,25 +204,25 @@ export const MAP_POOL=[
 ];
 const STEPS=[
  {title:'Apply',body:'Tell us who you are and what you broadcast. The application takes about a minute.'},
- {title:'We review it',body:'A human reads every application. Approved applicants receive a single-use email invitation to set a password.'},
- {title:'Download the app',body:'Your download page carries the Windows installer: host, dashboard, overlay settings and the GSI config, with its own bundled runtime.'},
- {title:'Link it and go live',body:'The launcher shows an 8-character code. Approve it in the SCOUT app once, then paste its /obs address into OBS.'},
+ {title:'We read it',body:'Someone on the team reads every application. If it’s a fit, you get an email invite to set your password.'},
+ {title:'Install SCOUT',body:'Your download page has the Windows installer. It includes the host, the dashboard, the overlay and the CS2 config file.'},
+ {title:'Add it to OBS',body:'The launcher shows an 8-character code. Approve it once, then add the /obs address to OBS as a browser source.'},
 ];
 const FAQ=[
- ['Is SCOUT free during the beta?','Yes. The closed beta is free for the organisers we admit. Paid tiers, if they ever exist, will be about hosted services — the overlay itself runs on your machine.'],
- ['What does “GSI only” actually mean?','SCOUT never touches the game process. CS2 writes a text feed of the match to a local URL; SCOUT reads that, derives kills, rounds and economy, and renders the overlay. No injection, no memory reading, no game hooks, no chroma key.'],
- ['Do I need a second PC?','It helps, but it is not required. The launcher runs on the observer PC and OBS can be on the same machine. If you do have a broadcast PC, the panel and the overlay are reachable from it over your own network.'],
- ['Does it work on FACEIT, ESEA or workshop maps?','GSI is a game feature, so it works wherever CS2 runs with the config installed — including workshop maps. Radar calibration for a custom map is a config entry, not a code change.'],
- ['What happens to my data?','Match data, uploads and recordings never leave your machine. The website stores the account you applied with, and the launcher link — nothing about the matches you broadcast.'],
+ ['Is SCOUT free during the beta?','Yes. If we ever charge for something it will be hosted extras. The overlay itself runs on your own PC.'],
+ ['Where does the match data come from?','CS2 has a built-in feature called Game State Integration that sends match data to a local address. SCOUT listens there and works out kills, rounds and economy from it.'],
+ ['Do I need a second PC?','No, but it helps. The launcher runs on the observer PC and OBS can run there too. If you have a separate streaming PC, it can open the panel and the overlay over your local network.'],
+ ['Does it work on FACEIT, ESEA or workshop maps?','It works anywhere CS2 runs with the config file installed, workshop maps included. A custom map needs one radar entry in the config.'],
+ ['What happens to my data?','Match data, uploads and recordings stay on your PC. The website only keeps your account and the launchers you’ve linked. The privacy page has the details.'],
 ];
 // The engineering, deliberately below the product story. Someone choosing an overlay for their cup
 // needs to know it will not touch the game; someone wiring OBS at 2am needs the port and the rules.
 const UNDER_THE_HOOD=[
- {icon:ShieldCheck,title:'GSI only, by architecture',body:'CS2 pushes its own game state to a local HTTP feed; SCOUT reads that and nothing else — no injection, no memory reading, no hooks, nothing for an anti-cheat to look at.'},
- {icon:Monitor,title:'Wired into OBS, not into the game',body:'One Browser Source on /obs at 1920 × 1080, no custom CSS, and the live scene is transparent. Optional two-way scene switching with OBS Studio over obs-websocket keeps your OBS scene and the broadcast scene together.'},
- {icon:SlidersHorizontal,title:'Radar calibration per map',body:'posX, posY and scale live per map in config/radars.json, measured once in Map radars. The nine included maps ship pre-filled from the cs2-map-icons pack; a custom map is a drop-in file, not a code change.'},
- {icon:Users,title:'Several operators, one broadcast',body:'Per-operator tokens, a 45-second control lease that stops two people driving at once, and an audit trail of who switched what and when.'},
- {icon:ArchiveIcon,title:'Recording, archives and replay',body:'GSI recording, round-by-round archives and replay previews, stored on the observer machine. Nothing is uploaded to us.'},
+ {icon:Radio,title:'Built on Game State Integration',body:'CS2 posts its game state to a local HTTP endpoint. SCOUT reads that feed and builds every scene from it.'},
+ {icon:Monitor,title:'One browser source in OBS',body:'Point a Browser Source at /obs at 1920 × 1080 with no custom CSS. The live scene is transparent. If you turn on obs-websocket, switching scenes in SCOUT can switch them in OBS too, and the other way round.'},
+ {icon:SlidersHorizontal,title:'Radar calibration per map',body:'Each map’s posX, posY and scale live in config/radars.json, and you can measure them in Map radars. The nine included maps come pre-filled. A custom map is one more entry in that file.'},
+ {icon:Users,title:'Several operators at once',body:'Each operator has their own token. A 45-second control lease stops two people switching scenes at the same moment, and the audit log shows who changed what.'},
+ {icon:ArchiveIcon,title:'Recording and replays',body:'Record the game feed, keep round-by-round archives and preview replays. All of it is saved on the observer PC.'},
 ];
 export function LandingPage(){
  const {status,offline,failure}=useBetaStatus();
@@ -258,9 +258,9 @@ export function LandingPage(){
     <div className="landing-hero-aura" aria-hidden="true"/>
     <img className="site-hero-bg" src="/assets/cs2.png" alt="" aria-hidden="true"/>
     <div className="landing-hero-copy">
-     <a className="site-eyebrow" href="/apply"><span className="site-eyebrow-dot"/>THE CLOSED BETA IS OPEN<span className="eyebrow-divider"/><span>Get early access</span><ArrowUpRight size={13}/></a>
-     <h1 className="site-h1" id="hero-heading">Small crew.<br/>Big <em>broadcast energy.</em></h1>
-     <p className="site-lead"><b>A better broadcast for every CS2 tournament.</b> Turn one observer PC into a complete CS2 broadcast — live overlays, beautiful scenes and total control, working with the CS2 and OBS setup you already have.</p>
+     <a className="site-eyebrow" href="/apply"><span className="site-eyebrow-dot"/>CLOSED BETA<span className="eyebrow-divider"/><span>Applications open</span><ArrowUpRight size={13}/></a>
+     <h1 className="site-h1" id="hero-heading">A proper CS2 broadcast, <em>run from one PC.</em></h1>
+     <p className="site-lead">SCOUT reads the match straight from CS2 and turns it into a live HUD, scoreboards and between-round scenes that you add to OBS as a browser source. We built it for community cups and league nights, where the production crew is often two people.</p>
      <div className="site-cta">
       {account?.status==='approved'
        ?<a className="button primary" href="/download">Get SCOUT<ArrowUpRight size={17}/></a>
@@ -269,43 +269,33 @@ export function LandingPage(){
         :<a className="button primary" href="/apply">Join the Closed Beta<ArrowUpRight size={17}/></a>}
       <a className="button landing-demo-link" href="#scenes"><span className="landing-play"><Play size={12} fill="currentColor"/></span>Explore the live demo</a>
      </div>
-     <div className="landing-hero-note"><span><Check size={13}/>Free during closed beta</span><span><Check size={13}/>Built for community organisers</span></div>
-     <p className="site-requirements"><span className="site-requirements-label">READY FOR YOUR SETUP</span>Windows 10 or 11 (x64)<i/>Counter-Strike 2<i/>OBS Studio<br/>The installer bundles its own runtime. Nothing else to install.</p>
+     <p className="site-requirements"><span className="site-requirements-label">YOU’LL NEED</span>Windows 10 or 11 (x64)<i/>Counter-Strike 2<i/>OBS Studio<br/>The installer bundles its own runtime. Free during the beta.</p>
     </div>
     <div className="site-hero-art">
      <div className="landing-preview-bar"><span className="landing-window-dots"><i/><i/><i/></span><span><ScoutMark size={12}/>SCOUT BROADCAST</span><span className="landing-live"><span/>DEMO FEED</span></div>
      <HudStage scene="live" className="site-stage site-stage-hero"/>
      <div className="landing-preview-bottom"><span><span className="status-dot"/>OBS browser source</span><span>1920 × 1080 <span className="landing-preview-separator">/</span> Sample GSI feed <Check size={12}/></span></div>
-     <div className="landing-floating-label"><span className="landing-float-icon"><Radio size={19}/></span><span><b>Less juggling. More broadcasting.</b><small>One panel. Every scene. Your show.</small></span><CircleCheck size={19}/></div>
-     <p className="site-stage-caption">Real overlay renderer. Sample match data. Not a mockup.</p>
+     <p className="site-stage-caption">The actual overlay, playing a sample match.</p>
     </div>
-    <a className="landing-scroll" href="#product"><span>THE BROADCAST STARTS HERE</span><ChevronDown size={15}/></a>
    </section>
-   <section className="site-strip">
-    <span><ShieldCheck size={15}/>No injection, no memory reading</span>
-    <span><Monitor size={15}/>Runs beside the game, never inside it</span>
-    <span><Radio size={15}/>One output, nine scenes</span>
-    <span><Wifi size={15}/>Your LAN, no cloud round-trip</span>
-   </section>
-   <section className="landing-proof" aria-label="Built for your broadcast workflow">
-    <p>YOUR EXISTING SETUP. A WHOLE NEW PRODUCTION.</p>
+   <section className="landing-proof" aria-label="Works with">
+    <p>WORKS WITH</p>
     <div className="landing-integrations"><span><i className="landing-brand-icon landing-cs2-icon" aria-hidden="true"/>Counter-Strike 2</span><span><i className="landing-brand-icon landing-obs-icon" aria-hidden="true"/>OBS Studio</span><span><i className="landing-brand-icon landing-streamlabs-icon" aria-hidden="true"/>Streamlabs</span><span><svg width="23" height="23" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2 3l9-1v9H2zm11-1l9-1v10h-9zM2 13h9v9l-9-1zm11 0h9v10l-9-1z"/></svg>Windows</span><span><Radio size={25}/>Game State Integration</span></div>
-    <div className="landing-product-facts"><div><b>9</b><span>broadcast scenes</span></div><div><b>1</b><span>operator panel</span></div><div><b>100<span>%</span></b><span>locally rendered</span></div><div><b>0</b><span>game injections</span></div></div>
     <PublicStats/>
    </section>
    <section className="site-section" id="product">
     <img loading="lazy" decoding="async" className="site-scatter scatter-ak" src="/assets/ak-47.png" alt="" aria-hidden="true"/>
-    <div className="site-section-head"><span className="site-section-eyebrow">WHAT IT DOES</span><h2>A full production.<br/>Not a full production team.</h2><p>All the essentials for a broadcast that feels bigger than your crew. No patchwork of tools. No scrambling between rounds.</p></div>
+    <div className="site-section-head"><h2>What you get</h2><p>The overlay, the scenes between rounds and a panel to run it all from. It’s one app instead of five browser tabs and a spreadsheet.</p></div>
     <div className="site-grid">{FEATURES.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
     <div className="site-layers">
      <b>On the live HUD</b>
      <div className="site-layer-chips">{liveLayers.map(widget=><span key={widget.id}>{widget.name}</span>)}</div>
-     <small>{liveLayers.length} layers, each one switched on or off from the panel while the round is running — four of them only appear when the game calls for them. The names are the Overlay Studio's own.</small>
+     <small>{liveLayers.length} layers. Each one can be switched on or off from the panel mid-round, and four of them only show up when the game needs them.</small>
     </div>
    </section>
    <section className="site-section site-tour" id="scenes">
     <img loading="lazy" decoding="async" className="site-scatter scatter-t" src="/assets/cs2-t.png" alt="" aria-hidden="true"/>
-    <div className="site-section-head"><span className="site-section-eyebrow">BROADCAST SCENES</span><h2>Every moment has its scene.</h2><p>From the opening matchup to the winning moment. Pick a scene below and explore the actual broadcast renderer, powered by sample match data.</p></div>
+    <div className="site-section-head"><h2>The scenes</h2><p>Click through them below. This is the real renderer running on sample data, so it’s exactly what goes out on stream.</p></div>
     <div className="site-tour-grid">
      <div className="site-tour-frame" aria-label={`${active.title} scene preview`}>
       <HudStage scene={active.id} className="site-stage site-stage-tour"/>
@@ -325,7 +315,7 @@ export function LandingPage(){
    </section>
    <section className="site-section site-maps" id="maps">
     <img loading="lazy" decoding="async" className="site-scatter scatter-m4" src="/assets/m4a1-s.png" alt="" aria-hidden="true"/>
-    <div className="site-section-head"><span className="site-section-eyebrow">THE MAP POOL</span><h2>Familiar battlegrounds.<br/>A fresh perspective.</h2><p>From Mirage to Ancient, your map graphics are already in the box. Nine map images and calibrated radars, ready for your next series.</p></div>
+    <div className="site-section-head"><h2>Nine maps included</h2><p>Each one comes with artwork for the map scenes and a calibrated radar. Adding a workshop map takes one config entry.</p></div>
     <div className={`site-map-strip${showAllMaps?' expanded':''}`}>{MAP_POOL.slice(0,showAllMaps?MAP_POOL.length:4).map(map=><figure className="site-map-chip" key={map.file}>
      <img src={`/thumbs/site/${map.file}.jpg`} alt={`${map.label} overview`} width={640} height={360} loading="lazy" decoding="async"/>
      <figcaption><span><small>{map.file.replace('de_','DE / ').toUpperCase()}</small><b>{map.label}</b></span><ArrowUpRight size={17}/></figcaption>
@@ -335,27 +325,27 @@ export function LandingPage(){
     </button>
    </section>
    <section className="site-section landing-benefits" id="benefits">
-    <div className="site-section-head"><span className="site-section-eyebrow">MADE FOR THE PEOPLE BEHIND THE MATCH</span><h2>You bring the competition.<br/>We’ll bring the production tools.</h2><p>For the organisers, observers and small crews making great Counter-Strike happen. This is your seat at the production desk.</p></div>
+    <div className="site-section-head"><h2>Who it’s for</h2><p>Mostly people running community events, usually with fewer hands than they’d like.</p></div>
     <div className="landing-benefit-grid">
-     <article className="landing-benefit"><div className="landing-benefit-art"><img src="/assets/cs2-t.png" alt="" loading="lazy" decoding="async"/><span>01 / ORGANISERS</span></div><h3>Give your event its own identity.</h3><p>Your teams, your colours, your bracket. Build a cohesive broadcast from the first matchup to the final score.</p><a href="/apply">Make it your show<ArrowUpRight size={15}/></a></article>
-     <article className="landing-benefit"><div className="landing-benefit-art"><img src="/assets/cs2-ct.png" alt="" loading="lazy" decoding="async"/><span>02 / OBSERVERS</span></div><h3>Stay focused on the next play.</h3><p>The game feed drives the HUD automatically, so you can keep your eyes on the action that matters.</p><a href="#scenes">Explore the scenes<ArrowUpRight size={15}/></a></article>
-     <article className="landing-benefit"><div className="landing-benefit-art"><img src="/assets/oceanic-deag.png" alt="" loading="lazy" decoding="async"/><span>03 / BROADCAST CREWS</span></div><h3>Less tool-switching. More teamwork.</h3><p>A shared panel, dedicated roles and synced outputs. Everyone gets the controls they need to run the show.</p><a href="#how">See how it works<ArrowUpRight size={15}/></a></article>
+     <article className="landing-benefit"><div className="landing-benefit-art"><img src="/assets/cs2-t.png" alt="" loading="lazy" decoding="async"/><span>01 / ORGANISERS</span></div><h3>Make it look like your event</h3><p>Your team names, colours and bracket on every scene, from the first matchup to the trophy.</p><a href="/apply">Apply for the beta<ArrowUpRight size={15}/></a></article>
+     <article className="landing-benefit"><div className="landing-benefit-art"><img src="/assets/cs2-ct.png" alt="" loading="lazy" decoding="async"/><span>02 / OBSERVERS</span></div><h3>Watch the game, not the overlay</h3><p>The HUD updates from the game on its own, so the observer can stay on the action.</p><a href="#scenes">See the scenes<ArrowUpRight size={15}/></a></article>
+     <article className="landing-benefit"><div className="landing-benefit-art"><img src="/assets/oceanic-deag.png" alt="" loading="lazy" decoding="async"/><span>03 / BROADCAST CREWS</span></div><h3>Split the work</h3><p>One shared panel with separate roles, so the producer and the designer can work at the same time without getting in each other’s way.</p><a href="#how">How it works<ArrowUpRight size={15}/></a></article>
     </div>
    </section>
    <section className="site-section" id="beta">
-    <div className="site-section-head"><span className="site-section-eyebrow">CLOSED BETA</span><h2>From application to on air.</h2><p>We are admitting a small number of organisers at a time so every deployment is supported properly. Applications are reviewed by hand.</p></div>
+    <div className="site-section-head"><h2>How to get in</h2><p>We’re letting people in a few at a time, so we can actually help each of them get set up.</p></div>
     <div className="site-steps">{STEPS.map((step,index)=><div className="site-step" key={step.title}><span className="site-step-index">{index+1}</span><b>{step.title}</b><p>{step.body}</p></div>)}</div>
     <div className="site-beta-cta">
-     <div><b>Applications are open</b><p>Windows 10/11 (x64), Counter-Strike 2, and OBS Studio if you are streaming. The installer bundles its own runtime — no Node.js, no build tools.</p></div>
+     <div><b>Applications are open</b><p>You’ll need Windows 10 or 11 (64-bit), CS2, and OBS if you’re streaming.</p></div>
      <a className="button primary" href="/apply">Start your application<ArrowRight size={14}/></a>
     </div>
    </section>
    <section className="site-section site-how" id="how">
     <img loading="lazy" decoding="async" className="site-scatter scatter-ct" src="/assets/cs2-ct.png" alt="" aria-hidden="true"/>
-    <div className="site-section-head"><span className="site-section-eyebrow">UNDER THE HOOD</span><h2>How the overlay actually works</h2><p>The detail a technical lead asks about before anything gets installed on a tournament machine.</p></div>
+    <div className="site-section-head"><h2>Technical details</h2><p>For whoever is setting up the observer PC.</p></div>
     <div className="site-how-grid">{UNDER_THE_HOOD.map(({icon:Icon,title,body})=><article className="site-card" key={title}><span className="site-card-icon"><Icon size={17}/></span><h3>{title}</h3><p>{body}</p></article>)}</div>
     <div className="site-panel-map">
-     <div><b>Inside the operator panel</b><p>{PANEL_SECTIONS.length} sections, one for every job a broadcast has — and the panels marked <em>owner</em> only open for the account that owns the installation.</p></div>
+     <div><b>Inside the operator panel</b><p>{PANEL_SECTIONS.length} sections. The ones marked <em>owner</em> are only visible to the account that owns the install.</p></div>
      <div className="site-panel-chips">{PANEL_SECTIONS.map(({name,icon:Icon,ownerOnly})=><span key={name}><Icon size={13}/>{name}{ownerOnly&&<em>owner</em>}</span>)}</div>
     </div>
    </section>
@@ -364,20 +354,17 @@ export function LandingPage(){
     <div className="site-host-actions"><a className="button" href="/">Open the operator panel<ArrowUpRight size={14}/></a><a className="button" href="/obs" target="_blank" rel="noreferrer">Preview the overlay<ArrowUpRight size={14}/></a></div>
    </section>}
    <section className="site-section landing-pricing" id="pricing">
-    <div className="site-section-head"><span className="site-section-eyebrow">SMALL CREW. SMALLER BARRIER TO ENTRY.</span><h2>Your next broadcast.<br/>On us, during the beta.</h2><p>We’re opening access a few organisers at a time. Help shape SCOUT around real events, real workflows, and the details that matter on match day.</p><div className="landing-pricing-note"><ShieldCheck size={20}/><span>The overlay runs on your machine.<br/><b>Your match data stays there, too.</b></span></div></div>
-    <article className="landing-price"><div className="landing-price-top"><span>SCOUT CLOSED BETA</span><span className="landing-price-badge">EARLY ACCESS</span></div><div className="landing-price-value">€0<span>/ during closed beta</span></div><p>A complete broadcast toolkit. A chance to shape what’s next.</p><ul>{['Live HUD + eight full-canvas scenes','Overlay Studio & team customisation','Nine included maps & calibrated radars','Multi-operator roles & local recording','Windows launcher with bundled runtime'].map(item=><li key={item}><Check size={16}/>{item}</li>)}</ul><a className="button primary" href="/apply">Apply for free access<ArrowUpRight size={16}/></a><small>Human-reviewed applications. Access by invitation.<br/>No paid plans are currently offered.</small></article>
-   </section>
-   <section className="site-section landing-feedback" id="community" aria-labelledby="feedback-heading">
-    <span className="landing-feedback-icon"><Quote size={24}/></span><div><span className="site-section-eyebrow">THE NEXT CHAPTER IS YOURS</span><h2 id="feedback-heading">Built with organisers.<br/>Not just for them.</h2><p>SCOUT is in closed beta. We’re gathering real event feedback before sharing customer stories. Bring your next tournament, tell us what works, and help shape what comes next.</p></div><a className="button" href="/apply">Be part of the beta<ArrowUpRight size={15}/></a>
+    <div className="site-section-head"><h2>Free during the beta</h2><p>We’re not charging anything while SCOUT is in closed beta. In return, we’d like to hear what breaks and what’s missing after your events.</p></div>
+    <article className="landing-price"><div className="landing-price-top"><span>SCOUT CLOSED BETA</span><span className="landing-price-badge">EARLY ACCESS</span></div><div className="landing-price-value">€0<span>/ during closed beta</span></div><p>Everything that’s built so far.</p><ul>{['Live HUD + eight full-canvas scenes','Overlay Studio & team customisation','Nine included maps & calibrated radars','Multi-operator roles & local recording','Windows launcher with bundled runtime'].map(item=><li key={item}><Check size={16}/>{item}</li>)}</ul><a className="button primary" href="/apply">Apply for free access<ArrowUpRight size={16}/></a><small>Human-reviewed applications. Access by invitation.<br/>No paid plans are currently offered.</small></article>
    </section>
    <section className="site-section" id="faq">
-    <div className="site-section-head"><span className="site-section-eyebrow">FAQ</span><h2>Good questions.<br/>Straight answers.</h2></div>
+    <div className="site-section-head"><h2>FAQ</h2></div>
     <div className="site-faq">{FAQ.map(([question,answer])=><details key={question}><summary>{question}<ChevronRight size={15}/></summary><p>{answer}</p></details>)}</div>
    </section>
    <section className="site-final">
     <img loading="lazy" decoding="async" className="site-scatter scatter-de" src="/assets/oceanic-deag.png" alt="" aria-hidden="true"/>
-    <span className="site-section-eyebrow">YOUR NEXT MATCH DESERVES THIS</span><h2>Big moments.<br/><em>Broadcast beautifully.</em></h2>
-    <p>From a community cup to your next league night. Bring your tournament to life with SCOUT.</p>
+    <h2>Running a tournament <em>soon?</em></h2>
+    <p>Send us an application and tell us a bit about your event.</p>
     <div className="site-cta center"><a className="button primary" href="/apply">Apply for the closed beta<ArrowRight size={14}/></a><a className="button" href="/login">I already have an account</a></div>
    </section>
   </main>
@@ -459,7 +446,7 @@ export function ApplyPage(){
      <p className="site-fineprint">We only use this to review your application and to reach you about the beta. No newsletter, no resale.</p>
     </form>
     <aside className="site-apply-aside">
-     <div className="site-card"><h3>What happens next</h3><ol className="site-ol"><li>A human reads the application.</li><li>Approved applicants get a one-time invite link.</li><li>The link sets your password and opens your download page.</li><li>The installed app holds the dashboard, tournaments and every overlay setting.</li></ol></div>
+     <div className="site-card"><h3>What happens next</h3><ol className="site-ol"><li>Someone on the team reads it.</li><li>Approved applicants get a one-time invite link.</li><li>The link sets your password and opens your download page.</li><li>The installed app holds the dashboard, tournaments and every overlay setting.</li></ol></div>
      <div className="site-card"><h3>What you need</h3><ul className="site-ul"><li>Windows 10 or 11, 64-bit</li><li>Counter-Strike 2 on the same machine</li><li>OBS Studio (or the SCOUT shell) for the output</li><li>Nothing else — the installer bundles its own runtime</li></ul></div>
      <button className="site-reload" onClick={()=>void reload()}><RefreshCw size={13}/>Recheck this host</button>
     </aside>

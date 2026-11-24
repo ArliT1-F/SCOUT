@@ -25,7 +25,7 @@ test('every site route has document metadata, and only public pages may be index
 
 test('the landing hero carries the recommended message and CTAs that lead somewhere real',()=>{
  const html=clean(renderToString(createElement(LandingPage)));
- assert.match(html,/A better broadcast for every CS2 tournament/,'the recommended primary message is on the first screen');
+ assert.match(html,/A proper CS2 broadcast/,'the primary message is on the first screen');
  assert.match(html,/Join the Closed Beta/,'the primary action names the closed beta');
  assert.match(html,/href="\/apply"/);
  assert.match(html,/href="#scenes"/,'the demo link jumps to the real scene tour, not a dead video');

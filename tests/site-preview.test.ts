@@ -49,7 +49,7 @@ test('every scene the tour offers is a scene the product renders',()=>{
 });
 
 test('the hero says what an applicant needs on the same line as the call to action',()=>{
- const hero=page.slice(page.indexOf('site-hero'),page.indexOf('site-strip'));
+ const hero=page.slice(page.indexOf('site-hero'),page.indexOf('landing-proof'));
  for(const need of ['Windows 10 or 11','Counter-Strike 2','OBS Studio','bundles its own runtime']) assert.ok(hero.includes(need),`the hero states: ${need}`);
  assert.ok(hero.indexOf('site-cta')<hero.indexOf('site-requirements'),'the requirements sit under the buttons, not somewhere else on the page');
 });
@@ -83,6 +83,6 @@ test('the engineering detail sits below the product story',()=>{
   assert.ok(at>cursor,`${marker} comes after the section before it`);
   cursor=at;
  }
- const hood=page.slice(page.indexOf('UNDER THE HOOD'));
- for(const detail of ['GSI only, by architecture','no memory reading','1920 × 1080','no custom CSS','obs-websocket','config/radars.json','control lease']) assert.ok(hood.includes(detail),`the technical claim lives under the hood: ${detail}`);
+ const hood=page.slice(page.indexOf('id="how"'));
+ for(const detail of ['Built on Game State Integration','1920 × 1080','no custom CSS','obs-websocket','config/radars.json','control lease']) assert.ok(hood.includes(detail),`the technical claim lives under the hood: ${detail}`);
 });
