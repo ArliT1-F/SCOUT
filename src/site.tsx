@@ -289,7 +289,7 @@ export function LandingPage(){
    </section>
    <section className="landing-proof" aria-label="Built for your broadcast workflow">
     <p>YOUR EXISTING SETUP. A WHOLE NEW PRODUCTION.</p>
-    <div className="landing-integrations"><span><i className="landing-cs2-icon" aria-hidden="true"/>Counter-Strike 2</span><span><Monitor size={25}/>OBS Studio</span><span><svg width="23" height="23" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2 3l9-1v9H2zm11-1l9-1v10h-9zM2 13h9v9l-9-1zm11 0h9v10l-9-1z"/></svg>Windows</span><span><Radio size={25}/>Game State Integration</span></div>
+    <div className="landing-integrations"><span><i className="landing-brand-icon landing-cs2-icon" aria-hidden="true"/>Counter-Strike 2</span><span><i className="landing-brand-icon landing-obs-icon" aria-hidden="true"/>OBS Studio</span><span><i className="landing-brand-icon landing-streamlabs-icon" aria-hidden="true"/>Streamlabs</span><span><svg width="23" height="23" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2 3l9-1v9H2zm11-1l9-1v10h-9zM2 13h9v9l-9-1zm11 0h9v10l-9-1z"/></svg>Windows</span><span><Radio size={25}/>Game State Integration</span></div>
     <div className="landing-product-facts"><div><b>9</b><span>broadcast scenes</span></div><div><b>1</b><span>operator panel</span></div><div><b>100<span>%</span></b><span>locally rendered</span></div><div><b>0</b><span>game injections</span></div></div>
     <PublicStats/>
    </section>
