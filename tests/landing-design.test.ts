@@ -30,7 +30,7 @@ test('the landing structure covers discovery, product, benefits, access, pricing
  assert.match(page,/href="#main-content"/);
  assert.match(page,/id="main-content" tabindex="-1"/);
  assert.match(page,/No paid plans are currently offered/);
- assert.match(page,/Sample GSI feed/);
+ assert.match(page,/Sample match/);
  assert.equal(/testimonial|customer stories|<blockquote/i.test(page),false,'do not invent beta testimonials');
 });
 

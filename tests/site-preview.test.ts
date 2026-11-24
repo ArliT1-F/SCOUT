@@ -57,7 +57,7 @@ test('the hero says what an applicant needs on the same line as the call to acti
 test('the sections and layer names on the page are the panel’s own',()=>{
  // React escapes the ampersand in names like "Teams & players"; compare the text as rendered.
  const escaped=(text:string)=>text.replace(/&/g,'&amp;');
- for(const section of PANEL_SECTIONS) assert.ok(page.includes(escaped(section.name)),`the panel has a ${section.name} section, so the page may name it`);
+ for(const section of PANEL_SECTIONS.filter(section=>!section.ownerOnly)) assert.ok(page.includes(escaped(section.name)),`the panel has a ${section.name} section, so the page may name it`);
  for(const widget of DEFAULT_WIDGETS.filter(widget=>widget.showOn.includes('live'))) assert.ok(page.includes(widget.name),`the live HUD layer ${widget.name} is named the way the Overlay Studio names it`);
 });
 
@@ -84,5 +84,5 @@ test('the engineering detail sits below the product story',()=>{
   cursor=at;
  }
  const hood=page.slice(page.indexOf('id="how"'));
- for(const detail of ['Built on Game State Integration','1920 × 1080','no custom CSS','obs-websocket','config/radars.json','control lease']) assert.ok(hood.includes(detail),`the technical claim lives under the hood: ${detail}`);
+ for(const detail of ['CS2’s own match feed','1920 × 1080','browser source','Map radars','one person can switch scenes']) assert.ok(hood.includes(detail),`the technical claim lives under the hood: ${detail}`);
 });

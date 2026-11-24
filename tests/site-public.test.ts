@@ -60,7 +60,7 @@ test('the privacy page is the analytics contract: allowlisted events, no third-p
  assert.match(html,/Deletion/i,'deletion is explained');
  assert.match(html,/Retention/i,'retention is explained');
  for(const row of ANALYTICS_EVENT_ALLOWLIST){
-  assert.ok(html.includes(row.event),`${row.event} is documented`);
+  assert.ok(html.includes(row.label)&&html.includes(row.why),`${row.event} is documented in plain language`);
   assert.equal(row.collected,false,`${row.event} is not collected while no analytics backend exists — flip this only with the backend`);
  }
  assert.match(html,/not collected/);
