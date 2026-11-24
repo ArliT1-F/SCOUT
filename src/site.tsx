@@ -152,7 +152,7 @@ export function SiteFooter(){
    <div><b>Operators</b><a href="/login">Sign in</a><a href="/download">Download</a><a href="/apply">Apply for access</a></div>
    <div><b>Account</b><a href="/profile">Your profile</a><a href="/privacy">Privacy</a></div>
   </div>
-  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span><a href="/privacy">Privacy</a></div>
+  <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span></div>
  </footer>;
 }
 function OfflineBanner({children}:{children:React.ReactNode}){return <div className="site-offline"><Wifi size={14}/><span>{children}</span></div>}
@@ -248,6 +248,19 @@ export function LandingPage(){
    node.classList.add('reveal-ready');observer.observe(node);
   });
   return()=>observer.disconnect();
+ },[]);
+ // A soft light that follows the pointer across cards. Mouse only, and off for reduced motion.
+ useEffect(()=>{
+  const root=landingRef.current;
+  if(!root||!window.matchMedia('(pointer: fine)').matches||window.matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  const move=(event:PointerEvent)=>{
+   const card=(event.target as HTMLElement).closest?.('.site-card,.landing-price,.site-map-chip') as HTMLElement|null;
+   if(!card)return;
+   const box=card.getBoundingClientRect();
+   card.style.setProperty('--mx',`${event.clientX-box.left}px`);card.style.setProperty('--my',`${event.clientY-box.top}px`);
+  };
+  root.addEventListener('pointermove',move,{passive:true});
+  return()=>root.removeEventListener('pointermove',move);
  },[]);
  return <div className="site landing" ref={landingRef}>
   <a className="landing-skip" href="#main-content">Skip to content</a>
@@ -358,7 +371,7 @@ export function LandingPage(){
     <article className="landing-price"><div className="landing-price-top"><span>SCOUT CLOSED BETA</span><span className="landing-price-badge">EARLY ACCESS</span></div><div className="landing-price-value">€0<span>/ during closed beta</span></div><p>Everything that’s built so far.</p><ul>{['Live HUD + eight full-canvas scenes','Overlay Studio & team customisation','Nine included maps & calibrated radars','Multi-operator roles & local recording','Windows launcher with bundled runtime'].map(item=><li key={item}><Check size={16}/>{item}</li>)}</ul><a className="button primary" href="/apply">Apply for free access<ArrowUpRight size={16}/></a><small>Human-reviewed applications. Access by invitation.<br/>No paid plans are currently offered.</small></article>
    </section>
    <section className="site-section" id="faq">
-    <div className="site-section-head"><h2>FAQ</h2></div>
+    <div className="site-section-head"><h2>FAQ</h2><p>Something we didn’t cover? Ask in your application and we’ll answer it.</p></div>
     <div className="site-faq">{FAQ.map(([question,answer])=><details key={question}><summary>{question}<ChevronRight size={15}/></summary><p>{answer}</p></details>)}</div>
    </section>
    <section className="site-final">

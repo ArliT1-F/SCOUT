@@ -282,6 +282,69 @@
 @keyframes landing-enter{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
 .landing-hero-copy>*{animation:landing-enter .8s ease both}
 .landing-hero-copy>h1{animation-delay:.08s}.landing-hero-copy>.site-lead{animation-delay:.16s}.landing-hero-copy>.site-cta{animation-delay:.24s}.landing-hero-copy>.landing-hero-note{animation-delay:.3s}.landing-hero-copy>.site-requirements{animation-delay:.34s}
+/* ---------- Presentation layer ----------
+   Light touches on top of the base design: section structure, a pointer-following glow, connected
+   steps, a lit pricing card and roomier body text. All CSS, no images. */
+.landing ::selection{background:#e594cf55;color:#fff}
+/* Section headings: a short accent rule replaces the old uppercase labels, and the title gets a
+   gentle white-to-pink fade so headings read as one family with the hero. */
+.landing .site-section-head h2{background:linear-gradient(100deg,#fbf7fc 30%,#eab8de 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.landing .site-section-head::before{content:'';display:block;width:34px;height:3px;border-radius:3px;margin-bottom:22px;background:linear-gradient(90deg,#e594cf,#b78ae8);box-shadow:0 0 14px #e594cf80}
+.landing #faq .site-section-head::before,.landing .landing-pricing .site-section-head::before{margin-bottom:22px}
+.landing .site-section-head>p{font-size:14px;line-height:1.85;color:#b3a6ba}
+/* Soft colour behind alternate sections so the page has rhythm instead of one flat black. */
+.landing #scenes,.landing #benefits,.landing #pricing{position:relative}
+.landing #scenes::after,.landing #benefits::after,.landing #pricing::after{content:'';position:absolute;z-index:-1;pointer-events:none;width:min(820px,80vw);height:520px;border-radius:50%;filter:blur(10px);opacity:.9}
+.landing #scenes::after{top:40px;left:-160px;background:radial-gradient(closest-side,#8a4f8a24,transparent)}
+.landing #benefits::after{top:0;right:-180px;background:radial-gradient(closest-side,#5b4fa022,transparent)}
+.landing #pricing::after{top:60px;right:-120px;background:radial-gradient(closest-side,#b05a9a26,transparent)}
+.landing .site-section+.site-section{border-top:0}
+/* Cards: a light that follows the pointer, and a brighter edge on hover. */
+.landing .site-card{position:relative}
+.landing .site-card::after,.landing .landing-price::after{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .35s;background:radial-gradient(320px circle at var(--mx,50%) var(--my,-40%),#e594cf1c,transparent 65%)}
+.landing .site-card:hover::after,.landing .landing-price:hover::after{opacity:1}
+.landing .site-card>*{position:relative;z-index:1}
+.landing .site-card-icon{background:linear-gradient(140deg,#e594cf26,#8f6ad21a);border-color:#e594cf38;color:#f0b5e2;box-shadow:0 6px 18px -8px #e594cf66;transition:transform .3s,box-shadow .3s}
+.landing .site-card:hover .site-card-icon{transform:translateY(-2px) scale(1.05);box-shadow:0 10px 24px -8px #e594cf99}
+.landing .site-card h3{font-size:15px;letter-spacing:-.2px}
+.landing .site-card p{font-size:13px;line-height:1.8;color:#a99caf}
+.landing .site-map-chip::before{content:'';position:absolute;inset:0;z-index:1;pointer-events:none;opacity:0;transition:opacity .35s;background:radial-gradient(260px circle at var(--mx,50%) var(--my,50%),#ffffff1a,transparent 70%)}
+.landing .site-map-chip:hover::before{opacity:1}
+.landing .site-map-chip figcaption{z-index:2}
+/* Steps: one line joins the four numbers, each number sits in a lit ring. */
+.landing .site-steps{position:relative}
+.landing .site-steps::before{content:'';position:absolute;top:17px;left:17px;right:12%;height:1px;background:linear-gradient(90deg,#e594cf80,#b78ae850 60%,transparent)}
+.landing .site-step{border-left:0;padding-left:0;position:relative}
+.landing .site-step-index{position:relative;border-radius:50%;background:#1a1320;border-color:#e594cf66;color:#f4c2e8;font-weight:600;box-shadow:0 0 0 5px #0c0b0f,0 0 18px #e594cf40}
+.landing .site-step b{font-size:15px}
+.landing .site-step p{font-size:13px;line-height:1.8;color:#a99caf}
+/* Pricing card: a slow light travels round the border. */
+@property --edge{syntax:'<angle>';inherits:false;initial-value:0deg}
+.landing .landing-price{border-color:transparent;background:radial-gradient(ellipse at 90% 0,#68455b40,transparent 65%) padding-box,linear-gradient(#18121c,#18121c) padding-box,conic-gradient(from var(--edge),#d38bb440,#f2b9e4 12%,#d38bb440 25%,#d38bb440 60%,#9f7be0aa 72%,#d38bb440 85%) border-box;animation:landing-edge 9s linear infinite}
+@keyframes landing-edge{to{--edge:360deg}}
+/* FAQ: readable sizes and a clear open state. */
+.landing .site-faq summary{font-size:15px;color:#eee3f2;transition:color .2s}
+.landing .site-faq summary:hover{color:#f7c9ea}
+.landing .site-faq details[open] summary{color:#f7c9ea}
+.landing .site-faq details[open] summary>svg{transform:rotate(90deg);color:#e594cf}
+.landing .site-faq summary>svg{transition:transform .25s}
+.landing .site-faq p{font-size:13.5px;line-height:1.85;color:#ad9fb5;max-width:620px}
+/* Hero: a little more glow under the preview window and a calmer, more readable lead. */
+.landing .site-hero-art::before{content:'';position:absolute;inset:8% 6% -6%;z-index:-1;border-radius:30px;background:radial-gradient(closest-side,#d77fc455,transparent);filter:blur(40px);pointer-events:none}
+.landing .site-lead{font-size:15.5px;line-height:1.8;color:#b9adc0}
+.landing .site-final h2{background:none;color:#f6f1f8}
+.landing .site-final{box-shadow:0 0 0 1px #e594cf14,0 40px 120px -40px #b0568f66}
+.landing .landing-benefit h3{font-size:16px}
+.landing .landing-benefit p{font-size:13px;line-height:1.8}
+.landing .site-layers>small,.landing .site-panel-map p{font-size:12px}
+.landing .site-layer-chips span,.landing .site-panel-chips span{transition:border-color .2s,color .2s,background .2s}
+.landing .site-layer-chips span:hover,.landing .site-panel-chips span:hover{border-color:#e594cf55;color:#f3d6ec;background:#e594cf10}
+.landing .site-scene-pick-text b{font-size:13px}
+.landing .site-scene-pick-text small{font-size:10.5px;color:#9d8ca6}
+.landing .site-beta-cta b{font-size:16px}
+.landing .site-beta-cta p{font-size:13px;color:#ab9db2}
+.landing .site-beta-cta{background:linear-gradient(120deg,#1d1522,#141017);border-color:#e594cf30}
+@media(max-width:980px){.landing .site-steps::before{display:none}.landing .site-step{padding-left:0!important}.landing .site-scene-pick-text b{font-size:11px}.landing .site-section-head>p{font-size:13px}}
 @media(min-width:1500px){.landing .site-hero{max-width:1440px;gap:75px;padding-left:80px;padding-right:80px;min-height:760px}.landing .site-h1{font-size:78px}}
 @media(max-width:1150px){.landing .site-nav{gap:24px;padding:16px 26px}.landing .site-nav-links{gap:18px}.landing .site-nav-actions{gap:13px}.landing .site-hero{gap:30px;padding:75px 30px 100px;min-height:650px}.landing .site-h1{font-size:60px;letter-spacing:-3.2px}.landing .site-lead{font-size:13px}.landing .site-nav-actions .site-ghost-link:first-child:not(:last-child){font-size:10px}.landing .site-strip{gap:25px}.landing .landing-pricing{gap:60px}.landing .site-tour-grid{grid-template-columns:minmax(0,1fr) 210px}.landing .site-scene-picker button{padding:8px 10px}.landing .site-footer{column-gap:50px}.landing-integrations{gap:35px}}
 @media(max-width:980px){.landing .site-nav-links{display:none}.landing .site-menu-toggle{display:flex}.landing .site-nav{gap:16px;min-height:76px}.landing .site-nav-links.is-open{position:absolute;display:flex;flex-direction:column;top:100%;left:0;right:0;padding:18px 26px 25px;background:#151019fa;backdrop-filter:blur(24px);border-bottom:1px solid #e594cf30;box-shadow:0 20px 30px #0005;gap:0}.landing .site-nav-links.is-open a{padding:13px 0;font-size:14px}.landing .site-nav-links a::after{display:none}.landing .site-h1{font-size:52px;letter-spacing:-2.6px}.landing .site-hero{gap:25px;min-height:610px;padding-top:65px}.landing .site-eyebrow{font-size:7px;letter-spacing:.8px;gap:6px}.landing .site-eyebrow>span:nth-last-child(2){font-size:8px}.landing .site-hero-art{transform:none}.landing .landing-floating-label{left:12px;padding:12px;gap:9px}.landing-floating-label b{font-size:9px}.landing-floating-label>svg{display:none}.landing .site-cta{gap:5px}.landing .site-cta .button{font-size:11px;padding:12px 13px}.landing .site-section{padding-top:70px;padding-bottom:70px}.landing .site-tour-grid{grid-template-columns:1fr}.landing .site-scene-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.landing .site-scene-picker button{min-width:0}.landing .site-scene-pick-text small{display:none}.landing .site-scene-picker button>svg{margin-left:auto}.landing .site-grid,.landing .site-how-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.landing .site-how-grid .site-card:last-child{grid-column:span 2}.landing .site-layer-chips{flex-basis:100%}.landing .landing-pricing{gap:40px}.landing #faq{gap:45px}.landing .site-map-chip{aspect-ratio:1.8}.landing .site-section-head h2{font-size:38px}.landing .site-steps{grid-template-columns:repeat(2,minmax(0,1fr));gap:28px}.landing .site-beta-cta .button{margin-left:0}.landing .site-beta-cta{gap:20px}.landing .landing-benefits{padding-top:0}.landing-feedback{gap:20px!important}.landing-feedback-icon{display:none}.landing .landing-feedback>.button{font-size:11px}.landing-integrations{gap:25px}.landing-integrations>span{font-size:15px}}
