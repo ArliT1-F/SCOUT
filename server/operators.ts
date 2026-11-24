@@ -13,7 +13,8 @@ const credentialSchema=z.object({
  createdAt:z.number().int().nonnegative(),
  revokedAt:z.number().int().nonnegative().nullable().default(null),
 }).strip();
-export const operatorFileSchema=z.object({version:z.literal(1).default(1),operators:z.array(credentialSchema).max(128).default([])}).strip();
+export const MAX_OPERATOR_RECORDS=128;
+export const operatorFileSchema=z.object({version:z.literal(1).default(1),operators:z.array(credentialSchema).max(MAX_OPERATOR_RECORDS).default([])}).strip();
 export type OperatorCredential=z.infer<typeof credentialSchema>;
 export type OperatorView=Pick<OperatorCredential,'id'|'label'|'role'|'createdAt'|'revokedAt'>;
 export interface HashedOperatorToken {id:string;label:string;role:PanelRole;salt:string;digest:string}
@@ -54,6 +55,16 @@ export class OperatorDirectory {
   const digest=digestToken(token,salt).toString('hex');
   const record=credentialSchema.parse({id,label,role:input.role,salt,digest,createdAt:now,revokedAt:null});
   this.file.push(record);
+  // Revoked credentials stay listed, but the file holds at most MAX_OPERATOR_RECORDS. Without this the
+  // 129th credential a venue ever issued made serialize() throw, and from then on no operator could
+  // be issued or revoked. The longest-revoked entries make room; at most 32 are ever active, so one
+  // is always there to drop.
+  while(this.file.length>MAX_OPERATOR_RECORDS){
+   const revoked=this.file.filter(entry=>entry.revokedAt);
+   if(!revoked.length)break;
+   const oldest=revoked.reduce((a,b)=>(a.revokedAt as number)<=(b.revokedAt as number)?a:b);
+   this.file.splice(this.file.indexOf(oldest),1);
+  }
   return {token,operator:{id,label,role:input.role,createdAt:now,revokedAt:null}};
  }
  revoke(id:string,now=Date.now()):boolean {

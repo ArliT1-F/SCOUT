@@ -25,6 +25,9 @@ import {describeEmailFailure,emailConfiguration,invitationEmail,openEmail,recove
 // ids, not invite tokens, not installation tokens. The one exception is the installation token the
 // launcher itself must present, kept in its own 0600 file next to the operator data.
 export const ACCOUNT_COOKIE='scout_account';
+// How the host's proxy names the browser it forwards to a hosted account service. The service only
+// believes it on a request that also carries the service key (server/account-service.ts).
+export const CLIENT_ADDRESS_HEADER='x-scout-client-address';
 export const ACCOUNT_TTL_MS=30*24*60*60*1000;
 export const DEVICE_CODE_TTL_MS=10*60*1000;
 export const DEVICE_POLL_INTERVAL_MS=5000;

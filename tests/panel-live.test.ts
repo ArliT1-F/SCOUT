@@ -266,6 +266,28 @@ test('role-scoped tokens enforce producer control, designer permissions, authent
  await call('/api/lease?force=1',{host:REMOTE,method:'DELETE',headers:ownerHeaders});
 });
 
+test('signing out hands back broadcast control, whatever the role',async()=>{
+ if(!REMOTE) return;
+ const origin=`http://${REMOTE}:${port}`,ownerHeaders={Origin:origin,'X-Scout-Token':TOKEN};
+ const issued=await call('/api/operators',{host:REMOTE,method:'POST',headers:ownerHeaders,body:{label:'Night producer',role:'producer'}});
+ assert.equal(issued.status,200);
+ try{
+  await call('/api/lease',{host:REMOTE,method:'POST',headers:ownerHeaders,body:{force:true}});
+  await call('/api/lease?force=1',{host:REMOTE,method:'DELETE',headers:ownerHeaders});
+  const opened=await call('/api/session',{host:REMOTE,method:'POST',headers:{Origin:origin},body:{token:issued.json.token}});
+  assert.equal(opened.status,200);
+  const session=cookieHeader(opened);
+  const claim=await call('/api/lease',{host:REMOTE,method:'POST',headers:{Origin:origin},cookie:session,body:{}});
+  assert.equal(claim.status,200);
+  assert.equal((await call('/api/lease')).json.lease.holder,'Night producer');
+  const closed=await call('/api/session',{host:REMOTE,method:'DELETE',headers:{Origin:origin},cookie:session});
+  assert.equal(closed.status,200);
+  assert.equal((await call('/api/lease')).json.lease.holder,null,'the producer who signed out no longer holds the lease');
+ }finally{
+  await call(`/api/operators/${encodeURIComponent(issued.json.operator.id)}`,{host:REMOTE,method:'DELETE',headers:ownerHeaders});
+ }
+});
+
 test('guessing is throttled per address',async()=>{
  if(!REMOTE) return;
  let last:Reply|null=null;

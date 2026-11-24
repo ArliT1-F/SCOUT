@@ -19,7 +19,7 @@ The upstream paths below are served by the hosted account service. Venue-host/br
 | --- | --- | --- | --- | --- |
 | GET | `/healthz` | public, operational status only | — | `{ok, accounts, pending, devices}` |
 | GET | `/status` | public or own `scout_account` cookie | — | `BetaStatusView`; only an approved account gets download details |
-| POST | `/apply` | public; rate-limited | `ApplicationInput` plus optional legacy `address` field | `{account, invite:null}`; creates no authenticated account |
+| POST | `/apply` | public; rate-limited | `ApplicationInput` plus optional legacy `address` field (honoured only with the service key; the host's proxy names the visitor in `X-Scout-Client-Address`) | `{account, invite:null}`; creates no authenticated account |
 | POST | `/login` | public; failure-throttled | `{email, password}` | `{account}` and HttpOnly session cookie |
 | POST | `/logout` | public; revokes the presented session | cookie | `{ok:true}` and cleared cookie |
 | POST | `/activate` | public; single-use invitation | `{invite, password}` | `{account}` and HttpOnly session cookie |
