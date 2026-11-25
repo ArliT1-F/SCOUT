@@ -278,7 +278,7 @@ test('the landing page sells the product without inventing a session',()=>{
  const html=clean(renderToString(createElement(LandingPage)));
  assert.match(html,/CLOSED BETA/);
  assert.match(html,/Apply for the closed beta/);
- assert.match(html,/No injection/);
+ assert.equal(/No injection|memory reading/i.test(html),false,'safety claims live on the privacy page, not the landing page');
  assert.match(html,/Game State Integration/);
  assert.match(html,/href="\/apply"/);
  assert.match(html,/href="\/login"/);

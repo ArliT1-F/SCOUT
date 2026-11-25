@@ -49,7 +49,7 @@ test('every scene the tour offers is a scene the product renders',()=>{
 });
 
 test('the hero says what an applicant needs on the same line as the call to action',()=>{
- const hero=page.slice(page.indexOf('site-hero'),page.indexOf('site-strip'));
+ const hero=page.slice(page.indexOf('site-hero'),page.indexOf('landing-proof'));
  for(const need of ['Windows 10 or 11','Counter-Strike 2','OBS Studio','bundles its own runtime']) assert.ok(hero.includes(need),`the hero states: ${need}`);
  assert.ok(hero.indexOf('site-cta')<hero.indexOf('site-requirements'),'the requirements sit under the buttons, not somewhere else on the page');
 });
@@ -57,7 +57,7 @@ test('the hero says what an applicant needs on the same line as the call to acti
 test('the sections and layer names on the page are the panel’s own',()=>{
  // React escapes the ampersand in names like "Teams & players"; compare the text as rendered.
  const escaped=(text:string)=>text.replace(/&/g,'&amp;');
- for(const section of PANEL_SECTIONS) assert.ok(page.includes(escaped(section.name)),`the panel has a ${section.name} section, so the page may name it`);
+ for(const section of PANEL_SECTIONS.filter(section=>!section.ownerOnly)) assert.ok(page.includes(escaped(section.name)),`the panel has a ${section.name} section, so the page may name it`);
  for(const widget of DEFAULT_WIDGETS.filter(widget=>widget.showOn.includes('live'))) assert.ok(page.includes(widget.name),`the live HUD layer ${widget.name} is named the way the Overlay Studio names it`);
 });
 
@@ -83,6 +83,6 @@ test('the engineering detail sits below the product story',()=>{
   assert.ok(at>cursor,`${marker} comes after the section before it`);
   cursor=at;
  }
- const hood=page.slice(page.indexOf('UNDER THE HOOD'));
- for(const detail of ['GSI only, by architecture','no memory reading','1920 × 1080','no custom CSS','obs-websocket','config/radars.json','control lease']) assert.ok(hood.includes(detail),`the technical claim lives under the hood: ${detail}`);
+ const hood=page.slice(page.indexOf('id="how"'));
+ for(const detail of ['CS2’s own match feed','1920 × 1080','browser source','Map radars','one person can switch scenes']) assert.ok(hood.includes(detail),`the technical claim lives under the hood: ${detail}`);
 });

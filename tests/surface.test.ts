@@ -58,7 +58,7 @@ test('host map picker offers current rotation but keeps a map already in the ser
 
 test('website has a profile, not links to broadcast output or local panel',()=>{
  assert.equal(isSiteRoute('/profile'),true);assert.match(renderToString(createElement(ProfilePage)),/User profile/);
- const footer=renderToString(createElement(SiteFooter));assert.match(footer,/href="\/profile"/);assert.match(footer,/href="\/admin"/);
+ const footer=renderToString(createElement(SiteFooter));assert.match(footer,/href="\/profile"/);assert.doesNotMatch(footer,/href="\/admin"/,'the staff desk is reached from the owner’s profile, not the public footer');
  assert.doesNotMatch(footer,/href="\/(obs|game|panel|app)"/);
 });
 
