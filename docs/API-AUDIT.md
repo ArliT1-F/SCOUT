@@ -59,6 +59,8 @@ Regression test: *operator data reads need a signed-in panel session*.
 | `PUT /api/radars`, `PUT /api/layout`, `PUT /api/overlay` | `design` | |
 | `POST /api/upload` | `design`, same-origin | Image type, size and content validated |
 | `POST /api/pack/import` | `design`, same-origin | Schema-validated event pack |
+| `POST /api/startgg/event` | `match-edit`, same-origin | Reads a start.gg event; the token (env or request) is never stored or returned |
+| `POST /api/startgg/logo` | `match-edit`, same-origin | Downloads a logo from start.gg hosts only; bytes checked like an upload |
 | `PUT /api/obs`, `POST /api/obs/reconnect` | owner | OBS settings never echo the password |
 | `POST /api/operators`, `DELETE /api/operators/:id` | `manage-operators` | Issue and revoke tokens |
 | `POST /api/beta/link/start`, `POST /api/beta/link/unlink` | owner | |
@@ -96,6 +98,7 @@ Regression test: *operator data reads need a signed-in panel session*.
 | `GET /api/recordings`, `GET /api/recordings/:name` | Signed-in session (**fixed**) | Filenames validated by a strict regex |
 | `GET /api/archive`, `GET /api/archive/:id` | Signed-in session (**fixed**) | |
 | `GET /api/obs` | Signed-in session (**fixed**) | |
+| `GET /api/startgg` | Signed-in session | Only whether a start.gg token is set, never the token |
 | `WS /ws` | Public read; cross-site handshakes refused | Snapshot only |
 | `/obs`, `/game`, `/uploads`, `/radars`, `/thumbs`, `/download` | Public static | Output pages and published artwork and installer |
 

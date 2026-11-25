@@ -149,9 +149,9 @@ test('every upload a saved config references is protected from pruning, portrait
  const refs=referencedUploads(config({teams:[
   {id:'a',name:'A',logo:'uploads/logos/1-a.png',players:[{name:'n',photo:'uploads/players/1-n.png'}]},
   {id:'b',name:'B',logo:'https://cdn.example/b.png',players:[]},
- ]}),{maps:{de_mirage:{image:'uploads/radars/1-m.png'},de_nuke:{image:'radars/de_nuke.png'},de_x:undefined}});
- assert.deepEqual([...refs].sort(),['uploads/logos/1-a.png','uploads/maps/1-mirage.png','uploads/players/1-n.png','uploads/radars/1-m.png']);
- assert.deepEqual([...UPLOAD_DIRS],['logos','maps','radars','players','overlays']);
+ ],sponsors:{items:[{id:'s1',name:'Energy drink',logo:'uploads/sponsors/1-drink.png'}]}}),{maps:{de_mirage:{image:'uploads/radars/1-m.png'},de_nuke:{image:'radars/de_nuke.png'},de_x:undefined}});
+ assert.deepEqual([...refs].sort(),['uploads/logos/1-a.png','uploads/maps/1-mirage.png','uploads/players/1-n.png','uploads/radars/1-m.png','uploads/sponsors/1-drink.png']);
+ assert.deepEqual([...UPLOAD_DIRS],['logos','maps','radars','players','overlays','sponsors']);
 });
 
 test('pruning deletes stale unreferenced files but spares references, drafts and .gitkeep',()=>{

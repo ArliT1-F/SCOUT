@@ -1,4 +1,4 @@
-import {Activity,Archive as ArchiveIcon,BarChart3,Flag,Gamepad2,GitMerge,Layers,LayoutDashboard,Monitor,Palette,Radio,Shield,SlidersHorizontal,Swords,Trophy,Users} from 'lucide-react';
+import {Activity,Archive as ArchiveIcon,BarChart3,Flag,Gamepad2,GitMerge,Layers,LayoutDashboard,Megaphone,Monitor,Palette,Radio,Shield,SlidersHorizontal,Swords,Trophy,Users} from 'lucide-react';
 import {SCENE_IDS,SCENE_TITLES,type SceneId} from '../server/controls';
 // The panel's two catalogues, in one file because the panel is no longer the only place that has to
 // name them: /welcome lists the same sections and the same scenes. A public page that keeps its own
@@ -13,6 +13,7 @@ export const PANEL_SECTIONS:PanelSection[]=[
  {name:'Teams & players',icon:Users},
  {name:'Tournament tree',icon:GitMerge},
  {name:'Broadcast scenes',icon:Layers},
+ {name:'Sponsors',icon:Megaphone},
  {name:'Overlay Studio',icon:Palette},
  {name:'Map radars',icon:SlidersHorizontal},
  {name:'Replay Studio',icon:Radio},

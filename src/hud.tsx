@@ -5,7 +5,8 @@ import type {KillEvent,RoundEvent} from '../server/events';
 import {configSides,type ResolvedSides} from '../server/sides';
 import {seriesState,type SeriesState} from '../server/series';
 import {elementStyle,type LayoutConfig,type LayoutElement,type LayoutKey} from '../server/layout';
-import {getWidget,overlayThemeStyle,widgetStyle,type OverlayConfig} from '../server/overlay';
+import {getWidget,overlayThemeStyle,sponsorWidget,widgetShown,widgetStyle,type OverlayConfig} from '../server/overlay';
+import {sponsorAt,type SponsorsConfig} from '../server/config';
 import {CustomOverlays,widgetVisible} from './custom-overlays';
 import {phaseView} from './phases';
 import {formatClock,interpolatedClock} from './clock';
@@ -48,6 +49,17 @@ function Radar({state,sides,radars,pos,nameOf}:{state:MatchState;sides:ResolvedS
   {grenades.map(nade=><i key={nade.id} className={'nade nade-'+nade.kind+(nade.deployed?' deployed':'')} style={{left:nade.u*100+'%',top:nade.v*100+'%'}} title={NADE_LABEL[nade.kind]}/>)}
   <span className="radar-label">{state.map?.name?.replace('de_','').toUpperCase()||'—'}<small>{dots.length} TRACKED{grenades.length>0?` · ${grenades.length} NADE${grenades.length===1?'':'S'}`:''}</small></span>
  </div>;
+}
+// The sponsor slot: one logo at a time, changing on the host clock so every output shows the same
+// sponsor at the same moment. The layer's place and scenes come from Overlay Studio (sponsorWidget
+// supplies a default for stacks saved before the layer existed); the sponsors' own switch decides
+// whether it draws at all. Keyed by sponsor so each change fades in rather than snapping.
+export function SponsorSlot({sponsors,overlay,now}:{sponsors?:Partial<SponsorsConfig>|null;overlay?:OverlayConfig;now:number}){
+ const layer=sponsorWidget(overlay);
+ if(sponsors?.showOnHud===false||!widgetShown(layer,'live')) return null;
+ const sponsor=sponsorAt(sponsors,now);
+ if(!sponsor) return null;
+ return <div className="hud-sponsor" style={widgetStyle(layer) as React.CSSProperties}><img key={sponsor.id} src={assetUrl(sponsor.logo)} alt={sponsor.name||'Sponsor'}/></div>;
 }
 // Killfeed: server-derived kills, newest first, faded out by age. Ages come from the host clock in
 // the snapshot, so the entries expire on the same schedule on every output surface.
@@ -112,6 +124,7 @@ return <div className={'hud '+(demoMode?'demo-hud':'')+(arranging?' arranging':'
  {view.rosters&&rosterOrder.map((side,index)=>{const id=index===0?'rosterLeft':'rosterRight';return layerVisible(id)&&<div className={'roster roster-'+index} key={side} style={styleOf(id)}><div className="roster-label">{team(rosterOrder[index]).name}<span>{rosterOrder[index]}</span></div>{Array.from({length:5},(_,i)=>{const p=players.filter(p=>p.team===side).sort((a,b)=>(a.observer_slot??99)-(b.observer_slot??99))[i];return p?<Strip key={p.steamid} p={p} name={nameOf(p,p.team)} observed={p.steamid===state.player?.steamid}/>:<div className="player empty" key={i}>— Waiting for player</div>})}</div>})}
  {controls.lowerThird&&layerVisible('lowerThird')&&view.lowerThird&&observed&&(()=>{const entry=identify(roster,observed,sideTeamId(observed.team)),card=entry&&cardOf(entry),sub=[card?.realName,card?.role].filter(Boolean).join(' · ');return <div className="lower-third" style={styleOf('lowerThird')}><span className={'avatar'+(card?.photo?' has-photo':'')}>{card?.photo?<img src={assetUrl(card.photo)} alt=""/>:<Users size={23}/>}</span><div><small>OBSERVING · {observed.team||'–'}</small><b>{nameOf(observed,observed.team)}</b>{sub&&<small className="lt-sub">{sub}</small>}</div><WeaponIcon name={activeWeapon?.name} kind={weaponInfo(activeWeapon?.name,activeWeapon?.type)?.kind} size={34}/><span>{activeWeapon?.ammo_clip??'–'} <small>/ {activeWeapon?.ammo_reserve??'–'}</small></span></div>})()}
  {controls.economy&&layerVisible('economy')&&<div className="hud-banner" style={styleOf('economy')}>TEAM ECONOMY · ${players.filter(p=>p.team==='CT').reduce((a,p)=>a+(p.state?.money||0),0).toLocaleString()} / ${players.filter(p=>p.team==='T').reduce((a,p)=>a+(p.state?.money||0),0).toLocaleString()}<UtilityRow utility={teamUtility(state,'CT')} compact/><i>vs</i><UtilityRow utility={teamUtility(state,'T')} compact/></div>}
+ <SponsorSlot sponsors={config?.sponsors} overlay={overlay} now={hostNow}/>
  {layerVisible('footer')&&<div className="hud-footer" style={styleOf('footer')}><span>SCOUT<span className="tiny-plus">+</span></span><span>{demoMode?'DEMO FEED · NOT LIVE GAME DATA':'EXTERNAL GSI FEED'}</span></div>}
   </>}
  <CustomOverlays config={overlay} scene={controls.scene} context={{event:config?.event?.name||'SCOUT',stage:config?.event?.stage||'',map:state.map?.name?.replace('de_','').toUpperCase()||'WAITING',phase:state.round?.phase||state.map?.phase||'waiting',round:series.round,clock:clock.seconds===null?'—':formatClock(secs,clock.source==='bomb'?1:0),'score.ct':score('CT')??'–','score.t':score('T')??'–','team.ct':team('CT').name,'team.t':team('T').name,'series.ct':series.pips.CT.filter(Boolean).length,'series.t':series.pips.T.filter(Boolean).length}} arranging={arranging} onMove={onLayerReposition}/>

@@ -415,6 +415,10 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .avatar img{display:block;width:100%;height:100%;object-fit:cover;object-position:center top}
 .lower-third>.equipment-icon{opacity:.95}
 .lower-third>span:last-child{font-size:27px}
+.hud-sponsor{position:absolute;right:28px;bottom:74px;width:220px;height:64px;display:flex;align-items:center;justify-content:center;padding:8px 14px;background:#120d17d9;border:1px solid var(--line)}
+.hud-sponsor img{max-width:100%;max-height:100%;object-fit:contain;animation:sponsor-in .6s ease-out}
+@keyframes sponsor-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.hud-sponsor img{animation:none}}
 .hud-footer{position:absolute;bottom:22px;left:28px;right:28px;display:flex;justify-content:space-between;font-size:12px;letter-spacing:3px;color:var(--text-dim,#c6b7d2)}
 .hud-footer>span:first-child{font-size:24px;font-weight:700;color:#fff}
 .tiny-plus{color:var(--accent)}
@@ -584,6 +588,11 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .st-mini .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center top}
 .st-mini b{max-width:100%;font-size:24px;letter-spacing:1px;text-transform:uppercase;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Break */
+.st-sponsors{position:absolute;left:0;right:0;bottom:190px;display:flex;flex-direction:column;align-items:center;gap:14px;padding:0 64px}
+.st-sponsors small{font-size:16px;letter-spacing:8px;color:var(--text-dim,#c9bad5);padding-left:8px}
+.st-sponsors div{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:22px 48px;max-width:1700px}
+.st-sponsors img{height:64px;max-width:240px;object-fit:contain}
+.st-break.with-sponsors{padding-bottom:260px}
 .st-break{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;text-align:center;padding-bottom:70px}
 .st-pulse{position:absolute;left:50%;top:44%;width:0;height:0}
 .st-pulse i{position:absolute;left:-380px;top:-380px;width:760px;height:760px;border-radius:50%;border:2px solid var(--accent);opacity:0;animation:st-ring 6s ease-out infinite}
@@ -680,6 +689,24 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .radar-row .image-preview,.radar-row .image-empty{width:72px;height:72px}
 .radar-fields{flex:1;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr 1fr;gap:11px;min-width:0}
 .radar-fields input{min-width:0}
+.startgg-form{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto;gap:13px;align-items:end;padding:8px 22px 14px}
+.startgg-hint,.startgg-error,.startgg-notice{margin:0 22px 14px;font-size:12px;line-height:1.5;color:var(--text-dim)}
+.startgg-error{color:var(--bad,#ff8a9a)}
+.startgg-notice{color:var(--ok,#8ce0b4)}
+.startgg-result{border-top:1px solid var(--line-soft);padding-top:10px}
+.startgg-summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;padding:0 22px 4px}
+.startgg-summary b{font-size:15px}
+.startgg-summary span{font-size:12px;color:var(--text-dim)}
+.startgg-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:0 22px 16px}
+.startgg-actions small{flex:1 1 260px;color:var(--text-dim);font-size:11px}
+@media(max-width:850px){.startgg-form{grid-template-columns:1fr}}
+.toggle-field{display:flex;align-items:center;gap:10px;align-self:end;min-height:38px;padding:0 12px;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-soft);font-size:12px;cursor:pointer}
+.toggle-field input{accent-color:var(--accent);width:15px;height:15px}
+.sponsor-rows{display:grid;gap:10px;padding:0 22px 14px}
+.sponsor-row{display:flex;align-items:center;gap:14px;border:1px solid var(--line-soft);border-radius:8px;background:var(--bg-soft);padding:13px}
+.sponsor-row>.field{flex:1;min-width:0}
+.sponsor-row-actions{display:flex;gap:6px}
+@media(max-width:700px){.sponsor-row{flex-wrap:wrap}}
 .radars-empty{margin:0;color:var(--text-dim);font-size:11px}
 .radars-panel .control-button.dashed{width:calc(100% - 44px);margin-left:22px;margin-right:22px}
 /* ============================ Arrange mode (admin preview) ============================ */

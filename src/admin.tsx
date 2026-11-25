@@ -1,7 +1,8 @@
-import React,{useRef,useState} from 'react';
-import {Image as ImageIcon,Plus,Save,Trash2,Upload,X} from 'lucide-react';
-import {emptyPlayer,type ScoutConfig,type TeamConfig,type MapConfig,type BracketMatch} from '../server/config';
+import React,{useEffect,useRef,useState} from 'react';
+import {ArrowDown,ArrowUp,Image as ImageIcon,Plus,Save,Trash2,Upload,X} from 'lucide-react';
+import {emptyPlayer,MAX_SPONSORS,SPONSOR_CAPTION,SPONSORS_DEFAULT,type ScoutConfig,type TeamConfig,type MapConfig,type BracketMatch,type SponsorsConfig} from '../server/config';
 import type {RadarsConfig,RadarMapConfig} from '../server/radars';
+import {buildBracket,playableSets,teamFromEntrant,type StartggEvent} from '../server/startgg';
 import {assetUrl} from './assets';
 import {apiFetch} from './session';
 import {breakClock,BREAK_TITLE} from './scenes';
@@ -12,7 +13,7 @@ import {breakClock,BREAK_TITLE} from './scenes';
 type DraftChange=(next:ScoutConfig)=>void;
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
 const MAP_NAMES=['de_ancient','de_anubis','de_dust2','de_inferno','de_mirage','de_nuke','de_overpass','de_train','de_vertigo'];
-export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'logo'|'map'|'radar'|'player'|'overlay';value?:string;onChange:(path:string)=>void;title?:string;compact?:boolean}){
+export function ImageUpload({kind,value,onChange,title,compact=false}:{kind:'logo'|'map'|'radar'|'player'|'overlay'|'sponsor';value?:string;onChange:(path:string)=>void;title?:string;compact?:boolean}){
  const inputRef=useRef<HTMLInputElement>(null);
  const [busy,setBusy]=useState(false);
  const [error,setError]=useState('');
@@ -87,6 +88,98 @@ export function TeamEditor({config,onChange}:{config:ScoutConfig;onChange:DraftC
  </section>;
 }
 
+// start.gg import. Loads an event through the host (which holds the API token), then fills the draft:
+// "Use this match" puts the two entrants in the team slots with their rosters, logos and the round
+// name; "Import bracket" rebuilds the tournament tree from one of the event's brackets. Both only
+// change the draft, so the operator reviews the result and presses Save configuration as usual.
+export function StartggImport({config,onChange}:{config:ScoutConfig;onChange:DraftChange}){
+ const latest=useRef(config);latest.current=config;
+ const [link,setLink]=useState('');
+ const [token,setToken]=useState('');
+ const [tokenSet,setTokenSet]=useState<boolean|null>(null);
+ const [busy,setBusy]=useState('');
+ const [error,setError]=useState('');
+ const [notice,setNotice]=useState('');
+ const [event,setEvent]=useState<StartggEvent|null>(null);
+ const [groupId,setGroupId]=useState('');
+ const [setId,setSetId]=useState('');
+ useEffect(()=>{apiFetch('/api/startgg').then(res=>res.ok?res.json():null).then(body=>setTokenSet(body?!!body.tokenSet:null)).catch(()=>setTokenSet(null))},[]);
+ const post=async(url:string,body:unknown)=>{const res=await apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const json=await res.json().catch(()=>({}));if(!res.ok)throw Error(json.error||'start.gg request failed');return json};
+ async function load(){
+  setBusy('load');setError('');setNotice('');
+  try{
+   const loaded=await post('/api/startgg/event',{event:link,...(token.trim()?{token:token.trim()}:{})}) as StartggEvent;
+   setEvent(loaded);
+   // Default to the bracket with the most matches: usually the main bracket rather than a pool.
+   const counts=new Map<string,number>();for(const set of loaded.sets)counts.set(set.groupId,(counts.get(set.groupId)||0)+1);
+   const first=[...counts.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0]||loaded.groups[0]?.id||'';
+   setGroupId(first);setSetId(playableSets(loaded,first)[0]?.id||'');
+  }catch(reason:any){setEvent(null);setError(reason.message||'The event could not be loaded')}
+  finally{setBusy('')}
+ }
+ const entrant=(id:string|null)=>event?.entrants.find(item=>item.id===id);
+ const sets=event?playableSets(event,groupId):[];
+ async function useMatch(){
+  const set=event?.sets.find(item=>item.id===setId);if(!event||!set)return;
+  const a=entrant(set.slots[0].entrantId),b=entrant(set.slots[1].entrantId);
+  if(!a||!b){setError('That match does not have two teams yet.');return}
+  setError('');
+  const teams=clone(latest.current.teams);
+  teams[0]=teamFromEntrant(a,teams[0]);teams[1]=teamFromEntrant(b,teams[1]);
+  onChange({...latest.current,teams,event:{name:(event.tournament||event.name).slice(0,120),stage:[set.roundText,event.groups.find(group=>group.id===set.groupId)?.name].filter(Boolean).join(' · ').slice(0,120)}});
+  setNotice(`${a.name} vs ${b.name} filled in. Review the teams, then press Save configuration.`);
+  // Logos arrive after the teams; each lands only if that slot still holds the same team.
+  const withLogo=[a,b].map((item,index)=>({item,index})).filter(({item})=>item.logoUrl);
+  if(!withLogo.length)return;
+  setBusy('logos');
+  const failed:string[]=[];
+  for(const {item,index} of withLogo){
+   try{
+    const {path}=await post('/api/startgg/logo',{url:item.logoUrl,name:item.name});
+    const current=clone(latest.current.teams);
+    if(current[index]?.name===item.name){current[index].logo=String(path||'');onChange({...latest.current,teams:current})}
+   }catch{failed.push(item.name)}
+  }
+  setBusy('');
+  if(failed.length)setNotice(`${a.name} vs ${b.name} filled in, but the logo for ${failed.join(' and ')} could not be downloaded. Upload it under Teams & players, then press Save configuration.`);
+ }
+ function importBracket(){
+  if(!event)return;
+  const bracket=buildBracket(event,groupId,latest.current.teams,event.name);
+  if(!bracket){setError('That bracket has no matches to import yet.');return}
+  setError('');
+  onChange({...latest.current,bracket});
+  const count=bracket.rounds.reduce((sum,round)=>sum+round.matches.length,0);
+  setNotice(`Tournament tree replaced: ${bracket.rounds.length} rounds, ${count} matches. Check it under Tournament tree, then press Save configuration.`);
+ }
+ const sideName=(slot:{name:string|null})=>slot.name||'TBD';
+ return <section className="panel detail-panel startgg-panel">
+  <div className="editor-head"><h2>Import from start.gg</h2><p>Paste the link of a start.gg event to fill in teams, rosters, logos and the tournament tree. Nothing goes on air until you press <b>Save configuration</b>. Players are matched to your existing roster by nickname, so SteamIDs, aliases and photos you already added are kept.</p></div>
+  <div className="startgg-form">
+   <label className="field startgg-link"><span>EVENT LINK</span><input value={link} maxLength={400} placeholder="https://www.start.gg/tournament/…/event/…" onChange={event=>setLink(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&link.trim())void load()}}/></label>
+   <label className="field"><span>API TOKEN{tokenSet?' · SET ON THE HOST':''}</span><input type="password" autoComplete="off" value={token} maxLength={400} placeholder={tokenSet?'Leave empty to use the host token':'Paste a start.gg API token'} onChange={event=>setToken(event.target.value)}/></label>
+   <button type="button" className="button primary" disabled={!link.trim()||!!busy} onClick={()=>void load()}>{busy==='load'?'Loading…':'Load event'}</button>
+  </div>
+  {tokenSet===false&&!token&&<p className="startgg-hint">start.gg needs an API token: create one under start.gg → Developer Settings. Set it once as <code>SCOUT_STARTGG_TOKEN</code> in the host's <code>.env</code>, or paste it here. A pasted token is used for this request only and is never saved.</p>}
+  {error&&<p className="startgg-error" role="alert">{error}</p>}
+  {event&&<div className="startgg-result">
+   <div className="startgg-summary"><b>{event.tournament||event.name}</b><span>{event.name} · {event.entrants.length} teams · {event.sets.length} matches</span></div>
+   <div className="form-grid">
+    <label className="field"><span>BRACKET</span><select value={groupId} onChange={event_=>{setGroupId(event_.target.value);setSetId(playableSets(event,event_.target.value)[0]?.id||'')}}>{event.groups.map(group=><option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
+    <label className="field field-wide"><span>MATCH TO PUT ON AIR</span><select value={setId} onChange={event_=>setSetId(event_.target.value)} disabled={!sets.length}>
+     {sets.length?sets.map(set=><option key={set.id} value={set.id}>{set.roundText||`Round ${set.round}`}: {sideName(set.slots[0])} vs {sideName(set.slots[1])}{set.state===3?' (finished)':set.state===2?' (live)':''}</option>):<option value="">No match with two teams yet</option>}
+    </select></label>
+   </div>
+   <div className="startgg-actions">
+    <button type="button" className="button primary" disabled={!setId||!!busy} onClick={()=>void useMatch()}>{busy==='logos'?'Downloading logos…':'Use this match'}</button>
+    <button type="button" className="button" disabled={!groupId||!!busy} onClick={importBracket}>Import bracket</button>
+    <small>Import bracket replaces the whole tournament tree. Double-elimination brackets bring their winners side and grand final.</small>
+   </div>
+  </div>}
+  {notice&&<p className="startgg-notice" role="status">{notice}</p>}
+ </section>;
+}
+
 export function MatchEditor({config,onChange,mapRotation=MAP_NAMES}:{config:ScoutConfig;onChange:DraftChange;mapRotation?:string[]}){
  const available=mapRotation.length?mapRotation:MAP_NAMES;
  const updateMap=(index:number,patch:Partial<MapConfig>)=>{const maps=clone(config.maps);maps[index]={...maps[index],...patch};onChange({...config,maps})};
@@ -148,6 +241,41 @@ export function BreakEditor({config,onChange,breakEndsAt,hostNow,onTimer,onShow,
    </div>
   </div>
   <div className="break-actions"><button type="button" className="control-button dashed wide" onClick={onShow}><span>{onAir?'The break screen is on air':'Put the break screen on air'}</span></button></div>
+ </section>;
+}
+
+// Sponsors: logos that rotate in the HUD's sponsor slot and line up on the break screen. Each placement
+// has its own switch; where the HUD slot sits (and on which scenes) is the Sponsor slot layer in
+// Overlay Studio. Everything here is part of the match configuration and goes live on Save.
+export function SponsorEditor({config,onChange}:{config:ScoutConfig;onChange:DraftChange}){
+ const latest=useRef(config);latest.current=config;
+ const sponsors:SponsorsConfig={...SPONSORS_DEFAULT,...(config.sponsors||{})};
+ const patch=(change:(next:SponsorsConfig)=>void)=>{const next=clone({...SPONSORS_DEFAULT,...(latest.current.sponsors||{})});change(next);onChange({...latest.current,sponsors:next})};
+ const add=()=>patch(next=>{if(next.items.length<MAX_SPONSORS) next.items.push({id:`s${Date.now().toString(36)}`,name:'',logo:''})});
+ const move=(index:number,delta:number)=>patch(next=>{const to=index+delta;if(to<0||to>=next.items.length)return;const [item]=next.items.splice(index,1);next.items.splice(to,0,item)});
+ const withLogo=sponsors.items.filter(item=>item.logo).length;
+ return <section className="panel detail-panel">
+  <div className="editor-head"><h2>Sponsors</h2><p>Sponsor logos rotate one at a time in the HUD's sponsor slot and appear together on the break screen. Use a logo with a transparent background; a wide one works best. Move or resize the HUD slot with the <b>Sponsor slot</b> layer in Overlay Studio. A sponsor without a logo is not shown.</p></div>
+  <div className="form-grid">
+   <label className="toggle-field"><input type="checkbox" checked={sponsors.showOnHud} onChange={event=>patch(next=>{next.showOnHud=event.target.checked})}/><span>Show on the HUD</span></label>
+   <label className="toggle-field"><input type="checkbox" checked={sponsors.showOnBreak} onChange={event=>patch(next=>{next.showOnBreak=event.target.checked})}/><span>Show on the break screen</span></label>
+   <label className="field"><span>SECONDS PER LOGO</span><input type="number" min={3} max={120} value={sponsors.rotateSeconds} onChange={event=>patch(next=>{next.rotateSeconds=Math.max(3,Math.min(120,Math.round(Number(event.target.value)||10)))})}/></label>
+   <label className="field"><span>BREAK SCREEN CAPTION</span><input value={sponsors.caption} maxLength={40} placeholder={SPONSOR_CAPTION} onChange={event=>patch(next=>{next.caption=event.target.value})}/></label>
+  </div>
+  <div className="section-label map-series-label">SPONSORS · {withLogo} OF {sponsors.items.length} READY</div>
+  <div className="sponsor-rows">
+   {sponsors.items.map((sponsor,index)=><div className="sponsor-row" key={sponsor.id}>
+    <ImageUpload kind="sponsor" value={sponsor.logo} title={sponsor.name||'sponsor logo'} onChange={path=>patch(next=>{const item=next.items.find(entry=>entry.id===sponsor.id);if(item)item.logo=path})}/>
+    <label className="field"><span>SPONSOR NAME</span><input value={sponsor.name} maxLength={64} placeholder="Used as the logo's description" onChange={event=>patch(next=>{const item=next.items.find(entry=>entry.id===sponsor.id);if(item)item.name=event.target.value})}/></label>
+    <div className="sponsor-row-actions">
+     <button type="button" className="icon-button" title="Show earlier" disabled={index===0} onClick={()=>move(index,-1)}><ArrowUp size={13}/></button>
+     <button type="button" className="icon-button" title="Show later" disabled={index===sponsors.items.length-1} onClick={()=>move(index,1)}><ArrowDown size={13}/></button>
+     <button type="button" className="icon-button danger" title="Remove sponsor" onClick={()=>patch(next=>{next.items=next.items.filter(entry=>entry.id!==sponsor.id)})}><Trash2 size={13}/></button>
+    </div>
+   </div>)}
+   {!sponsors.items.length&&<p className="radars-empty">No sponsors yet. Add one to put its logo on air.</p>}
+  </div>
+  <button type="button" className="control-button dashed wide" disabled={sponsors.items.length>=MAX_SPONSORS} onClick={add}><span><Plus size={13}/> Add sponsor</span></button>
  </section>;
 }
 

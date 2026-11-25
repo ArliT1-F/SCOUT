@@ -60,6 +60,27 @@ export const breakSchema=z.object({
  title:z.string().trim().max(80).optional().default(''),
  message:z.string().trim().max(240).optional().default(''),
 }).strip();
+// Sponsors: a logo per sponsor, shown in rotation on the HUD's sponsor layer and as a row on the
+// break screen. Each placement has its own switch so a sponsor deal for "break screen only" is one
+// click. Logos are operator uploads under uploads/sponsors/, like team logos.
+export const SPONSOR_LOGO=/^uploads\/sponsors\/[\w.\- ]+$/;
+export const MAX_SPONSORS=12;
+export const sponsorSchema=z.object({
+ id:z.string().trim().min(1).max(32),
+ name:z.string().trim().max(64).optional().default(''),
+ logo:z.string().trim().max(260).optional().default('').refine(value=>value===''||SPONSOR_LOGO.test(value),'logo must be a file under uploads/sponsors/'),
+}).strip();
+export const sponsorsSchema=z.object({
+ items:z.array(sponsorSchema).max(MAX_SPONSORS).optional().default([]),
+ // How long each logo stays up before the next one, on the HUD.
+ rotateSeconds:z.number().int().min(3).max(120).optional().default(10),
+ showOnHud:z.boolean().optional().default(true),
+ showOnBreak:z.boolean().optional().default(true),
+ // The small caption above the logos ("Supported by", "Presented by"…). Empty uses the default.
+ caption:z.string().trim().max(40).optional().default(''),
+}).strip();
+export const SPONSOR_CAPTION='SUPPORTED BY';
+export const SPONSORS_DEFAULT={items:[],rotateSeconds:10,showOnHud:true,showOnBreak:true,caption:''};
 // zod returns object defaults unparsed, so every default below carries the complete output shape.
 const SLOT_DEFAULT={label:'',team:''};
 export const configSchema=z.object({
@@ -77,6 +98,7 @@ export const configSchema=z.object({
   ]},
   {name:'Final',matches:[{id:'m3',a:SLOT_DEFAULT,b:SLOT_DEFAULT,aScore:0,bScore:0,winner:null,status:'upcoming'}]},
  ]}),
+ sponsors:sponsorsSchema.optional().default(SPONSORS_DEFAULT),
 }).strip();
 export type PlayerConfig=z.infer<typeof playerSchema>;
 export type TeamConfig=z.infer<typeof teamSchema>;
@@ -86,6 +108,19 @@ export type BracketMatch=z.infer<typeof bracketMatchSchema>;
 export type BracketRound=z.infer<typeof bracketRoundSchema>;
 export type BracketConfig=z.infer<typeof bracketSchema>;
 export type ScoutConfig=z.infer<typeof configSchema>;
+export type SponsorConfig=z.infer<typeof sponsorSchema>;
+export type SponsorsConfig=z.infer<typeof sponsorsSchema>;
+// The sponsors that can actually be drawn: a logo is required, since a nameless empty slot on air
+// is worse than no slot at all.
+export const liveSponsors=(sponsors?:Partial<SponsorsConfig>|null):SponsorConfig[]=>(sponsors?.items||[]).filter(item=>!!item.logo);
+// Which sponsor is on the HUD at host-clock time `now`. Derived from the clock, not from a timer in
+// each browser, so every output shows the same logo at the same moment.
+export function sponsorAt(sponsors:Partial<SponsorsConfig>|null|undefined,now:number):SponsorConfig|null {
+ const items=liveSponsors(sponsors);
+ if(!items.length) return null;
+ const period=Math.max(3,Math.min(120,Number(sponsors?.rotateSeconds)||10))*1000;
+ return items[Math.floor(Math.max(0,now)/period)%items.length];
+}
 
 // The tournament tree is a single-elimination bracket laid out positionally: match i of round r
 // feeds match floor(i/2) of round r+1 (even i into slot a, odd i into slot b). The winner's label
@@ -126,6 +161,10 @@ export function normalizeConfig(raw:unknown):ScoutConfig {
  // Duplicate team/match ids would make the bracket editor target the wrong node.
  const seen=new Set<string>();
  for(const team of parsed.teams){while(seen.has(team.id)) team.id=`${team.id}-2`;seen.add(team.id)}
+ const sponsorIds=new Set<string>();
+ for(const sponsor of parsed.sponsors.items){while(sponsorIds.has(sponsor.id)) sponsor.id=`${sponsor.id}-2`;sponsorIds.add(sponsor.id)}
+ // A row the operator added but never filled is dropped rather than saved as an empty slot.
+ parsed.sponsors.items=parsed.sponsors.items.filter(sponsor=>sponsor.logo||sponsor.name);
  const matchIds=new Set<string>();
  for(const round of parsed.bracket.rounds) for(const match of round.matches){while(matchIds.has(match.id)) match.id=`${match.id}-2`;matchIds.add(match.id)}
  // A match with a winner is finished by definition; anything else keeps the status the admin set.
