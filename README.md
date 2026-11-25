@@ -107,12 +107,19 @@ Only one Producer/Owner controls live actions at a time. **Take control** create
 ### The mark, the favicon and phones
 
 The SCOUT mark is an inline SVG (`src/logo.tsx`, `public/logo/scout-mark.svg`, `public/favicon.svg`,
-`public/favicon.png`, `public/apple-touch-icon.png`): eight rounded spokes and a hub, two pinks, and
-the app icon's centre hole cut by a mask so the mark sits on any surface. It replaced the `✳`
-character that used to stand in for a logo in the panel sidebar, the unlock screen, the touch remote,
-the landing page, the HUD event header and every broadcast scene's header. Geometry is measured from
-`src-tauri/icons/128x128.png` and pinned by `tests/logo.test.ts`, which also fails if the glyph comes
-back. The tab icon, the phone home-screen icon and the desktop shortcut are now the same artwork.
+`public/favicon.png`, `public/apple-touch-icon.png`): a stencil S drawn like a top-down map, one
+stroke with every corner cut at 45° and two doorway gaps, in the bright pink on a transparent ground.
+It replaced the `✳` character that used to stand in for a logo in the panel sidebar, the unlock
+screen, the touch remote, the landing page, the HUD event header and every broadcast scene's header.
+The path lives once in `src/logo.tsx` and is pinned against the SVG files by `tests/logo.test.ts`,
+which also fails if the glyph comes back. The PNG and ICO icons (`public/`, `src-tauri/icons/`) are
+rendered from `public/favicon.svg`, so the tab icon, the phone home-screen icon and the desktop
+shortcut are the same artwork. If you change the path, re-render those too.
+
+`public/logo/scout-bimi.svg` is the email-avatar version for BIMI (the logo Gmail, Yahoo and Apple
+Mail show beside a sender): SVG Tiny PS, a full square on a solid plum ground, with the S scaled down
+so the circular crop inboxes apply never clips it. `public/logo/scout-avatar.png` is the same image as
+a 512px PNG for places that take an uploaded picture instead.
 
 The web surfaces are phone-first where it counts. The panel is a desktop console that now *works* on a
 phone — the sidebar becomes a drawer behind a top bar (≤ 700px) with 44px tap targets, one-column
