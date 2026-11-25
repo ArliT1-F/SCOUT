@@ -1,13 +1,17 @@
 import type {MatchState,PlayerState} from '../server/state';
 import type {RoundEvent} from '../server/events';
 const names=['nova','kairo','s1lent','frost','mika','EXO','ryze','orbit','blitz','zen'];
-// Sample world coordinates for the dashboard preview's radar, on de_inferno's overview bounds.
-const positions=[[-1500,2600],[-1200,2900],[-800,3100],[-400,2800],[100,3200],[2200,800],[2500,400],[2600,1000],[1900,300],[2400,-500]];
-const forwards=[200,180,90,270,20,140,60,0,300,320];
+// Sample world coordinates for the dashboard preview's radar: real spots on de_inferno, read off the
+// shipped overview (public/radars/de_inferno.png) and converted with its calibration, so every dot sits
+// on the map rather than merely inside its bounding box (tests/demo-radar.test.ts checks the pixels).
+// CT: B site, CT to B, CT spawn, A site (dead), Library. T: Banana, lower Banana, Mid, T spawn (dead),
+// Apartments. Yaw 0 faces east and 90 north, as in GSI.
+const positions=[[363,2645],[804,2302],[2348,1910],[1980,489],[1637,1126],[192,1224],[-127,856],[853,562],[-1548,440],[1343,-344]];
+const forwards=[225,135,180,200,270,70,30,0,0,45];
 export const demo:MatchState={provider:{timestamp:0},map:{name:'de_inferno',phase:'live',round:14,team_ct:{name:'Vertex',score:8},team_t:{name:'Parallax',score:6}},round:{phase:'live'},phase_countdowns:{phase:'live',phase_ends_in:84},allplayers:Object.fromEntries(names.map((name,i)=>[String(i),{steamid:String(i),name,observer_slot:(i+1)%10,team:i<5?'CT':'T',position:positions[i].join(', ')+', 0',forward:String(forwards[i]),state:{health:[100,100,72,0,100,100,48,100,0,100][i],armor:100,helmet:true,money:[3450,2100,1650,800,4200,2900,1200,3600,550,2800][i],round_kills:0,defusekit:i<3},weapons:demoLoadout(i),match_stats:{kills:[18,14,12,9,11,16,13,10,8,12][i],deaths:8+i%5,assists:2+i%4,mvp:[4,3,2,1,2,3,2,1,0,2][i]}} as PlayerState])),player:{steamid:'0'} as PlayerState,
-// Sample utility so the preview radar shows the markers: a bloomed smoke, a burning molly and a
-// flash still in the air, all inside de_inferno's overview bounds.
-grenades:{demo_smoke:{type:'smoke',owner:'2',lifetime:'3.1',effecttime:'15.2',position:'-200, 1500, 0',velocity:'0, 0, 0'},demo_fire:{type:'fire',owner:'7',lifetime:'1.2',effecttime:'5.8',position:'600, 800, 0',velocity:'0, 0, 0'},demo_flash:{type:'flashbang',owner:'1',lifetime:'0.6',position:'-800, 2200, 60',velocity:'100, -50, 0'}}};
+// Sample utility so the preview radar shows the markers: a smoke blooming on top of Banana, a molly
+// burning on A site and a flash in the air over CT to B, all on the map.
+grenades:{demo_smoke:{type:'smoke',owner:'2',lifetime:'3.1',effecttime:'15.2',position:'265, 1763, 0',velocity:'0, 0, 0'},demo_fire:{type:'fire',owner:'7',lifetime:'1.2',effecttime:'5.8',position:'2078, 146, 0',velocity:'0, 0, 0'},demo_flash:{type:'flashbang',owner:'1',lifetime:'0.6',position:'804, 2008, 60',velocity:'100, -50, 0'}}};
 // Varied sample loadouts so the operator preview exercises the real weapon glyphs — rifle, sniper,
 // pistol and the utility set — instead of handing everyone the same gun.
 function demoLoadout(index:number):Record<string,{name:string;type:string;state:string;ammo_clip?:number;ammo_reserve?:number}>{
