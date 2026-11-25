@@ -46,6 +46,8 @@ export const DEFAULT_DOWNLOAD_VERSION='SCOUT-Setup-0.1.0.exe';
 const USER_CODE_ALPHABET='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const USER_CODE_LENGTH=8;
 export type ApplicationStatus='pending'|'approved'|'rejected'|'revoked';
+/** What the owner can decide about an account. `reinstate` is the undo of `revoke`. */
+export type BetaDecision='approve'|'reject'|'revoke'|'reinstate';
 export type BetaMode='local'|'hosted';
 export interface AccountSecret {salt:string;digest:string}
 export interface BetaDevice {id:string;label:string;platform:string;createdAt:number;lastSeenAt:number;revokedAt:number|null;tokenDigest:string}
@@ -118,7 +120,7 @@ export interface LauncherBetaService {
  // observer machine: in local mode they are the store, in hosted mode they carry the service key.
  applications():Promise<AccountView[]>;
  applicationReview?():Promise<ApplicationReviewView>;
- decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason?:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
+ decide(id:string,decision:BetaDecision,decidedBy:string,reason?:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
  resendInvitation?(id:string,requestedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>;
 }
 export interface BetaService extends SiteBetaService,LauncherBetaService {
@@ -401,10 +403,11 @@ export class LocalBetaService implements BetaService {
   const digest=hashToken(account.email);
   this.store.emailOutbox=(this.store.emailOutbox??[]).filter(entry=>entry.recipientDigest!==digest||entry.sentAt!==null);
  }
- async decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason=''):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>{
+ async decide(id:string,decision:BetaDecision,decidedBy:string,reason=''):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>{
   const account=this.store.accounts.find(entry=>entry.id===id);
   if(!account) return {ok:false,status:404,code:'not-found',message:'That application no longer exists.'};
-  if(account.status==='revoked')return {ok:false,status:409,code:'already-decided',message:'A revoked account cannot be re-approved. Delete the account and ask for a fresh application instead.'};
+  if(decision==='reinstate')return this.reinstate(account,decidedBy);
+  if(account.status==='revoked')return {ok:false,status:409,code:'already-decided',message:'A revoked account cannot be re-approved. Reinstate it instead.'};
   if(decision==='reject'&&account.status==='rejected')return {ok:false,status:409,code:'already-decided',message:'A rejected application is terminal. A new application is required.'};
   if(decision==='revoke'&&account.status!=='approved')return {ok:false,status:409,code:'invalid-decision',message:'Only approved accounts can be revoked. Reject a pending application instead.'};
   if(decision==='approve'&&account.status==='rejected')return {ok:false,status:409,code:'already-decided',message:'A rejected application is terminal. A new application is required.'};
@@ -418,6 +421,22 @@ export class LocalBetaService implements BetaService {
   await this.save();
   if(decision==='approve')await this.deliverPending();
   return {ok:true,value:{account:accountView(account),invite,invitationDelivery:decision==='approve'?this.delivery(account):undefined}};
+ }
+ // Reinstating undoes a revocation. Revoking kept the password digest, so an activated account
+ // simply signs in again with its existing password and re-links its launchers (those were cut and
+ // stay cut). An account revoked before it ever activated has no password, so it gets a fresh
+ // invitation instead, which needs email delivery like any other invitation.
+ private async reinstate(account:BetaAccount,decidedBy:string):Promise<BetaResult<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>>{
+  if(account.status!=='revoked')return {ok:false,status:409,code:'invalid-decision',message:'Only revoked accounts can be reinstated.'};
+  const needsInvite=!account.password;
+  if(needsInvite&&!this.mailReady())return this.emailUnavailable();
+  account.revokedReason=null;
+  const invite=needsInvite?this.grantInvite(account,decidedBy):null;
+  if(!needsInvite){account.status='approved';account.decidedAt=this.now();account.decidedBy=decidedBy}
+  this.recordAudit('account.reinstated',account.id);
+  await this.save();
+  if(needsInvite)await this.deliverPending();
+  return {ok:true,value:{account:accountView(account),invite,invitationDelivery:needsInvite?this.delivery(account):undefined}};
  }
  async applications():Promise<AccountView[]>{
   this.reap();
@@ -536,7 +555,7 @@ export class HostedBetaService implements LauncherBetaService {
  // The site half is deliberately absent here: in hosted mode the browser's /api/beta requests are
  // proxied verbatim to this service (cookies included), so a second implementation of them would
  // only be a copy that drifts. What the host itself needs is the launcher half below.
- async decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason=''){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy,...(reason?{reason}:{})})}
+ async decide(id:string,decision:BetaDecision,decidedBy:string,reason=''){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id),'POST',{decision,decidedBy,...(reason?{reason}:{})})}
  async resendInvitation(id:string,requestedBy:string){return this.call<{account:AccountView;invite:string|null;invitationDelivery?:InvitationDeliveryView}>('/applications/'+encodeURIComponent(id)+'/resend-invitation','POST',{requestedBy})}
  async applicationReview(){const result=await this.call<ApplicationReviewView>('/applications','GET');return result.ok?result.value:{applications:[],invitations:{}}}
  async applications(){return (await this.applicationReview()).applications}

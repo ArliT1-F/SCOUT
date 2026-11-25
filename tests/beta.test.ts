@@ -427,6 +427,50 @@ test('only approved accounts can be revoked, and an outstanding invite dies with
  assert.equal(review.applications.find(entry=>entry.id===id)?.revokedReason?.length,280);
 });
 
+test('a revoked account can be reinstated and signs in with its existing password',async()=>{
+ await fresh();
+ const created=await service.apply(application,context(STRANGER));
+ const id=created.ok?created.value.account.id:'';
+ const early=await service.decide(id,'reinstate','owner');
+ assert.equal(early.ok,false,'only revoked accounts can be reinstated');
+ if(!early.ok){assert.equal(early.status,409);assert.equal(early.code,'invalid-decision')}
+ const approved=await service.decide(id,'approve','owner');
+ const invite=approved.ok?approved.value.invite!:'';
+ await service.activate({invite,password:'a-long-enough-password'},context(HOME));
+ await service.decide(id,'revoke','owner','mistaken identity');
+ const reinstated=await service.decide(id,'reinstate','owner');
+ assert.equal(reinstated.ok,true,JSON.stringify(reinstated));
+ if(!reinstated.ok) return;
+ assert.equal(reinstated.value.account.status,'approved');
+ assert.equal(reinstated.value.account.revokedReason,null);
+ assert.equal(reinstated.value.invite,null,'an activated account needs no new invitation');
+ assert.equal(reinstated.value.account.devices.length,0,'launchers cut by the revocation stay cut');
+ const signIn=await service.signIn({email:'ada@example.com',password:'a-long-enough-password'},context(HOME));
+ assert.equal(signIn.ok,true,JSON.stringify(signIn));
+ const twice=await service.decide(id,'reinstate','owner');
+ assert.equal(twice.ok,false);
+ if(!twice.ok)assert.equal(twice.code,'invalid-decision');
+});
+
+test('an account revoked before it activated is reinstated with a fresh invitation',async()=>{
+ await fresh();
+ const created=await service.apply(application,context(STRANGER));
+ const id=created.ok?created.value.account.id:'';
+ const approved=await service.decide(id,'approve','owner');
+ const oldInvite=approved.ok?approved.value.invite!:'';
+ await service.decide(id,'revoke','owner');
+ const reinstated=await service.decide(id,'reinstate','owner');
+ assert.equal(reinstated.ok,true,JSON.stringify(reinstated));
+ if(!reinstated.ok) return;
+ assert.equal(reinstated.value.account.status,'approved');
+ assert.ok(reinstated.value.invite,'a fresh invitation is issued');
+ assert.ok(reinstated.value.invitationDelivery);
+ const stale=await service.activate({invite:oldInvite,password:'a-long-enough-password'},context(HOME));
+ assert.equal(stale.ok,false,'the invitation cut by the revocation stays dead');
+ const fresh2=await service.activate({invite:reinstated.value.invite!,password:'a-long-enough-password'},context(HOME));
+ assert.equal(fresh2.ok,true,JSON.stringify(fresh2));
+});
+
 test('a refused invitation delivery tells the desk what failed and what to do',async()=>{
  dir=await mkdtemp(path.join(tmpdir(),'scout-beta-'));clock=1_700_000_000_000;
  service=await new LocalBetaService({dir,emailBaseUrl:'https://scout.example.test',emailEncryptionKey:Buffer.alloc(32,7),emailTransport:async()=>{throw Object.assign(new Error('refused'),{status:403,providerCode:'validation_error'})},now:()=>clock}).load();
