@@ -13,7 +13,7 @@ import {
  ACCOUNT_COOKIE,ACCOUNT_TTL_MS,CLIENT_ADDRESS_HEADER,DEVICE_CODE_TTL_MS,DEVICE_POLL_INTERVAL_MS,
  DEFAULT_DOWNLOAD_URL,DEFAULT_DOWNLOAD_VERSION,MAX_APPLICATIONS_PER_HOUR,MAX_LOGIN_FAILURES,MAX_REVOKE_REASON,MIN_PASSWORD,
  accountCookie,clearedAccountCookie,digestSecret,hashToken,newToken,newUserCode,normalizeEmail,normalizeUserCode,secretMatches,
- type AccountView,type ApplicationInput,type BetaStatusView,type DeviceGrantView,type DevicePollView,type DownloadView,type LicenceCheck,
+ type AccountView,type ApplicationInput,type BetaDecision,type BetaStatusView,type DeviceGrantView,type DevicePollView,type DownloadView,type LicenceCheck,
 } from './beta.js';
 // The hosted half of docs/BETA.md: the same REST contract the local store implements, behind a
 // socket, with the state in SQLite instead of a JSON file.
@@ -73,7 +73,7 @@ export interface AccountService {
  close():Promise<void>;
  deliverPending():Promise<void>;
  /** The same operations the HTTP surface exposes, for the CLI and for tests that want no socket. */
- db:{file:string;list():AccountView[];decide(email:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason?:string):{account:AccountView;invite:string|null}|null};
+ db:{file:string;list():AccountView[];decide(email:string,decision:BetaDecision,decidedBy:string,reason?:string):{account:AccountView;invite:string|null}|null};
 }
 interface Row extends Record<string,unknown>{}
 const nowMs=Date.now;
@@ -257,13 +257,33 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
   const row=accountRow(id);
   if(row)run('DELETE FROM email_outbox WHERE recipient_digest = ? AND sent_at IS NULL',hashToken(normalizeEmail(String(row.email))));
  }
- function decide(id:string,decision:'approve'|'reject'|'revoke',decidedBy:string,reason=''){
+ /** Reinstating undoes a revocation. The password digest survived it, so an activated account signs
+  * in again with its existing password and re-links its launchers (those stay cut). An account that
+  * was revoked before it activated has no password, so it gets a fresh invitation instead. */
+ function reinstate(id:string,row:Row,decidedBy:string){
+  if(String(row.status)!=='revoked')fail(409,'invalid-decision','Only revoked accounts can be reinstated.');
+  run('UPDATE accounts SET revoked_reason = NULL WHERE id = ?',id);
+  const invite=row.password==null?grantInvite(id,decidedBy):null;
+  if(row.password!=null){
+   run('UPDATE accounts SET status = ?, decided_at = ?, decided_by = ? WHERE id = ?','approved',now(),decidedBy,id);
+   run('INSERT OR IGNORE INTO account_roles (account_id,role,granted_at,granted_by) VALUES (?,?,?,?)',id,'user',now(),decidedBy);
+  }
+  writeEvent('account.reinstated',id);
+  return invite;
+ }
+ function decide(id:string,decision:BetaDecision,decidedBy:string,reason=''){
   db.exec('BEGIN IMMEDIATE');
   try{
    const row=accountRow(id);
    if(!row){db.exec('COMMIT');return null}
+   if(decision==='reinstate'){
+    const reinstated=reinstate(id,row,decidedBy);
+    db.exec('COMMIT');
+    void flushSupabase().catch(()=>{});
+    return {account:view(accountRow(id)!),invite:reinstated};
+   }
    if(String(row.status)==='rejected')fail(409,'already-decided','A rejected application is terminal. A new application is required.');
-   if(String(row.status)==='revoked')fail(409,'already-decided','A revoked account cannot be re-approved. Delete the account row and ask for a fresh application instead.');
+   if(String(row.status)==='revoked')fail(409,'already-decided','A revoked account cannot be re-approved. Reinstate it instead.');
    if(decision==='revoke'&&String(row.status)!=='approved')fail(409,'invalid-decision','Only approved accounts can be revoked. Reject a pending application instead.');
    if(decision==='approve'&&String(row.status)!=='pending')fail(409,'already-decided','Only pending applications can be approved. Use the resend-invitation action for an unactivated approved account.');
    const invite=decision==='approve'?grantInvite(id,decidedBy):null;
@@ -638,12 +658,13 @@ export async function createAccountService(options:AccountServiceOptions={}):Pro
     if(decision&&method==='POST'){
      requireServiceKey(req);
      const input=await body(req);
-     if(input.decision!=='approve'&&input.decision!=='reject'&&input.decision!=='revoke') fail(400,'invalid-decision','A decision is approve, reject or revoke.');
+     if(input.decision!=='approve'&&input.decision!=='reject'&&input.decision!=='revoke'&&input.decision!=='reinstate') fail(400,'invalid-decision','A decision is approve, reject, revoke or reinstate.');
      if(typeof input.reason==='string'&&input.reason.length>MAX_REVOKE_REASON) fail(400,'invalid-reason',`A revocation reason is at most ${MAX_REVOKE_REASON} characters.`);
      const result=decide(decodeURIComponent(decision[1]),input.decision,attributeReviewer(input.decidedBy),typeof input.reason==='string'?input.reason:'');
      if(!result) fail(404,'not-found','That application no longer exists.');
-     if(input.decision==='approve')await deliverPending();
-     return json(res,200,{...result,invitationDelivery:input.decision==='approve'?invitationDelivery(result!.account.email):null});
+     const invited=input.decision==='approve'||(input.decision==='reinstate'&&result!.invite!==null);
+     if(invited)await deliverPending();
+     return json(res,200,{...result,invitationDelivery:invited?invitationDelivery(result!.account.email):null});
     }
 
     // ---- the launcher's half
@@ -782,7 +803,8 @@ function parseSecret(value:string){const [salt,digest]=value.split(':');return s
 // ------------------------------------------------------------------ running it
 // `npm run account-service` (or `tsx server/account-service.ts`) starts the service. The flags exist
 // for a deployment with no panel handy: list applications, approve one and queue its invitation
-// email, or revoke an approved account (`--revoke <email> [reason ...]`) and cut its access at once.
+// email, revoke an approved account (`--revoke <email> [reason ...]`) and cut its access at once, or
+// undo a revocation (`--reinstate <email>`).
 // `isEntry` rather than a bare import-time start, so importing this module (the tests do, to drive
 // the same store without a socket) never starts a listener or runs a CLI command.
 const isEntry=Boolean(process.argv[1])&&/account-service\.ts$/.test(process.argv[1]);
@@ -821,6 +843,21 @@ if(isEntry){
    console.log(`[accounts] revoked ${email}; sessions, launchers, invites, recovery tokens and queued mail are cut off.`);
   }catch(error){
    console.error(`[accounts] revocation failed: ${error instanceof Error?error.message:'unexpected error'}`);
+   await service.close();process.exit(1);
+  }
+  await service.close();process.exit(0);
+ }
+ const reinstateFlag=flags.indexOf('--reinstate');
+ if(reinstateFlag>=0){
+  const email=normalizeEmail(flags[reinstateFlag+1]||'');
+  const row=service.db.list().find(account=>account.email===email);
+  if(!row){console.error(`[accounts] no application for ${email}`);await service.close();process.exit(1)}
+  try{
+   const result=service.db.decide(row.id,'reinstate','command line');
+   if(result?.invite)await service.deliverPending();
+   console.log(result?.invite?`[accounts] reinstated ${email}; it had never activated, so a fresh invitation was queued.`:`[accounts] reinstated ${email}; it can sign in with its existing password and link launchers again.`);
+  }catch(error){
+   console.error(`[accounts] reinstatement failed: ${error instanceof Error?error.message:'unexpected error'}`);
    await service.close();process.exit(1);
   }
   await service.close();process.exit(0);

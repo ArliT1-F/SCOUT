@@ -539,6 +539,47 @@ test('revoking an approved account cuts sessions, launchers and sign-in',async(t
  }finally{eventsDb.close()}
 });
 
+test('a revoked account can be reinstated over the service and signs in again',async(t)=>{
+ const {call,dir}=await start({},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=(await call('/applications',{key:true})).body.applications[0].id;
+ const early=await call(`/applications/${id}`,{key:true,body:{decision:'reinstate',decidedBy:'owner@example.com'}});
+ assert.equal(early.status,409);assert.equal(early.body.code,'invalid-decision');
+ const approved=await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ await call('/activate',{body:{invite:approved.body.invite,password:'a-long-enough-password'},cookie:true});
+ await call(`/applications/${id}`,{key:true,body:{decision:'revoke',decidedBy:'owner@example.com',reason:'mistake'}});
+ const reinstated=await call(`/applications/${id}`,{key:true,body:{decision:'reinstate',decidedBy:'owner@example.com'}});
+ assert.equal(reinstated.status,200,JSON.stringify(reinstated.body));
+ assert.equal(reinstated.body.account.status,'approved');
+ assert.equal(reinstated.body.account.revokedReason,null);
+ assert.equal(reinstated.body.invite,null);
+ assert.equal(reinstated.body.invitationDelivery,null);
+ const signIn=await call('/login',{body:{email:'ada@example.com',password:'a-long-enough-password'}});
+ assert.equal(signIn.status,200,JSON.stringify(signIn.body));
+ const twice=await call(`/applications/${id}`,{key:true,body:{decision:'reinstate',decidedBy:'owner@example.com'}});
+ assert.equal(twice.status,409);assert.equal(twice.body.code,'invalid-decision');
+ const eventsDb=new DatabaseSync(path.join(dir,'accounts.sqlite'));
+ try{
+  const kinds=(eventsDb.prepare('SELECT kind FROM events WHERE account_id = ?').all(id) as Array<{kind:string}>).map(row=>row.kind);
+  assert.ok(kinds.includes('account.reinstated'),kinds.join(','));
+ }finally{eventsDb.close()}
+});
+
+test('an account revoked before activation is reinstated with a fresh invitation',async(t)=>{
+ const {call}=await start({},t);
+ await call('/apply',{body:{...application,address:'203.0.113.7'}});
+ const id=(await call('/applications',{key:true})).body.applications[0].id;
+ await call(`/applications/${id}`,{key:true,body:{decision:'approve',decidedBy:'owner@example.com'}});
+ await call(`/applications/${id}`,{key:true,body:{decision:'revoke',decidedBy:'owner@example.com'}});
+ const reinstated=await call(`/applications/${id}`,{key:true,body:{decision:'reinstate',decidedBy:'owner@example.com'}});
+ assert.equal(reinstated.status,200,JSON.stringify(reinstated.body));
+ assert.equal(reinstated.body.account.status,'approved');
+ assert.ok(reinstated.body.invite);
+ assert.ok(reinstated.body.invitationDelivery);
+ const activated=await call('/activate',{body:{invite:reinstated.body.invite,password:'a-long-enough-password'},cookie:true});
+ assert.equal(activated.status,200,JSON.stringify(activated.body));
+});
+
 test('a revocation reason longer than the desk allows is refused, and pending accounts cannot be revoked',async(t)=>{
  const {call}=await start({},t);
  await call('/apply',{body:{...application,address:'203.0.113.7'}});

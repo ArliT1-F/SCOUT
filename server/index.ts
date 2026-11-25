@@ -696,13 +696,13 @@ app.get('/api/beta/applications',async(req,res)=>{
 app.post('/api/beta/applications/:id',async(req,res)=>{
  await refreshPlatformSettings();
  const reviewer=await betaReviewAccess(req,res);if(!reviewer)return;
- const decision=req.body?.decision==='approve'?'approve':req.body?.decision==='reject'?'reject':req.body?.decision==='revoke'?'revoke':null;
- if(!decision){res.status(400).json({error:'Choose approve, reject or revoke.',code:'invalid-decision'});return}
+ const decision=req.body?.decision==='approve'?'approve':req.body?.decision==='reject'?'reject':req.body?.decision==='revoke'?'revoke':req.body?.decision==='reinstate'?'reinstate':null;
+ if(!decision){res.status(400).json({error:'Choose approve, reject, revoke or reinstate.',code:'invalid-decision'});return}
  const reason=typeof req.body?.reason==='string'?req.body.reason.trim():'';
  if(reason.length>MAX_REVOKE_REASON){res.status(400).json({error:`A revocation reason is at most ${MAX_REVOKE_REASON} characters.`,code:'invalid-reason'});return}
  const result=await beta.launcher.decide(String(req.params.id),decision,reviewer.email,reason);
  sendBetaResult(res,result,value=>{
-  audit.record({id:reviewer.id,name:reviewer.email,role:'owner'},decision==='revoke'?'beta.account.revoked':`beta.application.${decision}`,reason?`${value.account.email} — ${reason}`:value.account.email);
+  audit.record({id:reviewer.id,name:reviewer.email,role:'owner'},decision==='revoke'?'beta.account.revoked':decision==='reinstate'?'beta.account.reinstated':`beta.application.${decision}`,reason?`${value.account.email} — ${reason}`:value.account.email);
   res.json({application:value.account,inviteUrl:null,invitationDelivery:(value as any).invitationDelivery||{status:decision==='approve'?'sent':'none'}});
  });
 });
