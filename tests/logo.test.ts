@@ -6,53 +6,45 @@ import {createElement} from 'react';
 import {renderToString} from 'react-dom/server';
 
 // The SCOUT mark replaced the ✳ character that stood in for it everywhere (panel, unlock screen, touch
-// remote, landing page, HUD event header and all eight broadcast scenes). This pins the parts of that
-// promise a test can hold: the component draws the same geometry the shipped SVG does, the asset files
-// exist, and the glyph cannot quietly come back.
+// remote, landing page, HUD event header and all eight broadcast scenes), and was later redrawn as the
+// stencil S. This pins the parts of that promise a test can hold: the component draws the same path
+// the shipped SVGs do, the asset files exist, and the glyph cannot quietly come back.
 
 const read=(path:string)=>readFile(fileURLToPath(new URL(`../${path}`,import.meta.url)),'utf8');
-const {ScoutMark,ScoutBrand}=await import('../src/logo');
+const {ScoutMark,ScoutBrand,SCOUT_MARK_PATH}=await import('../src/logo');
+const paths=(source:string)=>[...source.matchAll(/<path d="([^"]+)"/g)].map(match=>match[1]);
 
-// Every <rect>/<circle> in a file, as "x,y,w,h,rx" / "cx,cy,r" tuples — enough to compare two drawings
-// of the same mark without caring which file they live in.
-function shapes(source:string):string[]{
- const out:string[]=[];
- // Only positioned shapes: the mask's white plate, the favicon's tile rect and other scaffolding have
- // no x/y and are not part of the mark.
- for(const match of source.replace(/<mask[\s\S]*?<\/mask>/g,'').matchAll(/<rect (x="[^"]*"[^/>]+)\/>/g)){
-  const attr=(name:string)=>new RegExp(`${name}="([^"]+)"`).exec(match[1])?.[1]??'';
-  out.push(`rect ${attr('x')} ${attr('y')} ${attr('width')} ${attr('height')} ${attr('rx')}`);
-  const rotate=/rotate\(([\d.]+)/.exec(match[1])?.[1];
-  if(rotate) out.push(`rotate ${rotate}`);
+test('the mark component and the shipped SVGs draw the same shape',async()=>{
+ assert.deepEqual(paths(await read('public/logo/scout-mark.svg')),[SCOUT_MARK_PATH],'public/logo/scout-mark.svg has drifted from src/logo.tsx');
+ assert.deepEqual(paths(await read('public/favicon.svg')),[SCOUT_MARK_PATH],'public/favicon.svg has drifted from src/logo.tsx');
+ // The email-avatar (BIMI) logo: SVG Tiny PS, square, solid ground, a title and no x/y on the root.
+ const bimi=await read('public/logo/scout-bimi.svg');
+ assert.deepEqual(paths(bimi),[SCOUT_MARK_PATH],'public/logo/scout-bimi.svg has drifted from src/logo.tsx');
+ assert.match(bimi,/version="1\.2" baseProfile="tiny-ps"/);
+ assert.match(bimi,/<title>SCOUT<\/title>/);
+ assert.match(bimi,/<rect width="100" height="100" fill="#120e15"\/>/,'inboxes need a solid background');
+ assert.doesNotMatch(bimi.split('>')[0],/\s[xy]=/,'BIMI validators reject x/y on the root element');
+ // Point symmetry is what makes the stencil S read the same either way up: every corner, turned
+ // 180° about the centre, lands on another corner of the same path.
+ const corners=new Set<string>();
+ let at=[0,0];
+ for(const [,cmd,args] of SCOUT_MARK_PATH.matchAll(/([MLHV])\s*([\d\s]+)/g)){
+  const n=args.trim().split(/\s+/).map(Number);
+  at=cmd==='H'?[n[0],at[1]]:cmd==='V'?[at[0],n[0]]:[n[0],n[1]];
+  corners.add(at.join(','));
  }
- for(const match of source.replace(/<mask[\s\S]*?<\/mask>/g,'<mask></mask>').matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g))
-  out.push(`circle ${match[1]} ${match[2]} ${match[3]}`);
- return out.sort();
-}
-
-test('the mark component and the shipped SVG draw the same shape',async()=>{
- const component=shapes(await read('src/logo.tsx'));
- const asset=shapes(await read('public/logo/scout-mark.svg'));
- const favicon=shapes(await read('public/favicon.svg'));
- assert.equal(component.length,16,'eight spoke rects, their seven rotations and the hub');
- assert.deepEqual(asset,component,'public/logo/scout-mark.svg has drifted from src/logo.tsx');
- assert.deepEqual(favicon,component,'public/favicon.svg has drifted from src/logo.tsx');
+ assert.equal(corners.size,14,'two gaps, four 45° cuts and the bar ends');
+ for(const corner of corners){const [x,y]=corner.split(',').map(Number);assert.ok(corners.has(`${100-x},${100-y}`),`${corner} has no 180° partner`)}
 });
 
-test('the rendered mark is a two-tone SVG with the icon’s centre hole',()=>{
+test('the rendered mark is a single-path SVG in the bright tone',()=>{
  const html=renderToString(createElement(ScoutMark,{size:32,title:'SCOUT'}));
  assert.match(html,/^<svg/,'the mark is an inline SVG, not a font glyph');
  assert.match(html,/width="32" height="32"/);
  assert.match(html,/viewBox="0 0 100 100"/,'one viewBox, so one shape at every size');
- assert.match(html,/fill="var\(--mark-bright,currentColor\)"/,'the fat diagonals take the bright tone');
- assert.match(html,/fill="currentColor"/,'the hub and axial spokes take the surrounding colour');
- assert.match(html,/mask="url\(#scout-mark-hole[^)]*\)"/,'the icon’s centre hole is a mask, so it stays transparent');
- assert.match(html,/r="4\.7" fill="#000"/,'the hole is cut, not painted');
+ assert.match(html,/stroke="var\(--mark-bright,currentColor\)"/,'the S takes the bright tone, or the surrounding colour');
+ assert.match(html,/fill="none"/);
  assert.match(html,/<title>SCOUT<\/title>/,'a titled mark is announced by its name');
- // Two instances on one page must not share a mask id (a duplicate id would break the second one).
- const twice=renderToString(createElement('div',null,createElement(ScoutMark,{}),createElement(ScoutMark,{})));
- const ids=[...twice.matchAll(/mask id="([^"]+)"/g)].map(match=>match[1]);
- assert.equal(new Set(ids).size,2,`mask ids must be unique per instance, got ${ids.join(', ')}`);
 });
 
 test('the wordmark pairs the mark with the name, and the glyph is gone',async()=>{
