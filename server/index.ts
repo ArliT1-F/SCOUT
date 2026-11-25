@@ -18,6 +18,7 @@ import {ControlLease,type LeasePrincipal} from './lease.js';
 import {AuditTrail} from './audit.js';
 import {GsiRecorder,MatchArchiveStore} from './recordings.js';
 import {createEventPack,eventPackSchema,restoreEventPack,detectImageMime} from './packs.js';
+import {fetchStartggEvent,parseEventSlug,StartggError} from './startgg.js';
 import {radarsSchema} from './radars.js';
 import {UPLOAD_DIRS,referencedUploads,isPrunable} from './uploads.js';
 import {controlsSchema,defaultControls,SCENE_IDS,type Controls} from './controls.js';
@@ -256,6 +257,7 @@ const UPLOAD_KINDS:Record<string,{dir:string;exts:Record<string,string>}>={
  radar:{dir:'radars',exts:IMAGE_EXTS},
  player:{dir:'players',exts:IMAGE_EXTS},
  overlay:{dir:'overlays',exts:IMAGE_EXTS},
+ sponsor:{dir:'sponsors',exts:IMAGE_EXTS},
 };
 for(const dir of UPLOAD_DIRS) await mkdir(path.join(UPLOAD_ROOT,dir),{recursive:true});
 // Panel saves, imports, activations and remote applies share one atomic commit lane. The remote
@@ -387,7 +389,7 @@ app.use((req:express.Request,res:express.Response,next:express.NextFunction)=>{
 });
 // The upload body is a base64 data URL, so this route gets its own larger JSON parser before the
 // 1 mb global limit applies to the GSI hot path.
-const uploadSchema=z.object({kind:z.enum(['logo','map','radar','player','overlay']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
+const uploadSchema=z.object({kind:z.enum(['logo','map','radar','player','overlay','sponsor']),name:z.string().trim().max(120).optional().default(''),data:z.string().max(14*1024*1024)});
 app.post('/api/upload',express.json({limit:'12mb'}),async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
  if(!permit(res,'design'))return;
@@ -1107,6 +1109,53 @@ app.post('/api/remote/action',async(req,res)=>{
  else if(action==='break.stop')patch={scene:controls.scene==='break'?'live':controls.scene,breakEndsAt:null};
  else{res.status(400).json({error:'Unsupported action. Use scene:<id>, toggle:<control>, break.start, or break.stop.'});return}
  const before=controls.scene;await saveControls({...controls,...patch});audit.record(accessPrincipal(res),'remote.action',action);if(controls.scene!==before)void obs.onScoutScene(controls.scene);res.json({ok:true,controls,lease:lease.view(accessPrincipal(res).id)});
+});
+// start.gg import (server/startgg.ts). The host only fetches and reduces the event; the panel applies it
+// to its draft, so nothing changes on air until the operator saves. The token is SCOUT_STARTGG_TOKEN,
+// or one pasted into the form for this request only — never stored, logged or echoed back.
+const startggToken=(supplied?:string)=>String(supplied||process.env.SCOUT_STARTGG_TOKEN||'').trim();
+app.get('/api/startgg',(req,res)=>{if(!signedInRead(req,res))return;res.json({tokenSet:!!startggToken()})});
+const startggEventSchema=z.object({event:z.string().trim().min(1).max(400),token:z.string().trim().max(400).optional().default('')});
+app.post('/api/startgg/event',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'match-edit'))return;
+ const parsed=startggEventSchema.safeParse(req.body);
+ const slug=parsed.success?parseEventSlug(parsed.data.event):null;
+ if(!parsed.success||!slug){res.status(400).json({error:'Paste the link of a start.gg event, like https://www.start.gg/tournament/<name>/event/<event>.'});return}
+ try{
+  const event=await fetchStartggEvent(slug,startggToken(parsed.data.token));
+  audit.record(accessPrincipal(res),'startgg.event.load',`${slug} · ${event.entrants.length} entrants · ${event.sets.length} sets`);
+  res.json(event);
+ }catch(error){
+  if(error instanceof StartggError){res.status(error.status).json({error:error.message});return}
+  res.status(502).json({error:'The start.gg event could not be loaded.'});
+ }
+});
+// Team logos live on start.gg's image host. The host downloads one into uploads/logos/ so the overlay
+// never depends on another site while on air. Only start.gg's own hosts are fetched, and the bytes
+// get the same checks as an upload.
+const startggLogoSchema=z.object({url:z.string().trim().url().max(600),name:z.string().trim().max(64).optional().default('')});
+const isStartggImage=(value:string)=>{try{const url=new URL(value);return url.protocol==='https:'&&(url.hostname==='start.gg'||url.hostname.endsWith('.start.gg'))&&!url.username&&!url.password}catch{return false}};
+app.post('/api/startgg/logo',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!permit(res,'match-edit'))return;
+ const parsed=startggLogoSchema.safeParse(req.body);
+ if(!parsed.success||!isStartggImage(parsed.data.url)){res.status(400).json({error:'Only start.gg image links can be imported.'});return}
+ try{
+  const remote=await fetch(parsed.data.url,{redirect:'error',signal:AbortSignal.timeout(15_000)});
+  if(!remote.ok) throw new Error(`start.gg answered ${remote.status}`);
+  const declared=Number(remote.headers.get('content-length')||0);
+  if(declared>5*1024*1024) throw new Error('the logo is larger than 5 MB');
+  const buffer=Buffer.from(await remote.arrayBuffer());
+  if(buffer.length<8||buffer.length>5*1024*1024) throw new Error('the logo is empty or larger than 5 MB');
+  const mime=detectImageMime(buffer);const ext=mime?IMAGE_EXTS[mime]:undefined;
+  if(!ext) throw new Error('the file is not a PNG, JPEG, GIF, WEBP or plain SVG');
+  const slug=(parsed.data.name.replace(/[^a-z0-9-_]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,48)||'team').toLowerCase();
+  const file=`${Date.now()}-startgg-${slug}.${ext}`;
+  await writeFile(path.join(UPLOAD_ROOT,'logos',file),buffer);
+  audit.record(accessPrincipal(res),'asset.upload',`uploads/logos/${file} · ${buffer.length} bytes · start.gg`);
+  res.json({path:`uploads/logos/${file}`});
+ }catch(error:any){res.status(502).json({error:`The team logo could not be imported: ${error?.message||'download failed'}.`})}
 });
 app.get('/api/config',(_req,res)=>res.json(config));
 // Saving the operator configuration replaces config/teams.json atomically and broadcasts it to

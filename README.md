@@ -370,6 +370,23 @@ Every roster row has a portrait and an **alias**:
 
 CS2 keys `allplayers` by SteamID and does not repeat the id inside each entry; the host now fills it in when a packet is validated, so the observed player (lower third, highlighted roster row) and SteamID matching work on real GSI data.
 
+### Import from start.gg
+
+*Match setup → Import from start.gg* loads a start.gg event from its link (`https://www.start.gg/tournament/<name>/event/<event>`) and fills the panel's draft, so the result is reviewed and goes on air with **Save configuration** like any other edit.
+
+- **Use this match** puts the two entrants of a chosen match into the team slots: names, rosters (start.gg gamer tags become nicknames), logos and the event and round name. A player already on the roster with the same nickname keeps their SteamID, alias, role and photo; the slot's colour stays. Logos are downloaded from start.gg's image host into `uploads/logos/`, so the overlay never depends on start.gg while on air.
+- **Import bracket** rebuilds the tournament tree from one of the event's brackets, with results, scores and team bindings. start.gg's feeder links are followed from the final backwards, so the positional tree stays correct; a team with a bye gets a decided *vs BYE* match. Double-elimination brackets bring their winners side and grand final, and at most the last five rounds (16 matches) are imported.
+- **The token**: start.gg's API needs a personal access token. Set it once as `SCOUT_STARTGG_TOKEN` in `.env`, or paste one into the form; a pasted token is used for that request only. Like the OBS password it is never stored, returned by the API, logged or packed into an event package.
+- **Code and tests**: `server/startgg.ts` (client and pure transforms), `POST /api/startgg/event` and `POST /api/startgg/logo` (`match-edit`), `tests/startgg.test.ts` against a scripted start.gg. It has not been run against the live start.gg API from this repository's CI.
+
+### Sponsors
+
+The **Sponsors** section holds a logo per sponsor (up to 12, uploaded to `uploads/sponsors/`):
+
+- **HUD**: one logo at a time in the *Sponsor slot* layer (bottom right by default; move, resize or limit it to scenes in Overlay Studio). The logo changes every *Seconds per logo* on the host clock, so every output shows the same sponsor at the same moment.
+- **Break screen**: all logos in a row under a caption (*Supported by* unless you write your own).
+- Each placement has its own switch. A sponsor without a logo is not shown. Sponsor logos travel in event packages like team logos.
+
 ### Broadcast scenes
 
 Matchup, lineups, map series, tournament tree, winner, break, round recap and player stats are full-canvas 1920 × 1080 graphics with animated entrances, drawn from `config/teams.json` — so they are correct before CS2 is even running. A scene on air owns the canvas: the live scoreboard, footer and SIGNAL LOST banner step aside. While **Arrange** is on, the live layout is always shown so the drag handles sit on real elements.

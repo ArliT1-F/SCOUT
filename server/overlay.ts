@@ -4,7 +4,7 @@ import {SCENE_IDS} from './controls.js';
 // Public-facing overlay design data. All styling values are strictly typed and colour/path fields
 // are allow-listed; an operator can personalize a broadcast without allowing saved JSON to inject CSS.
 export const FONT_FAMILIES=['Barlow Condensed','DM Sans','Arial','Oswald','Roboto','Inter'] as const;
-export const OVERLAY_WIDGET_KINDS=['event','scoreboard','radar','killfeed','rosterLeft','rosterRight','lowerThird','economy','footer','signal','phaseBanner','roundResult','phaseCard','text','image','shape','clock'] as const;
+export const OVERLAY_WIDGET_KINDS=['event','scoreboard','radar','killfeed','rosterLeft','rosterRight','lowerThird','economy','footer','signal','phaseBanner','roundResult','phaseCard','sponsorSlot','text','image','shape','clock'] as const;
 export type OverlayWidgetKind=typeof OVERLAY_WIDGET_KINDS[number];
 const hex=z.string().regex(/^#[0-9a-fA-F]{6}$/,'use a six-digit hex colour');
 const scene=z.enum(SCENE_IDS);
@@ -94,7 +94,11 @@ export const DEFAULT_WIDGETS:OverlayWidget[]=[
  widget('phaseBanner','phaseBanner','Phase banner',90),
  widget('roundResult','roundResult','Round result',91),
  widget('phaseCard','phaseCard','Phase cards',95),
+ widget('sponsorSlot','sponsorSlot','Sponsor slot',15),
 ];
+// The sponsor layer arrived after many overlay.json files were saved, so a stack without it still
+// gets one: the sponsors' own on/off switches decide whether it draws, and this only supplies where.
+export const sponsorWidget=(config:OverlayConfig|undefined):OverlayWidget=>config?.widgets?.find(item=>item.kind==='sponsorSlot')||DEFAULT_WIDGETS.find(item=>item.kind==='sponsorSlot')!;
 export const themePresetSchema=z.object({id:z.string().trim().regex(/^[a-zA-Z0-9_-]{1,48}$/),theme:overlayThemeSchema}).strip();
 export const overlaySchema=z.object({
  version:z.literal(1).optional().default(1),
@@ -117,7 +121,7 @@ export type OverlayConfig=z.infer<typeof overlaySchema>;
 export const defaultOverlay=():OverlayConfig=>overlaySchema.parse({});
 
 export function createWidget(kind:OverlayWidgetKind,id?:string):OverlayWidget {
- const nameByKind:Record<OverlayWidgetKind,string>={event:'Event header',scoreboard:'Scoreboard',radar:'Tactical radar',killfeed:'Killfeed',rosterLeft:'Left roster',rosterRight:'Right roster',lowerThird:'Player lower third',economy:'Economy bar',footer:'Broadcast footer',signal:'Signal-lost banner',phaseBanner:'Phase banner',roundResult:'Round result',phaseCard:'Phase cards',text:'Text overlay',image:'Image overlay',shape:'Shape overlay',clock:'Live clock'};
+ const nameByKind:Record<OverlayWidgetKind,string>={event:'Event header',scoreboard:'Scoreboard',radar:'Tactical radar',killfeed:'Killfeed',rosterLeft:'Left roster',rosterRight:'Right roster',lowerThird:'Player lower third',economy:'Economy bar',footer:'Broadcast footer',signal:'Signal-lost banner',phaseBanner:'Phase banner',roundResult:'Round result',phaseCard:'Phase cards',sponsorSlot:'Sponsor slot',text:'Text overlay',image:'Image overlay',shape:'Shape overlay',clock:'Live clock'};
  const idBase=id||kind;
  return overlayWidgetSchema.parse({id:idBase,kind,name:nameByKind[kind],zIndex:kind==='text'||kind==='image'||kind==='shape'||kind==='clock'?80:20,showOn:['live'],...(kind==='text'?{text:'YOUR TEXT HERE',x:700,y:180,width:520,height:100,fontSize:48}:{}),...(kind==='image'?{x:800,y:120,width:320,height:180,fit:'contain'}:{}),...(kind==='shape'?{x:800,y:500,width:320,height:12}:{}),...(kind==='clock'?{x:850,y:180,width:220,height:90,fontSize:54}:{})});
 }

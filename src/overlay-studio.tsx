@@ -5,7 +5,7 @@ import {SCENE_IDS,SCENE_TITLES} from '../server/controls';
 import {ImageUpload} from './admin';
 
 const clone=<T,>(value:T):T=>JSON.parse(JSON.stringify(value));
-const BUILT_INS=new Set<OverlayWidgetKind>(['event','scoreboard','radar','killfeed','rosterLeft','rosterRight','lowerThird','economy','footer','signal','phaseBanner','roundResult','phaseCard']);
+const BUILT_INS=new Set<OverlayWidgetKind>(['event','scoreboard','radar','killfeed','rosterLeft','rosterRight','lowerThird','economy','footer','signal','phaseBanner','roundResult','phaseCard','sponsorSlot']);
 const COLOR_FIELDS:[keyof OverlayTheme,string][]=[['accent','Signal accent'],['accentBright','Accent highlight'],['accentDeep','Accent shadow'],['gold','Secondary / win'],['text','Primary type'],['muted','Secondary type'],['panel','Panel surface'],['panelAlt','Raised surface'],['line','Borders']];
 const kindLabel=(kind:OverlayWidgetKind)=>kind.replace(/([A-Z])/g,' $1').replace(/^./,value=>value.toUpperCase());
 

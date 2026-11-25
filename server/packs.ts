@@ -8,7 +8,7 @@ import {radarsSchema} from './radars.js';
 import {overlaySchema,type OverlayConfig} from './overlay.js';
 import type {RadarsConfig} from './radars.js';
 
-const assetPath=z.string().regex(/^uploads\/(?:logos|maps|players|radars|overlays)\/[\w.\- ]+$/i,'only SCOUT upload assets can be packaged');
+const assetPath=z.string().regex(/^uploads\/(?:logos|maps|players|radars|overlays|sponsors)\/[\w.\- ]+$/i,'only SCOUT upload assets can be packaged');
 const MIME_BY_EXT:Record<string,string>={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',svg:'image/svg+xml'};
 const IMAGE_MIMES=['image/png','image/jpeg','image/gif','image/webp','image/svg+xml'] as const;
 const base64Pattern=/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -64,11 +64,12 @@ export const eventPackSchema=z.object({
  if(total>50*1024*1024)ctx.addIssue({code:z.ZodIssueCode.custom,path:['assets'],message:'unpacked assets may not exceed 50 MB'});
 });
 export type EventPack=z.infer<typeof eventPackSchema>;
-const PATH_PREFIX:Record<string,string>={logos:'uploads/logos/',maps:'uploads/maps/',players:'uploads/players/',radars:'uploads/radars/',overlays:'uploads/overlays/'};
+const PATH_PREFIX:Record<string,string>={logos:'uploads/logos/',maps:'uploads/maps/',players:'uploads/players/',radars:'uploads/radars/',overlays:'uploads/overlays/',sponsors:'uploads/sponsors/'};
 function referencedPaths(config:ScoutConfig,radars:RadarsConfig,overlay:OverlayConfig):Set<string>{
  const refs=new Set<string>();const keep=(value?:string)=>{if(value?.startsWith('uploads/'))refs.add(value)};
  for(const team of config.teams){keep(team.logo);for(const player of team.players)keep(player.photo)}
  for(const map of config.maps)keep(map.image);
+ for(const sponsor of config.sponsors.items)keep(sponsor.logo);
  for(const map of Object.values(radars.maps))keep(map.image);
  for(const widget of overlay.widgets)keep(widget.asset);
  return refs;
@@ -76,7 +77,7 @@ function referencedPaths(config:ScoutConfig,radars:RadarsConfig,overlay:OverlayC
 export async function createEventPack(config:ScoutConfig,radars:RadarsConfig,layout:LayoutConfig,overlay:OverlayConfig,uploadRoot='public/uploads'):Promise<EventPack>{
  const assets=[];let total=0;
  for(const relative of [...referencedPaths(config,radars,overlay)].sort()){
-  const match=/^uploads\/(logos|maps|players|radars|overlays)\/([\w.\- ]+)$/i.exec(relative);
+  const match=/^uploads\/(logos|maps|players|radars|overlays|sponsors)\/([\w.\- ]+)$/i.exec(relative);
   if(!match)continue;
   const absolute=path.resolve(uploadRoot,match[1],match[2]);
   if(!absolute.startsWith(path.resolve(uploadRoot)+path.sep))throw new Error('Asset path escaped the upload directory');
@@ -99,7 +100,7 @@ export async function restoreEventPack(raw:unknown,uploadRoot='public/uploads'):
   const buffer=Buffer.from(asset.base64,'base64');
   if(buffer.length<8||buffer.length>5*1024*1024)throw new Error(`Asset ${path.basename(asset.path)} has an invalid size`);
   const ext=path.extname(asset.path).slice(1).toLowerCase();if(MIME_BY_EXT[ext]!==asset.mime)throw new Error(`Asset MIME does not match ${asset.path}`);
-  const match=/^uploads\/(logos|maps|players|radars|overlays)\/([\w.\- ]+)$/i.exec(asset.path);if(!match)throw new Error(`Unsafe asset path ${asset.path}`);
+  const match=/^uploads\/(logos|maps|players|radars|overlays|sponsors)\/([\w.\- ]+)$/i.exec(asset.path);if(!match)throw new Error(`Unsafe asset path ${asset.path}`);
   const prefix=PATH_PREFIX[match[1].toLowerCase()];const filename=`${Date.now()}-pack-${randomBytes(5).toString('hex')}-${path.basename(match[2]).replace(/[^a-zA-Z0-9_. -]/g,'_')}`;
   const destination=path.resolve(uploadRoot,match[1],filename);if(!destination.startsWith(path.resolve(uploadRoot)+path.sep))throw new Error('Asset path escaped the upload directory');
   const relative=`${prefix}${filename}`;remap.set(asset.path,relative);writes.push({path:destination,buffer});assetBytes+=buffer.length;
@@ -107,6 +108,7 @@ export async function restoreEventPack(raw:unknown,uploadRoot='public/uploads'):
  const remapRef=(value:string)=>{if(!value.startsWith('uploads/'))return value;const replacement=remap.get(value);if(!replacement)throw new Error(`The event pack is missing referenced artwork: ${value}`);return replacement};
  for(const team of config.teams){team.logo=remapRef(team.logo);for(const player of team.players)player.photo=remapRef(player.photo)}
  for(const map of config.maps)map.image=remapRef(map.image);
+ for(const sponsor of config.sponsors.items)sponsor.logo=remapRef(sponsor.logo);
  for(const map of Object.values(radars.maps))if(map.image)map.image=remapRef(map.image);
  for(const widget of overlay.widgets)widget.asset=remapRef(widget.asset);
  for(const item of writes){await mkdir(path.dirname(item.path),{recursive:true});await writeFile(item.path,item.buffer,{flag:'wx'})}

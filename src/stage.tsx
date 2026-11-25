@@ -4,6 +4,7 @@ import {Trophy,Users} from 'lucide-react';
 import {assetUrl} from './assets';
 import {sceneTeams,teamBySlot,mapCards,nextMap,seriesScore,winnerOf,lineupFor,liveLineup,sideOfTeam,fitName,fitSize,breakWords,breakClock,bracketLayout,slotView,type SceneTeam,type MapCard,type LiveLike} from './scenes';
 import {splitRoster,type PlayerCard} from '../server/players';
+import {liveSponsors,SPONSOR_CAPTION} from '../server/config';
 import {weaponLabel} from './weapons';
 import {ScoutMark} from './logo';
 import type {SceneId} from '../server/controls';
@@ -196,14 +197,19 @@ function WinnerScene({config,teams,series,sides,cards}:{config:any;teams:[SceneT
 function BreakScene({config,teams,cards,breakEndsAt,now}:{config:any;teams:[SceneTeam,SceneTeam];cards:MapCard[];breakEndsAt:number|null;now:number}){
  const {title,message}=breakWords(config), clock=breakClock(breakEndsAt,now), next=nextMap(cards);
  const entrance=useSceneMotion();
+ const sponsors=config?.sponsors?.showOnBreak===false?[]:liveSponsors(config?.sponsors);
  return <Frame config={config} teams={teams} label="Break">
-  <div className="st-break">
+  <div className={'st-break'+(sponsors.length?' with-sponsors':'')}>
    <div className="st-pulse" aria-hidden="true"><i/><i/><i/></div>
    <motion.h1 style={{fontSize:`${fitSize(title,1640,{max:150,min:56,lines:2})}px`}} {...entrance.rise(0,28)}>{title}</motion.h1>
    {message&&<motion.p style={{fontSize:`${fitSize(message,1300,{max:40,min:24,lines:3})}px`}} {...entrance.rise(1,20)}>{message}</motion.p>}
    {clock.running&&<motion.div className="st-countdown" {...entrance.rise(2,20)}><small>BACK IN</small><b>{clock.label}</b></motion.div>}
    {clock.done&&<motion.div className="st-countdown done" {...entrance.rise(2,20)}><b>STARTING SHORTLY</b></motion.div>}
   </div>
+  {sponsors.length>0&&<motion.div className="st-sponsors" {...entrance.rise(3,16)}>
+   <small>{String(config?.sponsors?.caption||'').trim().toUpperCase()||SPONSOR_CAPTION}</small>
+   <div>{sponsors.map(sponsor=><img key={sponsor.id} src={assetUrl(sponsor.logo)} alt={sponsor.name||'Sponsor'}/>)}</div>
+  </motion.div>}
   <div className="st-next-wrap"><motion.div className="st-next" {...entrance.rise(4,20)}>
    <small>UP NEXT</small>
    <Crest team={teams[0]} size={44}/><b>{teams[0].name}</b><i>vs</i><b>{teams[1].name}</b><Crest team={teams[1]} size={44}/>
