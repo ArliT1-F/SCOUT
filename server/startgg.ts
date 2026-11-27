@@ -47,7 +47,7 @@ async function gql(query:string,variables:Record<string,unknown>,token:string,fe
  }catch(error:any){throw new StartggError(`start.gg could not be reached (${error?.name==='TimeoutError'?'timed out':error?.message||'network error'}).`,502)}
  if(res.status===401||res.status===403) throw new StartggError('start.gg refused the API token. Create a new token under start.gg → Developer Settings and try again.',401);
  if(res.status===429) throw new StartggError('start.gg is rate limiting requests. Wait a minute and try again.',429);
- const body=await res.json().catch(()=>null);
+ const body:any=await res.json().catch(()=>null);
  if(!res.ok||!body) throw new StartggError(`start.gg answered ${res.status}.`,502);
  if(body.errors?.length&&!body.data?.event) throw new StartggError(`start.gg could not answer the query: ${String(body.errors[0]?.message||'unknown error').slice(0,200)}`,502);
  return body.data;
