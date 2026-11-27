@@ -33,6 +33,7 @@ export function readInstalledEnv(name:string):string|undefined{
     SCOUT_REQUIRE_LICENCE:'require_licence.txt',
     SCOUT_PLATFORM_URL:'platform_url.txt',
     SCOUT_PLATFORM_FILE:'platform_file.txt',
+    GSI_TOKEN:'gsi_token.txt',
   };
   const file=mapping[name];
   if(!file) return undefined;

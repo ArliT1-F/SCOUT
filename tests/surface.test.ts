@@ -233,3 +233,36 @@ test('website owner settings reach a real linked host without exposing any centr
  assert.equal((await site.request('/api/status')).status,404);
  assert.equal((await site.request('/api/platform/admin/settings',{mapRotation:['de_dust2']},{method:'PUT'})).status,401);
 });
+
+// The whole zero-config path an installed launcher takes: it is pointed at the public website for
+// both its account service and platform sync (the website serves the embedded account service's
+// launcher routes, like /license/check, at its root), links through a code the account owner
+// approves there, and must then see its licence as active.
+test('a launcher linked through the public website gets an active licence from it',async(t)=>{
+ const {Installation}=await import('../server/beta.js');
+ const path=await import('node:path');
+ // Exactly what Render runs (server/website.ts): the public site with the account service embedded.
+ const key='launcher-route-test-service-key-0123456789';
+ const site=await platformHost(t,{SCOUT_SURFACE:'site',SCOUT_EMBED_ACCOUNT_SERVICE:'1',SCOUT_BETA_API_KEY:key});
+ assert.equal((await site.request('/api/beta/apply',{name:'Organiser',email:'organiser@example.com'})).status,200);
+ // The owner approves through the account service's own route, as the owner desk does.
+ const service={Authorization:`Bearer ${key}`};
+ const applicationId=(await site.request('/applications',undefined,{headers:service})).body.applications[0].id;
+ assert.equal((await site.request(`/applications/${applicationId}`,{decision:'approve',decidedBy:'owner@example.com'},{headers:service})).status,200);
+ const inviteText=site.emails.find((email:any)=>email.subject==='Your SCOUT closed-beta invitation')?.text as string;
+ const invite=new URL(inviteText.match(/https?:\/\/[^\s]+/)![0]).searchParams.get('invite');
+ const {cookie}=await site.request('/api/beta/activate',{invite,password:'long-enough-password'});
+ const grant=await site.request('/api/beta/device/start',{label:'Observer PC',platform:'windows'});assert.equal(grant.status,200);
+ assert.equal((await site.request('/api/beta/device/approve',{userCode:grant.body.userCode},{cookie})).status,200);
+ const poll=await site.request('/api/beta/device/poll',{deviceCode:grant.body.deviceCode});assert.equal(poll.status,200);
+ const venue=await platformHost(t,{SCOUT_BETA_API_URL:site.url,SCOUT_PLATFORM_URL:site.url},async directory=>{
+  const installation=await new Installation(path.join(directory,'config','beta','installation.json')).load();assert.equal(installation.completeLink(poll.body),true);await installation.save();
+ });
+ const licence=await venue.request('/api/beta/license?refresh=1',undefined,{headers:{Origin:venue.url}});
+ assert.equal(licence.status,200);
+ assert.equal(licence.body.state,'active',JSON.stringify(licence.body));
+ assert.equal(licence.body.email,'organiser@example.com');
+ // The host-local licence and link pages stay off the public website.
+ assert.equal((await site.request('/api/beta/license')).status,404);
+ assert.equal((await site.request('/api/beta/link/start',{})).status,404);
+});

@@ -55,6 +55,8 @@ the command that failed.
 
 Output: `dist-installer\SCOUT-Setup-<version>.exe`.
 
+**Installers talk to the SCOUT website by default.** Unless `SCOUT_BETA_API_URL` / `SCOUT_PLATFORM_URL` are set, both are baked in as `https://www.scoutcs2.xyz`, so an installed copy links to an account, checks its licence and syncs tournaments there with nothing to configure (the website serves the account service's launcher routes, such as `/license/check`, at its root; `tests/surface.test.ts` runs that whole path). `--no-hosted` leaves both out for a local-only build.
+
 ### What the script stages
 
 ```
