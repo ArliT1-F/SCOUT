@@ -3,6 +3,7 @@ import {ArrowDown,ArrowUp,Image as ImageIcon,Plus,Save,Trash2,Upload,X} from 'lu
 import {emptyPlayer,MAX_SPONSORS,SPONSOR_CAPTION,SPONSORS_DEFAULT,type ScoutConfig,type TeamConfig,type MapConfig,type BracketMatch,type SponsorsConfig} from '../server/config';
 import type {RadarsConfig,RadarMapConfig} from '../server/radars';
 import {buildBracket,playableSets,teamFromEntrant,type StartggEvent} from '../server/startgg';
+import type {StartggTokenView} from '../server/startgg-token';
 import {assetUrl} from './assets';
 import {apiFetch} from './session';
 import {breakClock,BREAK_TITLE} from './scenes';
@@ -92,18 +93,37 @@ export function TeamEditor({config,onChange}:{config:ScoutConfig;onChange:DraftC
 // "Use this match" puts the two entrants in the team slots with their rosters, logos and the round
 // name; "Import bracket" rebuilds the tournament tree from one of the event's brackets. Both only
 // change the draft, so the operator reviews the result and presses Save configuration as usual.
-export function StartggImport({config,onChange}:{config:ScoutConfig;onChange:DraftChange}){
+export function StartggImport({config,onChange,canManageToken=false}:{config:ScoutConfig;onChange:DraftChange;canManageToken?:boolean}){
  const latest=useRef(config);latest.current=config;
  const [link,setLink]=useState('');
  const [token,setToken]=useState('');
- const [tokenSet,setTokenSet]=useState<boolean|null>(null);
+ const [tokenInfo,setTokenInfo]=useState<StartggTokenView|null>(null);
  const [busy,setBusy]=useState('');
  const [error,setError]=useState('');
  const [notice,setNotice]=useState('');
  const [event,setEvent]=useState<StartggEvent|null>(null);
  const [groupId,setGroupId]=useState('');
  const [setId,setSetId]=useState('');
- useEffect(()=>{apiFetch('/api/startgg').then(res=>res.ok?res.json():null).then(body=>setTokenSet(body?!!body.tokenSet:null)).catch(()=>setTokenSet(null))},[]);
+ useEffect(()=>{apiFetch('/api/startgg').then(res=>res.ok?res.json():null).then(body=>setTokenInfo(body||null)).catch(()=>setTokenInfo(null))},[]);
+ // The owner saves the token once per machine; the host keeps it and never sends it back.
+ async function saveToken(){
+  setBusy('token');setError('');setNotice('');
+  try{
+   const res=await apiFetch('/api/startgg/token',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token.trim()})});
+   const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(body.error||'The token could not be saved');
+   setTokenInfo(body);setToken('');setNotice('start.gg token saved on this PC. Imports will use it from now on.');
+  }catch(reason:any){setError(reason.message||'The token could not be saved')}
+  finally{setBusy('')}
+ }
+ async function removeToken(){
+  setBusy('token');setError('');setNotice('');
+  try{
+   const res=await apiFetch('/api/startgg/token',{method:'DELETE'});
+   const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(body.error||'The token could not be removed');
+   setTokenInfo(body);setNotice(body.tokenSet?'Saved token removed. Imports now use SCOUT_STARTGG_TOKEN from the host.':'Saved token removed.');
+  }catch(reason:any){setError(reason.message||'The token could not be removed')}
+  finally{setBusy('')}
+ }
  const post=async(url:string,body:unknown)=>{const res=await apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const json=await res.json().catch(()=>({}));if(!res.ok)throw Error(json.error||'start.gg request failed');return json};
  async function load(){
   setBusy('load');setError('');setNotice('');
@@ -157,10 +177,22 @@ export function StartggImport({config,onChange}:{config:ScoutConfig;onChange:Dra
   <div className="editor-head"><h2>Import from start.gg</h2><p>Paste the link of a start.gg event to fill in teams, rosters, logos and the tournament tree. Nothing goes on air until you press <b>Save configuration</b>. Players are matched to your existing roster by nickname, so SteamIDs, aliases and photos you already added are kept.</p></div>
   <div className="startgg-form">
    <label className="field startgg-link"><span>EVENT LINK</span><input value={link} maxLength={400} placeholder="https://www.start.gg/tournament/…/event/…" onChange={event=>setLink(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'&&link.trim())void load()}}/></label>
-   <label className="field"><span>API TOKEN{tokenSet?' · SET ON THE HOST':''}</span><input type="password" autoComplete="off" value={token} maxLength={400} placeholder={tokenSet?'Leave empty to use the host token':'Paste a start.gg API token'} onChange={event=>setToken(event.target.value)}/></label>
    <button type="button" className="button primary" disabled={!link.trim()||!!busy} onClick={()=>void load()}>{busy==='load'?'Loading…':'Load event'}</button>
   </div>
-  {tokenSet===false&&!token&&<p className="startgg-hint">start.gg needs an API token: create one under start.gg → Developer Settings. Set it once as <code>SCOUT_STARTGG_TOKEN</code> in the host's <code>.env</code>, or paste it here. A pasted token is used for this request only and is never saved.</p>}
+  <div className="startgg-token">
+   <div className="startgg-token-head">
+    <b>API token</b>
+    {tokenInfo&&<span className={'startgg-token-state'+(tokenInfo.tokenSet?' set':'')}>{tokenInfo.source==='panel'?'Saved on this PC':tokenInfo.source==='env'?'From SCOUT_STARTGG_TOKEN in the host’s .env':'Not set yet'}{tokenInfo.hint?` · ends in ${tokenInfo.hint}`:''}</span>}
+   </div>
+   <div className="startgg-token-row">
+    <input type="password" autoComplete="off" aria-label="start.gg API token" value={token} maxLength={400} placeholder={tokenInfo?.tokenSet?(canManageToken?'Paste a new token to replace it':'Optional: a token for this import only'):'Paste your start.gg API token'} onChange={event=>setToken(event.target.value)}/>
+    {canManageToken&&<button type="button" className="button" disabled={!token.trim()||!!busy} onClick={()=>void saveToken()}>{busy==='token'?'Saving…':tokenInfo?.source==='panel'?'Replace token':'Save token'}</button>}
+    {canManageToken&&tokenInfo?.source==='panel'&&<button type="button" className="button danger" disabled={!!busy} onClick={()=>void removeToken()}>Remove</button>}
+   </div>
+   <small>{canManageToken
+    ?(tokenInfo?.tokenSet?'Saved tokens stay on this PC and are never shown again. Anyone who can edit the match can use it to import.':'Create one at start.gg → Developer Settings → Personal Access Tokens, paste it here and press Save token. It stays on this PC and is never shown again.')
+    :(tokenInfo?.tokenSet?'The owner has set a token, so you can import straight away.':'Only the owner can save a token. You can paste one to use for a single import.')}</small>
+  </div>
   {error&&<p className="startgg-error" role="alert">{error}</p>}
   {event&&<div className="startgg-result">
    <div className="startgg-summary"><b>{event.tournament||event.name}</b><span>{event.name} · {event.entrants.length} teams · {event.sets.length} matches</span></div>
