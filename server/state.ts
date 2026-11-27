@@ -36,7 +36,8 @@ export type TokenSource='env'|'default';
 export interface GsiDiagnostics {accepted:number;rejectedAuth:number;rejectedShape:number;rejectedLate:number;subtreeIssues:number;lastPacketAt:number;lastPacketAge:number;lastRejectedAt:number;lastRejectedReason:string;blocks:Record<string,number>;allplayers:number;allplayersSeen:boolean;observerGap:boolean;provider:string|null;tokenSource:TokenSource;port:number;uri:string}
 export class FeedMonitor {
  accepted=0; rejectedAuth=0; rejectedShape=0; rejectedLate=0; subtreeIssues=0; lastPacketAt=0; lastRejectedAt=0; lastRejectedReason=''; lastRejectedLogAt=0; lastIssueLogAt=0; lastLateLogAt=0; blocks:Record<string,number>={}; allplayers=0; allplayersSeen=false; provider:string|null=null;
- constructor(readonly tokenSource:TokenSource='default',readonly port=8080){}
+ // Mutable: Connect CS2 can replace the built-in token while the host runs.
+ constructor(public tokenSource:TokenSource='default',readonly port=8080){}
  get uri(){return `http://127.0.0.1:${this.port}/gsi`}
  // The token itself is never passed in: only "env" or "default" is remembered.
  accept(payload:any,now=Date.now()) {
@@ -78,10 +79,10 @@ export const DEFAULT_TOKEN_REMOTE='built-in token from another machine';
 // Exactly one next action for the operator, keyed to the failure modes seen in the field.
 export function feedNextAction(gsi?:GsiDiagnostics|null):string {
  if(!gsi) return 'Host not reporting diagnostics yet — reload the dashboard or restart the host.';
- if(gsi.accepted===0&&gsi.rejectedAuth>0&&gsi.lastRejectedReason===DEFAULT_TOKEN_REMOTE) return `CS2 on another machine is sending the built-in CHANGE_ME token, which this host only accepts from itself (${gsi.rejectedAuth} refused so far). Set GSI_TOKEN on the host to a private token, put the same token in that PC's cfg, and restart both.`;
- if(gsi.accepted===0&&gsi.rejectedAuth>0) return `CS2 reaches the host but every packet is rejected on its token (${gsi.rejectedAuth} so far). Put the cfg auth token into GSI_TOKEN and restart the host — the current token comes from ${gsi.tokenSource==='env'?'the environment':'the built-in default'}.`;
+ if(gsi.accepted===0&&gsi.rejectedAuth>0&&gsi.lastRejectedReason===DEFAULT_TOKEN_REMOTE) return `CS2 on another machine is sending the built-in CHANGE_ME token, which this host only accepts from itself (${gsi.rejectedAuth} refused so far). Press Connect CS2 in the dashboard to give this host a private token, then copy the CS2 connection file it writes to that PC's game/csgo/cfg folder and restart CS2.`;
+ if(gsi.accepted===0&&gsi.rejectedAuth>0) return `CS2 reaches the host but every packet is rejected on its token (${gsi.rejectedAuth} so far). Press Connect CS2 in the dashboard: it rewrites CS2's connection file with this host's token. Then restart CS2.`;
  if(gsi.accepted===0&&gsi.rejectedShape>0) return `Packets arrive but fail the shape check (${gsi.rejectedShape} so far): ${gsi.lastRejectedReason||'missing provider'}. Confirm the cfg was not saved as .cfg.txt and that CS2 was fully restarted.`;
- if(gsi.accepted===0) return `Nothing has reached ${gsi.uri}. Check the cfg sits in game/csgo/cfg/ (not .cfg.txt), that CS2 was fully restarted, and that the cfg uri port matches the host port ${gsi.port}.`;
+ if(gsi.accepted===0) return `Nothing has reached ${gsi.uri}. Press Connect CS2 in the dashboard to write CS2's connection file, then fully restart CS2. (The file goes in game/csgo/cfg and must point at port ${gsi.port}.)`;
  if(gsi.rejectedLate>0&&gsi.rejectedLate>=gsi.accepted-gsi.rejectedLate) return `${gsi.rejectedLate} packets were ignored because the host already holds a newer provider timestamp. Check that only one observer is pushing; to replay an older recording, stop the live feed and wait 5 seconds first.`;
  if(gsi.lastPacketAge>5000) return `Last packet was ${Math.round(gsi.lastPacketAge/1000)}s ago. The match may have ended, or CS2 lost the endpoint — check the host is still running.`;
  if(!gsi.allplayersSeen&&gsi.accepted>=100) return `Receiving packets (${gsi.accepted}) but no allplayers block: CS2 is playing, not spectating. Join as observer/GOTV so rosters and the killfeed have data.`;

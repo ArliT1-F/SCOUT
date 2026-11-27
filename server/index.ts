@@ -19,6 +19,7 @@ import {AuditTrail} from './audit.js';
 import {GsiRecorder,MatchArchiveStore} from './recordings.js';
 import {createEventPack,eventPackSchema,restoreEventPack,detectImageMime} from './packs.js';
 import {fetchStartggEvent,parseEventSlug,StartggError} from './startgg.js';
+import {cs2Connection,DEFAULT_GSI_TOKEN} from './cs2.js';
 import {StartggTokenStore} from './startgg-token.js';
 import {radarsSchema} from './radars.js';
 import {UPLOAD_DIRS,referencedUploads,isPrunable} from './uploads.js';
@@ -220,8 +221,16 @@ if(panel.remoteEnabled){
 } else console.log('[panel] Remote control is OFF (SCOUT_REMOTE=off): only a request from this machine can change the broadcast.');
 // The token source is reported in status. The value appears once in the intentional startup unlock link,
 // but is not persisted or repeated in request and audit logs.
-const tokenSource:TokenSource=process.env.GSI_TOKEN?'env':'default';
+// gsi_token.txt in the data directory is where Connect CS2 keeps a generated token; the desktop app and
+// the launcher pass it in as GSI_TOKEN, and a host started any other way reads it here.
+if(!process.env.GSI_TOKEN?.trim()){const saved=readInstalledEnv('GSI_TOKEN');if(saved)process.env.GSI_TOKEN=saved}
+let tokenSource:TokenSource=process.env.GSI_TOKEN?'env':'default';
 const feed=new FeedMonitor(tokenSource,port);
+const cs2=cs2Connection({
+ port,installed:Boolean(process.env.SCOUT_APP_ROOT),
+ token:()=>process.env.GSI_TOKEN||DEFAULT_GSI_TOKEN,
+ setToken:token=>{process.env.GSI_TOKEN=token;tokenSource='env';feed.tokenSource='env'},
+});
 // Operator configuration (teams, rosters, map series, tournament tree) is loaded through the same
 // schema the panel saves with, so a hand-edited file is normalized exactly like a panel edit.
 let config:ScoutConfig;
@@ -1110,6 +1119,23 @@ app.post('/api/remote/action',async(req,res)=>{
  else if(action==='break.stop')patch={scene:controls.scene==='break'?'live':controls.scene,breakEndsAt:null};
  else{res.status(400).json({error:'Unsupported action. Use scene:<id>, toggle:<control>, break.start, or break.stop.'});return}
  const before=controls.scene;await saveControls({...controls,...patch});audit.record(accessPrincipal(res),'remote.action',action);if(controls.scene!==before)void obs.onScoutScene(controls.scene);res.json({ok:true,controls,lease:lease.view(accessPrincipal(res).id)});
+});
+// Connect CS2 (server/cs2.ts): find CS2's cfg folders and write the Game State Integration file with
+// this host's token and port, generating a private token first if the host still has the built-in one.
+// Full folder paths are shown only to a signed-in operator on this host; the website has no such route.
+app.get('/api/cs2',async(req,res)=>{
+ if(!signedInRead(req,res))return;
+ try{res.json(await cs2.status())}catch{res.status(500).json({error:'CS2 could not be looked for on this PC.'})}
+});
+app.post('/api/cs2/connect',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ try{
+  const result=await cs2.connect({newToken:req.body?.newToken===true});
+  audit.record(accessPrincipal(res),req.body?.newToken===true?'cs2.token.regenerate':'cs2.connect',`${result.written.length} CS2 folder(s) written`);
+  broadcast();
+  res.json(result);
+ }catch(error:any){res.status(500).json({error:`The CS2 connection file could not be written: ${error?.message||'unknown error'}.`})}
 });
 // start.gg import (server/startgg.ts). The host only fetches and reduces the event; the panel applies it
 // to its draft, so nothing changes on air until the operator saves. The token is one pasted into the form

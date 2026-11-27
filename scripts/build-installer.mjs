@@ -31,6 +31,10 @@ import {existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, sta
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
+// Installers talk to the public SCOUT website by default: the launcher links to an account there,
+// checks its licence there and syncs tournaments there, with nothing for the operator to configure.
+// SCOUT_BETA_API_URL / SCOUT_PLATFORM_URL override it; --no-hosted leaves both out (local mode).
+const HOSTED_SITE='https://www.scoutcs2.xyz';
 const repoRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pkg=JSON.parse(readFileSync(path.join(repoRoot,'package.json'),'utf8'));
 
@@ -52,6 +56,7 @@ const options={
   keepStage:false,
   toolchainCheck:true,
   checkToolchain:false,
+  hosted:true,
 };
 
 const usage=`Builds the SCOUT Windows installer.
@@ -72,6 +77,8 @@ const usage=`Builds the SCOUT Windows installer.
   --stage <dir>        staging directory (default: <repo>/dist-stage)
   --out <dir>          where the installer is written (default: <repo>/dist-installer)
   --keep-stage         leave an existing staging directory in place instead of recreating it
+  --no-hosted          do not point the installer at the SCOUT website (${HOSTED_SITE}) for
+                       accounts, licence and sync; installs run in local mode
   --check-toolchain    only report whether this machine can build (Rust, the Visual C++ linker
                        when the Rust target needs it, Inno Setup) and exit; builds nothing
   --no-toolchain-check skip that pre-flight, for a GNU Rust target or a custom linker in
@@ -80,7 +87,7 @@ const usage=`Builds the SCOUT Windows installer.
 
 const argv=process.argv.slice(2);
 const valueFlags={'--version':'version','--runtime':'runtime','--runtime-zip':'runtimeZip','--tauri-cli':'tauriCli','--iscc':'iscc','--stage':'stage','--out':'out'};
-const switchFlags={'--no-runtime':'runtime','--no-shell':'shell','--no-smoke-test':'smokeTest','--no-webview2':'webview2','--no-npm-ci':'npmCi','--no-installer':'installer','--keep-stage':'keepStage','--no-toolchain-check':'toolchainCheck','--check-toolchain':'checkToolchain'};
+const switchFlags={'--no-runtime':'runtime','--no-shell':'shell','--no-smoke-test':'smokeTest','--no-webview2':'webview2','--no-npm-ci':'npmCi','--no-installer':'installer','--no-hosted':'hosted','--keep-stage':'keepStage','--no-toolchain-check':'toolchainCheck','--check-toolchain':'checkToolchain'};
 for(let i=0;i<argv.length;i++){
   const [name,inline]=argv[i].split('=');
   if(name in switchFlags){
@@ -599,8 +606,9 @@ if(options.installer){
     ['SCOUT_REQUIRE_LICENCE','RequireLicence'],
     ['SCOUT_OWNER_EMAIL','OwnerEmail'],
   ]){
-    const value=process.env[env];
-    if(value) { isccArgs.push(`/D${define}=${value}`); console.log(`  ${env}=${value} → baked into installer`); }
+    const hostedDefault=options.hosted&&(env==='SCOUT_BETA_API_URL'||env==='SCOUT_PLATFORM_URL')?HOSTED_SITE:'';
+    const value=process.env[env]||hostedDefault;
+    if(value) { isccArgs.push(`/D${define}=${value}`); console.log(`  ${env}=${env==='SCOUT_BETA_API_KEY'?'(set)':value} → baked into installer${value===hostedDefault?' (default)':''}`); }
   }
   run(iscc,[...isccArgs,path.join(repoRoot,'installer','scout.iss')]);
   installerPath=path.join(options.out,`SCOUT-Setup-${options.version}.exe`);

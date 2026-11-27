@@ -61,7 +61,7 @@ test('the built-in CHANGE_ME token is accepted only from this machine',{skip:LAN
  const refused=(await host.request('/api/status')).body;
  assert.equal(refused.state.map,undefined,'nothing from the refused packet reached the match state');
  assert.equal(refused.gsi.lastRejectedReason,DEFAULT_TOKEN_REMOTE);
- assert.match(feedNextAction(refused.gsi),/built-in CHANGE_ME token.*Set GSI_TOKEN/);
+ assert.match(feedNextAction(refused.gsi),/built-in CHANGE_ME token.*Connect CS2/);
  const local=await send(host.url);
  assert.equal(local.status,200,'CS2 on the host machine still works out of the box');
  assert.equal((await host.request('/api/status')).body.state.map?.name,'de_mirage');

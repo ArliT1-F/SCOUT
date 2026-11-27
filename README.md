@@ -213,6 +213,10 @@ that.
 4. Configure native HUD visibility for your observer environment. Console permissions vary; validate your cvars before going on air.
 5. Confirm the panel says Receiving live data, check the **CS2 feed** panel for accepted packets and an `allplayers` chip, then switch the preview from Demo feed to GSI feed. If it stays on "Waiting for CS2", work through [Why is nothing showing?](#why-is-nothing-showing-cs2-feed-panel).
 
+### Connect CS2 (no folders, no files)
+
+The app dashboard (`/app`) has a **Connect CS2** button under step 3. It finds CS2 the way the installer does (Steam's registry entry, then every library in `steamapps/libraryfolders.vdf`; `SCOUT_CS2_CFG_DIR` names a folder explicitly), and writes `gamestate_integration_overlay.cfg` into every CS2 `game/csgo/cfg` folder with this host's port and token. If the host still has the built-in `CHANGE_ME` token it first generates a private random one, keeps it in `gsi_token.txt` in the data folder (which the desktop app, the launcher and the host all read on start) and switches the running host to it, so the old token stops working at once. **New token** does the same on demand. CS2 reads the file when it starts, so a running CS2 needs one restart. Code: `server/cs2.ts`, `GET /api/cs2` (signed in), `POST /api/cs2/connect` (owner), `tests/cs2.test.ts`.
+
 ### Why is nothing showing? (CS2 feed panel)
 
 The panel shows a **CS2 feed** panel on the Overview and Setup guide tabs. It is the one place that separates the four ways a GSI feed goes quiet, because the previous code could not tell them apart:

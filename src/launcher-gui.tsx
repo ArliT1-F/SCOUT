@@ -30,11 +30,13 @@ export function AppHome(){
  const [notice,setNotice]=useState('');
  const [copied,setCopied]=useState<string|null>(null);
  const [code,setCode]=useState(queryCode);
+ const [cs2,setCs2]=useState<{folders:{dir:string;installed:boolean;current:boolean}[];tokenSet:boolean;port:number}|null>(null);
  const refresh=React.useCallback(async()=>{
   const get=async(path:string)=>{try{const res=await fetch(hostUrl+path,{cache:'no-store',headers:{Accept:'application/json'}});return res.ok?await res.json():null}catch{return null}};
-  const [health,status,betaStatus,licenceView,linkView]=await Promise.all([
-   get('/healthz'),get('/api/status'),get('/api/beta/status'),get('/api/beta/license'),get('/api/beta/link'),
+  const [health,status,betaStatus,licenceView,linkView,cs2View]=await Promise.all([
+   get('/healthz'),get('/api/status'),get('/api/beta/status'),get('/api/beta/license'),get('/api/beta/link'),get('/api/cs2'),
   ]);
+  if(cs2View) setCs2(cs2View);
   setHostOk(!!health?.ok);
   if(status) setGsi(status.gsi||null);
   if(betaStatus) setBeta(betaStatus);
@@ -52,6 +54,17 @@ export function AppHome(){
  const licenceRunnable=['active','unknown','offline'].includes(licenceState);
  const pending=link?.link?.pending||null;
  const pill=(text:string,cls:string)=><span className={`pill ${cls}`}>{text}</span>;
+ // Connect CS2: the host finds CS2's cfg folder(s) and writes the connection file with its own token
+ // and port (server/cs2.ts). No folders or files for the operator; CS2 reads the file when it starts.
+ async function connectCs2(newToken=false){
+  setBusy('cs2');setError('');setNotice('');
+  const result=await post('/api/cs2/connect',newToken?{newToken:true}:{});
+  setBusy(null);
+  if(!result.ok){setError(result.body.error||'CS2 could not be connected.');return}
+  setCs2(result.body);
+  const written=(result.body.written||[]).length;
+  setNotice(written?`CS2 is connected${newToken?' with a new token':''}. If CS2 is running, restart it once so it picks this up.`:'CS2 was not found on this PC. Install it through Steam, then press Connect CS2 again.');
+ }
  async function copy(text:string,key:string){try{await navigator.clipboard.writeText(text);setCopied(key);setTimeout(()=>setCopied(null),1200)}catch{}}
  async function post(path:string,body?:unknown){
   const res=await fetch(hostUrl+path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
@@ -160,6 +173,12 @@ export function AppHome(){
     .lh-devices{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
     .lh-devices li{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #2a2632;border-radius:8px;padding:9px 11px;background:#1e1b24}
     .lh-devices b{font-size:12px;display:block}.lh-devices small{color:#9a8eac;font-size:10px}
+    .lh-cs2{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding:12px;border:1px solid #2a2632;border-radius:10px;background:#1e1b24}
+    .lh-cs2>div:first-child{display:grid;gap:4px;min-width:0;flex:1 1 260px}
+    .lh-cs2 b{font-size:12px}
+    .lh-cs2 small{color:#9a8eac;font-size:11px}
+    .lh-cs2-actions{display:flex;gap:8px;align-items:center}
+    .lh-cs2-actions .lh-btn{padding:9px 14px;font-size:12px;font-weight:700}
     .lh-mini{appearance:none;border:1px solid #2a2632;background:#0f0e12;color:#c9b8dc;border-radius:6px;padding:6px 9px;font-size:10px;cursor:pointer}
     .lh-mini:hover{border-color:#9b4fc0;color:#fff}
     .launcher-home .site-card{background:#17141c;border:1px solid #2a2632}
@@ -188,8 +207,18 @@ export function AppHome(){
      <div className="lh-steps">
       <div className={`lh-step ${account?.status==='approved'?'done':''}`}><b>1</b><div><div style={{fontWeight:700,fontSize:12}}>{account?.status==='approved'?'✓ Account connected':account?.status==='revoked'?'Access revoked':account?'Application in review':'Sign in'}</div><div style={{color:'#9a8eac',fontSize:11}}>{account?.email||'Whitelisted accounts only'}</div></div></div>
       <div className={`lh-step ${hostOk?'done':''}`}><b>2</b><div><div style={{fontWeight:700,fontSize:12}}>Host running</div><div style={{color:'#9a8eac',fontSize:11}}>{hostOk?'Online':'Starting…'}</div></div></div>
-      <div className={`lh-step ${receiving?'done':''}`}><b>3</b><div><div style={{fontWeight:700,fontSize:12}}>CS2 feed</div><div style={{color:'#9a8eac',fontSize:11}}>{receiving?'Receiving':'Waiting for /gsi push'}</div></div></div>
+      <div className={`lh-step ${receiving?'done':''}`}><b>3</b><div><div style={{fontWeight:700,fontSize:12}}>CS2 feed</div><div style={{color:'#9a8eac',fontSize:11}}>{receiving?'Receiving':cs2?.folders.some(folder=>folder.current)?'Connected · start or restart CS2':'Not connected yet'}</div></div></div>
      </div>
+     {cs2&&<div className="lh-cs2">
+      <div>
+       <b>{receiving?'✓ CS2 is sending match data':cs2.folders.some(folder=>folder.current)?'CS2 is set up on this PC':cs2.folders.length?'CS2 found — not connected yet':'CS2 not found on this PC'}</b>
+       <small>{cs2.folders.length?(cs2.folders.some(folder=>folder.current)?'SCOUT has written its connection file into CS2. Restart CS2 after connecting so it picks it up.':'One click writes SCOUT’s connection file into CS2 with this PC’s private token.'):'Install Counter-Strike 2 through Steam, then press Connect CS2.'}</small>
+      </div>
+      <div className="lh-cs2-actions">
+       <button className="lh-btn primary" disabled={busy==='cs2'} onClick={()=>void connectCs2(false)}>{busy==='cs2'?'Connecting…':cs2.folders.some(folder=>folder.current)?'Reconnect CS2':'Connect CS2'}</button>
+       {cs2.tokenSet&&<button className="lh-mini" disabled={busy==='cs2'} title="Make a new private token and update CS2. Use it if the old one was shared." onClick={()=>void connectCs2(true)}>New token</button>}
+      </div>
+     </div>}
     </div>
 
     <div className="lh-col">
