@@ -156,7 +156,7 @@ impl ShellConfig {
                 }
             }
             if name == "--panel" || name == "--require-link" || name == "--start-host" {
-                let slot = match name {
+                let slot = match name.as_str() {
                     "--panel" => &mut raw.panel,
                     "--start-host" => &mut raw.start_host,
                     _ => &mut raw.require_link,
@@ -270,7 +270,7 @@ impl ShellConfig {
         // One chord cannot do two things: the overlay toggle and the quit chord win over the panel
         // toggle, because losing the overlay (or the only way to quit) is worse than losing the panel.
         if !cfg.panel_hotkey.is_empty() && (cfg.panel_hotkey.eq_ignore_ascii_case(&cfg.hotkey) || cfg.panel_hotkey.eq_ignore_ascii_case(&cfg.quit_hotkey)) {
-            warnings.push(format!("the panel hotkey `{}` is already used; the operator window opens on {DEFAULT_PANEL_HOTKEY} instead", cfg.panel_hotkey));
+            warnings.push(format!("the panel hotkey `{}` is already used, so the operator window has no hotkey; choose another with --panel-hotkey", cfg.panel_hotkey));
             cfg.panel_hotkey.clear();
         }
         if let Some(value) = raw.require_link {
@@ -454,11 +454,11 @@ mod tests {
     fn the_environment_configures_and_arguments_override_it() {
         let cfg = parse(
             &["--url", "http://10.0.0.7:8080/game", "--poll=100"],
-            &[("SCOUT_URL", "http://127.0.0.1:9000/game"), ("SCOUT_SHELL_POLL_MS", "500"), ("SCOUT_SHELL_HOTKEY", "F9")],
+            &[("SCOUT_URL", "http://127.0.0.1:9000/game"), ("SCOUT_SHELL_POLL_MS", "500"), ("SCOUT_SHELL_HOTKEY", "F7")],
         );
         assert_eq!(cfg.url, "http://10.0.0.7:8080/game", "the argument wins over SCOUT_URL");
         assert_eq!(cfg.poll_ms, 100, "--key=value works as well as --key value");
-        assert_eq!(cfg.hotkey, "F9", "an environment-only value is used");
+        assert_eq!(cfg.hotkey, "F7", "an environment-only value is used");
         assert!(cfg.warnings.is_empty(), "{:?}", cfg.warnings);
     }
 

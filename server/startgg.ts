@@ -9,8 +9,8 @@ import {emptyPlayer,type BracketConfig,type BracketMatch,type BracketRound,type 
 //    own config. The panel applies them to its draft, so an import is reviewed and saved like any
 //    other edit and nothing reaches the broadcast until the operator presses Save.
 //
-// The token is the operator's: it comes from SCOUT_STARTGG_TOKEN on the host or from the request that
-// uses it, and is never stored, logged, returned or broadcast (the OBS password follows the same rule).
+// The token is the operator's: pasted for one request, saved by the owner from the panel
+// (server/startgg-token.ts) or set as SCOUT_STARTGG_TOKEN. It is never logged, returned or broadcast.
 
 export const STARTGG_API='https://api.start.gg/gql/alpha';
 
@@ -47,7 +47,7 @@ async function gql(query:string,variables:Record<string,unknown>,token:string,fe
  }catch(error:any){throw new StartggError(`start.gg could not be reached (${error?.name==='TimeoutError'?'timed out':error?.message||'network error'}).`,502)}
  if(res.status===401||res.status===403) throw new StartggError('start.gg refused the API token. Create a new token under start.gg → Developer Settings and try again.',401);
  if(res.status===429) throw new StartggError('start.gg is rate limiting requests. Wait a minute and try again.',429);
- const body=await res.json().catch(()=>null);
+ const body:any=await res.json().catch(()=>null);
  if(!res.ok||!body) throw new StartggError(`start.gg answered ${res.status}.`,502);
  if(body.errors?.length&&!body.data?.event) throw new StartggError(`start.gg could not answer the query: ${String(body.errors[0]?.message||'unknown error').slice(0,200)}`,502);
  return body.data;
@@ -56,7 +56,7 @@ const text=(value:unknown,max=64)=>String(value??'').trim().slice(0,max);
 const idOf=(value:unknown)=>value===null||value===undefined?null:String(value);
 
 export async function fetchStartggEvent(slug:string,token:string,fetchImpl:Fetch=fetch):Promise<StartggEvent>{
- if(!token) throw new StartggError('A start.gg API token is needed. Set SCOUT_STARTGG_TOKEN on the host, or paste a token into the import form.',400);
+ if(!token) throw new StartggError('A start.gg API token is needed. The owner can save one in Match setup → Import from start.gg, or paste one for this import.',400);
  const entrants:StartggEntrant[]=[];
  let tournament='',name='';
  for(let page=1;page<=MAX_PAGES;page++){

@@ -19,6 +19,7 @@ import {AuditTrail} from './audit.js';
 import {GsiRecorder,MatchArchiveStore} from './recordings.js';
 import {createEventPack,eventPackSchema,restoreEventPack,detectImageMime} from './packs.js';
 import {fetchStartggEvent,parseEventSlug,StartggError} from './startgg.js';
+import {StartggTokenStore} from './startgg-token.js';
 import {radarsSchema} from './radars.js';
 import {UPLOAD_DIRS,referencedUploads,isPrunable} from './uploads.js';
 import {controlsSchema,defaultControls,SCENE_IDS,type Controls} from './controls.js';
@@ -1111,10 +1112,29 @@ app.post('/api/remote/action',async(req,res)=>{
  const before=controls.scene;await saveControls({...controls,...patch});audit.record(accessPrincipal(res),'remote.action',action);if(controls.scene!==before)void obs.onScoutScene(controls.scene);res.json({ok:true,controls,lease:lease.view(accessPrincipal(res).id)});
 });
 // start.gg import (server/startgg.ts). The host only fetches and reduces the event; the panel applies it
-// to its draft, so nothing changes on air until the operator saves. The token is SCOUT_STARTGG_TOKEN,
-// or one pasted into the form for this request only — never stored, logged or echoed back.
-const startggToken=(supplied?:string)=>String(supplied||process.env.SCOUT_STARTGG_TOKEN||'').trim();
-app.get('/api/startgg',(req,res)=>{if(!signedInRead(req,res))return;res.json({tokenSet:!!startggToken()})});
+// to its draft, so nothing changes on air until the operator saves. The token is one pasted into the form
+// for a single request, else the one the owner saved from the panel (config/startgg.json, see
+// server/startgg-token.ts), else SCOUT_STARTGG_TOKEN. It is never logged or echoed back.
+const startggTokens=await new StartggTokenStore().load();
+app.get('/api/startgg',(req,res)=>{if(!signedInRead(req,res))return;res.json(startggTokens.view())});
+const startggTokenSchema=z.object({token:z.string().trim().min(1).max(400)});
+app.put('/api/startgg/token',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ const parsed=startggTokenSchema.safeParse(req.body);
+ if(!parsed.success){res.status(400).json({error:'Paste a start.gg API token.'});return}
+ try{
+  const view=await startggTokens.save(parsed.data.token);
+  audit.record(accessPrincipal(res),'startgg.token.save',view.hint?`ending ${view.hint}`:'');
+  res.json(view);
+ }catch(error:any){res.status(400).json({error:error?.message||'The token could not be saved.'})}
+});
+app.delete('/api/startgg/token',async(req,res)=>{
+ if(!sameOrigin(req)){res.sendStatus(403);return}
+ if(!ownerOnly(res))return;
+ try{const view=await startggTokens.clear();audit.record(accessPrincipal(res),'startgg.token.remove');res.json(view)}
+ catch{res.status(500).json({error:'The saved token could not be removed.'})}
+});
 const startggEventSchema=z.object({event:z.string().trim().min(1).max(400),token:z.string().trim().max(400).optional().default('')});
 app.post('/api/startgg/event',async(req,res)=>{
  if(!sameOrigin(req)){res.sendStatus(403);return}
@@ -1123,7 +1143,7 @@ app.post('/api/startgg/event',async(req,res)=>{
  const slug=parsed.success?parseEventSlug(parsed.data.event):null;
  if(!parsed.success||!slug){res.status(400).json({error:'Paste the link of a start.gg event, like https://www.start.gg/tournament/<name>/event/<event>.'});return}
  try{
-  const event=await fetchStartggEvent(slug,startggToken(parsed.data.token));
+  const event=await fetchStartggEvent(slug, startggTokens.tokenFor(parsed.data.token));
   audit.record(accessPrincipal(res),'startgg.event.load',`${slug} · ${event.entrants.length} entrants · ${event.sets.length} sets`);
   res.json(event);
  }catch(error){
