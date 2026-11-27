@@ -1,3 +1,11 @@
+import {mkdir,readFile,rename,unlink,writeFile} from 'node:fs/promises';
+import path from 'node:path';
+// The start.gg API token, saved from the panel so an operator types it once per machine instead of
+// editing .env. It lives in config/startgg.json (gitignored, never in an event pack, never synced to
+// the platform) and only the owner can set or remove it. The API never returns it: the panel sees
+// whether one is set, where it comes from, and its last four characters so a replaced token can be
+// told apart from the old one.
+//
 // Which token a request uses: one pasted into the import form for that request, then the saved one,
 // then SCOUT_STARTGG_TOKEN from the environment.
 

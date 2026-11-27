@@ -97,7 +97,7 @@ export function StartggImport({config,onChange,canManageToken=false}:{config:Sco
  const latest=useRef(config);latest.current=config;
  const [link,setLink]=useState('');
  const [token,setToken]=useState('');
- const [tokenInfo, setTokenInfo] = useState<StartggTokenView | null>(null);
+ const [tokenInfo,setTokenInfo]=useState<StartggTokenView|null>(null);
  const [busy,setBusy]=useState('');
  const [error,setError]=useState('');
  const [notice,setNotice]=useState('');

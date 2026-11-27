@@ -1143,7 +1143,7 @@ app.post('/api/startgg/event',async(req,res)=>{
  const slug=parsed.success?parseEventSlug(parsed.data.event):null;
  if(!parsed.success||!slug){res.status(400).json({error:'Paste the link of a start.gg event, like https://www.start.gg/tournament/<name>/event/<event>.'});return}
  try{
-  const event=await fetchStartggEvent(slug, startggTokens.tokenFor(parsed.data.token));
+  const event=await fetchStartggEvent(slug,startggTokens.tokenFor(parsed.data.token));
   audit.record(accessPrincipal(res),'startgg.event.load',`${slug} · ${event.entrants.length} entrants · ${event.sets.length} sets`);
   res.json(event);
  }catch(error){
