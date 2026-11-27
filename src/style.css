@@ -695,7 +695,7 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .startgg-token-state{color:var(--text-dim)}
 .startgg-token-state.set{color:var(--ok,#8ce0b4)}
 .startgg-token-row{display:flex;flex-wrap:wrap;gap:10px}
-.startgg-token-row input{flex:1 1 260px;min-width:0;background:var(--bg,#0b0a0d)}
+.startgg-token-row input{flex:1 1 260px;min-width:0;background:var(--bg)}
 .startgg-token-row .button.danger{color:#e69aa3}
 .startgg-token small{color:var(--text-dim);font-size:11px;line-height:1.5}
 .startgg-hint,.startgg-error,.startgg-notice{margin:0 22px 14px;font-size:12px;line-height:1.5;color:var(--text-dim)}
