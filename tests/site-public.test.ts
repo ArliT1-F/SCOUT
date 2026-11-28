@@ -76,3 +76,18 @@ test('index.html ships social metadata and public indexing defaults',async()=>{
  assert.match(html,/rel="canonical"/);
  assert.match(html,/rel="icon" href="\/favicon\.svg"/);
 });
+
+test('the terms and privacy drafts are linked, dated, reachable and say they are drafts',async()=>{
+ const {TermsPage,LEGAL,SiteFooter:Footer,PAGE_META:META,isSiteRoute:isRoute}=await import('../src/site');
+ const terms=clean(renderToString(createElement(TermsPage)));
+ const privacy=clean(renderToString(createElement(PrivacyPage)));
+ for(const html of [terms,privacy]){
+  assert.match(html,new RegExp(`mailto:${LEGAL.contact.replace('.','\\.')}`),'a working contact address');
+  assert.ok(html.includes(LEGAL.updated),'a last-updated date');
+  if(LEGAL.draft) assert.match(html,/Draft\./,'the draft status is visible while the text awaits legal review');
+ }
+ for(const topic of [/closed beta/i,/at least 16/,/resell/,/permission to show their photos/,/isn’t affiliated with or endorsed by Valve/,/“as is”/,/delete your account/]) assert.match(terms,topic);
+ for(const topic of [/IP address/,/Render/,/Supabase/,/Resend/,/GitHub/,/Your rights/,/under 16/,/Diagnostics:<\/b> none today/]) assert.match(privacy,topic);
+ assert.ok(isRoute('/terms'));assert.equal(META['/terms'].robots,'index, follow');
+ assert.match(renderToString(createElement(Footer)),/href="\/terms"/);
+});

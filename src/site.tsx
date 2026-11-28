@@ -29,7 +29,7 @@ import type {PanelSessionView} from '../server/auth';
 //      shown with a banner that says what it is.
 //   3. The launcher download is behind the account: a pending applicant sees what they are waiting
 //      for, an approved one sees the button.
-export const SITE_ROUTES=['/welcome','/login','/apply','/download','/profile','/privacy'] as const;
+export const SITE_ROUTES=['/welcome','/login','/apply','/download','/profile','/privacy','/terms'] as const;
 export type SiteRoute=typeof SITE_ROUTES[number];
 export const isSiteRoute=(path:string):path is SiteRoute=>(SITE_ROUTES as readonly string[]).includes(path);
 // Per-page document metadata (title, description, canonical, robots). The website is an SPA, so the
@@ -44,6 +44,7 @@ export const PAGE_META:Record<SiteRoute,{title:string;description:string;robots:
  '/download':{title:'Download SCOUT — SCOUT',description:'The Windows installer for approved closed-beta accounts.',robots:'noindex, follow'},
  '/profile':{title:'Your profile — SCOUT',description:'Your SCOUT account, beta status and linked installations.',robots:'noindex, follow'},
  '/privacy':{title:'Privacy — SCOUT',description:'What SCOUT collects, what never leaves your machine, and how to get your data deleted.',robots:'index, follow'},
+ '/terms':{title:'Terms — SCOUT',description:'The terms for using SCOUT and its closed beta.',robots:'index, follow'},
 };
 export function useDocumentMeta(meta:{title:string;description:string;robots:string}){
  useEffect(()=>{
@@ -150,7 +151,7 @@ export function SiteFooter(){
   <div className="site-footer-cols">
    <div><b>Product</b><a href="/welcome#product">What it does</a><a href="/welcome#scenes">Broadcast scenes</a><a href="/welcome#beta">Closed beta</a></div>
    <div><b>Operators</b><a href="/login">Sign in</a><a href="/download">Download</a><a href="/apply">Apply for access</a></div>
-   <div><b>Account</b><a href="/profile">Your profile</a><a href="/privacy">Privacy</a></div>
+   <div><b>Account</b><a href="/profile">Your profile</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></div>
   </div>
   <div className="site-footer-legal"><span>© {new Date().getFullYear()} SCOUT</span></div>
  </footer>;
@@ -456,7 +457,7 @@ export function ApplyPage(){
      <label className="field"><span>WHAT WILL YOU BROADCAST?</span><textarea rows={4} value={form.useCase} onChange={set('useCase')} placeholder="Leagues, qualifiers, community cups, LANs…" aria-describedby="apply-usecase-hint"/><small className="field-hint" id="apply-usecase-hint">Optional, but a sentence about your events helps us review faster.</small></label>
      <button className="button primary wide" type="submit" disabled={busy||offline} aria-busy={busy||undefined}>{busy?<><Loader2 className="spin" size={15}/>Sending…</>:<>Send application<ArrowRight size={14}/></>}</button>
      {error&&<Notice>{error}</Notice>}
-     <p className="site-fineprint">We only use this to review your application and to reach you about the beta. No newsletter, no resale.</p>
+     <p className="site-fineprint">By sending, you agree to the <a href="/terms">Terms</a> and the <a href="/privacy">Privacy policy</a>. We only use this to review your application and to reach you about the beta. No newsletter, no resale.</p>
     </form>
     <aside className="site-apply-aside">
      <div className="site-card"><h3>What happens next</h3><ol className="site-ol"><li>Someone on the team reads it.</li><li>Approved applicants get a one-time invite link.</li><li>The link sets your password and opens your download page.</li><li>Install SCOUT and you’re ready for your first match.</li></ol></div>
@@ -872,6 +873,13 @@ export const ANALYTICS_EVENT_ALLOWLIST:ReadonlyArray<{event:string;label:string;
  {event:'desktop-linked',label:'Launchers linked',why:'How many installs get linked to an account.',collected:false},
  {event:'update-success / update-failure',label:'Update results',why:'Whether updates install cleanly.',collected:false},
 ];
+// The legal pages are a plain-language draft until a professional reviews them; LEGAL holds the facts
+// they share (contact, date, status) so the reviewed text can replace the words without hunting.
+export const LEGAL={contact:'privacy@scoutcs2.xyz',updated:'28 November 2026',draft:true};
+function LegalDraftNotice(){
+ return LEGAL.draft?<p className="site-notice warn" role="note"><b>Draft.</b> This page is our plain-language draft while a legal professional reviews it. It describes how SCOUT works today; the reviewed version may change the wording.</p>:null;
+}
+const ContactLink=()=><a href={`mailto:${LEGAL.contact}`}>{LEGAL.contact}</a>;
 export function PrivacyPage(){
  return <div className="site landing site-inner">
   <SiteNav account={null}/>
@@ -879,35 +887,72 @@ export function PrivacyPage(){
    <div className="site-page-head">
     <span className="site-section-eyebrow">PRIVACY</span>
     <h1>What we collect, and what stays on your PC</h1>
-    <p>SCOUT runs on your own computer, and your match data stays there. This page covers this website and your SCOUT account.</p>
+    <p>SCOUT runs on your own computer, and your match data stays there. This page covers this website, your SCOUT account, and what the SCOUT app sends to us. Last updated {LEGAL.updated}.</p>
    </div>
+   <LegalDraftNotice/>
    <section className="site-card"><h2>The short version</h2>
     <ul className="site-ul">
-     <li>Match data, recordings, uploads and overlay designs <b>never leave the PC you broadcast from</b>. SCOUT has no way to upload them.</li>
-     <li>We store your application and account so we can run the closed beta.</li>
-     <li><b>No third-party trackers, no ads, no social media pixels.</b> We don’t sell or share your details with anyone.</li>
+     <li>Match data, recordings, uploads and overlay designs <b>never leave the PC you broadcast from</b>.</li>
+     <li>We store your application and account so we can run the closed beta, and what the app needs to check its licence and sync your tournaments.</li>
+     <li><b>No third-party trackers, no ads, no social media pixels.</b> We don’t sell or share your details for marketing.</li>
     </ul>
+   </section>
+   <section className="site-card"><h2>Who we are</h2>
+    <p className="site-card-lead">SCOUT is run by the SCOUT team, who decide how this data is used. For anything on this page, including deleting your data, email <ContactLink/>.</p>
    </section>
    <section className="site-card"><h2>How SCOUT reads the game</h2>
     <ul className="site-ul">
      <li>SCOUT only uses Game State Integration, the match feed CS2 provides for broadcast tools.</li>
      <li><b>It doesn’t inject anything into the game, read the game’s memory or hook into its process.</b> There’s nothing for anti-cheat software to look at.</li>
+     <li><b>Connect CS2</b> writes one connection file into CS2’s cfg folder on your PC. Nothing about it is sent to us.</li>
     </ul>
    </section>
-   <section className="site-card"><h2>What we store</h2>
+   <section className="site-card"><h2>What we store about you</h2>
     <ul className="site-ul">
      <li><b>Your application:</b> name, email, organisation, country and what you broadcast. We use it to review your application and to contact you about the beta.</li>
      <li><b>Your account:</b> email, display name and a securely hashed password. We never store the password itself.</li>
-     <li><b>Linked launchers:</b> a name, platform and when it was last seen, for each install you link, so you can see and unlink them on your profile.</li>
-     <li><b>Review decisions:</b> who approved or declined an application, and when.</li>
+     <li><b>Sign-in sessions:</b> when you sign in, the session records your IP address and browser name, so we can spot sessions that aren’t yours. Sessions end when you sign out or after 30 days.</li>
+     <li><b>Linked apps:</b> a name, platform and when it was last seen, for each install you link, so you can see and unlink them on your profile.</li>
+     <li><b>Review decisions:</b> who approved, declined or revoked an application, when, and any reason given.</li>
+     <li><b>Emails we send you</b> (invitations and password resets): whether delivery worked. The address in our delivery queue is kept encrypted.</li>
     </ul>
-    <p className="site-fineprint"><b>Retention:</b> we keep this while your account exists. <b>Deletion:</b> contact us and we’ll delete your account and application.</p>
+   </section>
+   <section className="site-card"><h2>What the SCOUT app sends us</h2>
+    <ul className="site-ul">
+     <li><b>Licence checks:</b> a linked app regularly confirms it is still allowed to run, using its own installation code. This updates when the app was last seen.</li>
+     <li><b>Your website tournaments:</b> if you create a tournament on the website and run it on a linked app, the app downloads its teams, rosters and maps, and sends back match totals for it (kills, headshots, grenades, rounds, maps and matches). Never chat, voice or video.</li>
+     <li><b>Diagnostics:</b> none today. If we add them, the app will ask you first, show exactly what is sent, and let you turn it off.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>What never leaves your PC</h2>
+    <ul className="site-ul">
+     <li>The live match feed, recordings, replays and match archives.</li>
+     <li>Logos, player photos, sponsor logos, overlay designs and radar settings. They only leave if you export an event package yourself.</li>
+     <li>Your start.gg token, your CS2 connection token and your panel passwords. When you import from start.gg, your own PC talks to start.gg directly, and start.gg’s privacy policy applies to that.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>Why we use it</h2>
+    <ul className="site-ul">
+     <li><b>To provide the service you asked for:</b> reviewing your application, your account, licence checks and tournament sync.</li>
+     <li><b>To keep it secure and working</b> (our legitimate interest): sessions, security events and request stats.</li>
+     <li><b>With your consent:</b> any optional diagnostics in future. You can withdraw consent at any time.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>Who helps us run it</h2>
+    <p className="site-card-lead">These companies process data for us and only as we instruct:</p>
+    <ul className="site-ul">
+     <li><b>Render</b> hosts this website and the account service (in the United States).</li>
+     <li><b>Supabase</b> hosts the database with accounts, sessions and tournaments.</li>
+     <li><b>Resend</b> sends our emails (in the EU, Ireland).</li>
+     <li><b>GitHub</b> hosts installer downloads, so it sees your IP address when you download.</li>
+     <li><b>Vercel</b> runs our domain’s DNS. It does not receive your account data.</li>
+    </ul>
+    <p className="site-fineprint">Some of this data is stored outside your country, including in the United States. Where the law requires it, these transfers are covered by the providers’ standard data protection terms.</p>
    </section>
    <section className="site-card"><h2>What our servers log</h2>
     <ul className="site-ul">
      <li><b>Basic request stats</b> for the last 15 minutes, so we can spot problems. They aren’t saved to disk.</li>
      <li><b>Security events</b> like failed sign-ins and rate limits, so we can stop abuse. Passwords and sign-in links are never logged.</li>
-     <li><b>Tournament totals</b> such as kills, rounds and maps, only if you choose to share stats for a tournament. Never player identities or chat.</li>
     </ul>
    </section>
    <section className="site-card"><h2>Analytics and cookies</h2>
@@ -915,14 +960,96 @@ export function PrivacyPage(){
     <table className="site-allowlist"><thead><tr><th>Event</th><th>Why we’d count it</th><th>Status</th></tr></thead><tbody>
      {ANALYTICS_EVENT_ALLOWLIST.map(row=><tr key={row.event}><td>{row.label}</td><td>{row.why}</td><td>{row.collected?'collected':'not collected'}</td></tr>)}
     </tbody></table>
-    <p className="site-fineprint"><b>Cookies:</b> one cookie to keep you signed in, and one when a panel is unlocked. No cross-site tracking and no fingerprinting.</p>
+    <p className="site-fineprint"><b>Cookies:</b> one cookie to keep you signed in, and one when a panel is unlocked. Both are needed for the service to work. No cross-site tracking and no fingerprinting.</p>
    </section>
-   <section className="site-card"><h2>Your choices</h2>
+   <section className="site-card"><h2>Retention and deletion</h2>
     <ul className="site-ul">
-     <li>Sign out at any time from your profile.</li>
-     <li>Unlink a launcher from your profile and it loses access straight away.</li>
-     <li>Ask us to delete your application or account.</li>
+     <li>Your application, account and linked apps: while your account exists.</li>
+     <li>Sessions: until you sign out, or 30 days. Password reset links expire and can only be used once.</li>
+     <li>Security records: only as long as needed to keep the service secure.</li>
+     <li>When you ask us to delete your account, we delete your application, account, sessions and linked apps.</li>
     </ul>
+   </section>
+   <section className="site-card"><h2>Your rights</h2>
+    <ul className="site-ul">
+     <li>See the data we hold about you, and get a copy.</li>
+     <li>Correct it, or have it deleted.</li>
+     <li>Object to how we use it, or withdraw consent you gave.</li>
+     <li>Complain to your data protection authority if you think we got something wrong.</li>
+    </ul>
+    <p className="site-fineprint">Email <ContactLink/> and we’ll answer within 30 days. You can also sign out and unlink apps yourself on your profile; an unlinked app loses access straight away.</p>
+   </section>
+   <section className="site-card"><h2>Children</h2>
+    <p className="site-card-lead">SCOUT is for event organisers and broadcast crews. It isn’t meant for anyone under 16, and we don’t knowingly accept applications from them.</p>
+   </section>
+   <section className="site-card"><h2>Changes</h2>
+    <p className="site-card-lead">When this page changes, we update the date at the top. If a change affects how we use data you already gave us, we’ll email you first.</p>
+   </section>
+  </main>
+  <SiteFooter/>
+ </div>;
+}
+// ------------------------------------------------------------------ terms
+export function TermsPage(){
+ return <div className="site landing site-inner">
+  <SiteNav account={null}/>
+  <main className="site-main site-narrow">
+   <div className="site-page-head">
+    <span className="site-section-eyebrow">TERMS</span>
+    <h1>Terms for using SCOUT</h1>
+    <p>These terms cover the SCOUT app, this website and your SCOUT account. By applying for or using SCOUT, you agree to them. Last updated {LEGAL.updated}.</p>
+   </div>
+   <LegalDraftNotice/>
+   <section className="site-card"><h2>1. The closed beta</h2>
+    <ul className="site-ul">
+     <li>SCOUT is in a closed beta. We review applications and decide who gets access.</li>
+     <li>We can revoke access, for example if these terms are broken, and we can restore it.</li>
+     <li>The beta is free. If we introduce paid plans, we’ll tell you in advance and never charge you without your agreement.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>2. Your account</h2>
+    <ul className="site-ul">
+     <li>Give accurate details when you apply, and keep your password and links to your account private.</li>
+     <li>You are responsible for what happens under your account and on the apps you link to it. Unlink an app you no longer control.</li>
+     <li>You must be at least 16 to use SCOUT.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>3. Using the software</h2>
+    <ul className="site-ul">
+     <li>While your account is active, you may install SCOUT and use it to produce broadcasts of your events.</li>
+     <li>Don’t resell, redistribute or sublicense SCOUT, and don’t try to get around its licence checks.</li>
+     <li>Don’t attack, overload or probe the website or the account service, or access other people’s accounts.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>4. Your content</h2>
+    <ul className="site-ul">
+     <li>Team names, logos, player photos, sponsor logos and overlay designs you add stay yours.</li>
+     <li>Only add material you have the right to use. That includes having players’ permission to show their photos, and sponsors’ permission to show their logos.</li>
+     <li>You let us store and process your content only as needed to run SCOUT for you, for example to sync a tournament you created on the website to your linked apps.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>5. Fair play and other services</h2>
+    <ul className="site-ul">
+     <li>SCOUT is a broadcast tool. Don’t use it to give a player or team an unfair advantage during a match.</li>
+     <li>SCOUT isn’t affiliated with or endorsed by Valve. Counter-Strike and its trademarks belong to Valve, and Valve’s terms still apply when you play or broadcast it.</li>
+     <li>When you import from start.gg, start.gg’s terms apply to your use of their service and your API token.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>6. Beta software</h2>
+    <ul className="site-ul">
+     <li>SCOUT is provided “as is” while it’s in beta. It may have bugs, and features may change or be removed.</li>
+     <li>Test your setup before an event. We aren’t responsible for a broadcast that fails, or for lost revenue or sponsorship, as far as the law allows.</li>
+     <li>Nothing in these terms limits rights you have under consumer law that can’t be limited.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>7. Ending your use</h2>
+    <ul className="site-ul">
+     <li>You can stop using SCOUT at any time and ask us to delete your account.</li>
+     <li>We can suspend or close an account that breaks these terms, and we may end the beta. If we end it, we’ll tell you in advance where we can.</li>
+    </ul>
+   </section>
+   <section className="site-card"><h2>8. Changes and contact</h2>
+    <p className="site-card-lead">When these terms change, we update the date at the top and email you about important changes. Questions: <ContactLink/>.</p>
    </section>
   </main>
   <SiteFooter/>
@@ -942,5 +1069,6 @@ export function SiteRouter({route}:{route:SiteRoute}){
  if(route==='/download') return <DownloadPage/>;
  if(route==='/profile') return <ProfilePage/>;
  if(route==='/privacy') return <PrivacyPage/>;
+ if(route==='/terms') return <TermsPage/>;
  return <LoginPage linkCode={linkCode} invite={invite} reset={reset} next={next}/>;
 }

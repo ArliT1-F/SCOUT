@@ -16,8 +16,8 @@ const radarMapSchema=z.object({
 }).strip();
 export const radarsSchema=z.object({
  overviewSize:z.number().finite().gt(0).optional().default(1024),
- maps:z.record(z.string().trim().min(1).max(64),radarMapSchema).optional().default({}),
-}).strip().default({overviewSize:1024,maps:{}});
+ maps:z.record(z.string().trim().min(1).max(64),radarMapSchema).optional().default(()=>({})),
+}).strip().default(()=>({overviewSize:1024,maps:{}}));
 export type RadarsConfig=z.infer<typeof radarsSchema>;
 export type RadarMapConfig=z.infer<typeof radarMapSchema>;
 export const emptyRadars=():RadarsConfig=>({overviewSize:1024,maps:{}});

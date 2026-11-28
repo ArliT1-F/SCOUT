@@ -56,7 +56,7 @@ test('a logo query error never fails the import',async()=>{
 });
 
 test('missing token, refused token and unknown event are explained, not thrown raw',async()=>{
- await assert.rejects(()=>fetchStartggEvent('tournament/t/event/e','',scripted({}).fetchImpl),(error:any)=>error instanceof StartggError&&error.status===400&&/SCOUT_STARTGG_TOKEN/.test(error.message));
+ await assert.rejects(()=>fetchStartggEvent('tournament/t/event/e','',scripted({}).fetchImpl),(error:any)=>error instanceof StartggError&&error.status===400&&/Import from start.gg/.test(error.message));
  await assert.rejects(()=>fetchStartggEvent('tournament/t/event/e','bad',scripted({},401).fetchImpl),(error:any)=>error.status===401&&/refused the API token/.test(error.message));
  await assert.rejects(()=>fetchStartggEvent('tournament/t/event/e','tok',scripted({ScoutEntrants:()=>({data:{event:null}})}).fetchImpl),(error:any)=>error.status===404);
 });

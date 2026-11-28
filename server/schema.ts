@@ -20,19 +20,19 @@ const side=z.object({name:text,flag:text,score:integer,consecutive_round_losses:
 const playerState=z.object({health:integer,armor:integer,helmet:flag,flashed:numeric,smoked:numeric,burning:numeric,money:integer,round_kills:integer,round_killhs:integer,round_totaldmg:integer,equip_value:integer,defusekit:flag}).passthrough();
 const matchStats=z.object({kills:integer,assists:integer,deaths:integer,mvps:integer,score:integer}).passthrough();
 const weapon=z.object({name:text,type:text,state:text,ammo_clip:integer,ammo_reserve:integer,paintkit:text}).passthrough();
-const player=z.object({steamid:text,name:text,clan:text,observer_slot:integer,team:oneOf('CT','T'),activity:text,state:playerState,weapons:z.record(weapon),match_stats:matchStats,position:text,forward:text,spectarget:text}).passthrough();
+const player=z.object({steamid:text,name:text,clan:text,observer_slot:integer,team:oneOf('CT','T'),activity:text,state:playerState,weapons:z.record(z.string(),weapon),match_stats:matchStats,position:text,forward:text,spectarget:text}).passthrough();
 const grenade=z.object({type:text,owner:text,lifetime:clock,effecttime:clock,position:text,velocity:text}).passthrough();
 export const schemas={
  provider:z.object({name:text,appid:integer,version:integer,steamid:text,timestamp:numeric}).passthrough(),
  map:z.object({name:text,mode:text,phase:text,round:integer,warmup:flag,num_matches:integer,team_ct:side,team_t:side}).passthrough(),
  round:z.object({phase:text,win_team:oneOf('CT','T'),bomb:oneOf('planted','exploded','defused')}).passthrough(),
  player,
- allplayers:z.record(player),
+ allplayers:z.record(z.string(),player),
  phase_countdowns:z.object({phase:text,phase_ends_in:clock}).passthrough(),
  // CS2 uses "carried" (not "carrying") and reports the transient "planting" state too.
  // Keep "carrying" accepted for compatibility with older SCOUT recordings.
  bomb:z.object({state:oneOf('carried','carrying','planting','planted','defusing','defused','exploded','dropped'),countdown:clock,player:text,position:text}).passthrough(),
- grenades:z.record(grenade),
+ grenades:z.record(z.string(),grenade),
 };
 function reasonOf(error:z.ZodError,field:z.ZodTypeAny):string {const issue=error.issues[0]; if(!issue) return 'invalid value'; const described=(field as any)?._def?.description; return issue.message==='Invalid input'&&described?`expected ${described}`:issue.message}
 // zod keeps a record's member schema on _def; read it defensively so a zod upgrade degrades to

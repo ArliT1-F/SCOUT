@@ -14,7 +14,7 @@ const credentialSchema=z.object({
  revokedAt:z.number().int().nonnegative().nullable().default(null),
 }).strip();
 export const MAX_OPERATOR_RECORDS=128;
-export const operatorFileSchema=z.object({version:z.literal(1).default(1),operators:z.array(credentialSchema).max(MAX_OPERATOR_RECORDS).default([])}).strip();
+export const operatorFileSchema=z.object({version:z.literal(1).default(1),operators:z.array(credentialSchema).max(MAX_OPERATOR_RECORDS).default(()=>[])}).strip();
 export type OperatorCredential=z.infer<typeof credentialSchema>;
 export type OperatorView=Pick<OperatorCredential,'id'|'label'|'role'|'createdAt'|'revokedAt'>;
 export interface HashedOperatorToken {id:string;label:string;role:PanelRole;salt:string;digest:string}

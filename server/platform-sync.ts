@@ -74,7 +74,7 @@ export class PlatformDeviceService {
   const result=this.ingestion.then(()=>this.ingest(raw));this.ingestion=result.catch(()=>{});return result;
  }
  private async ingest(raw:unknown):Promise<BetaResult<MetricsReply>>{
-  const parsed=credentialsSchema.extend({events:z.array(z.unknown()).max(100).optional().default([])}).safeParse(raw);
+  const parsed=credentialsSchema.extend({events:z.array(z.unknown()).max(100).optional().default(()=>[])}).safeParse(raw);
   if(!parsed.success)return invalid('Send authenticated batches of at most 100 events.');
   const input=parsed.data,auth=await this.authenticate(input);
   if(!auth.ok||auth.value.status!=='active')return auth;
