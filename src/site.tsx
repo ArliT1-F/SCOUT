@@ -875,7 +875,7 @@ export const ANALYTICS_EVENT_ALLOWLIST:ReadonlyArray<{event:string;label:string;
 ];
 // The legal pages are a plain-language draft until a professional reviews them; LEGAL holds the facts
 // they share (contact, date, status) so the reviewed text can replace the words without hunting.
-export const LEGAL={contact:'privacy@scoutcs2.xyz',updated:'28 November 2026',draft:true};
+export const LEGAL={contact:'support@scoutcs2.xyz',updated:'28 November 2026',draft:true};
 function LegalDraftNotice(){
  return LEGAL.draft?<p className="site-notice warn" role="note"><b>Draft.</b> This page is our plain-language draft while a legal professional reviews it. It describes how SCOUT works today; the reviewed version may change the wording.</p>:null;
 }
