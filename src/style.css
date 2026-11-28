@@ -1070,6 +1070,7 @@ input,select{background:var(--bg-soft);border:1px solid var(--line);border-radiu
 .site-form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .site-form textarea{width:100%;background:var(--bg-soft);border:1px solid var(--line);border-radius:6px;color:var(--text);padding:10px 11px;font-size:12px;line-height:1.7;resize:vertical}
 .site-fineprint{margin:14px 0 0;font-size:10.5px;line-height:1.75;color:var(--text-faint)}
+.site-fineprint a{color:var(--accent-bright,#f7b7e6);text-decoration:underline;text-underline-offset:2px}
 .site-notice{margin:12px 0;padding:11px 13px;border-radius:6px;font-size:11.5px;line-height:1.65;border:1px solid #62303a;background:#31161d;color:#ffc2c8}
 .site-notice.ok{border-color:#31523b;background:#142218;color:#a6d8ab}
 .site-notice.warn{border-color:#574326;background:#241d13;color:var(--warn)}
