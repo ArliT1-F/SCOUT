@@ -51,7 +51,7 @@ export const overlayWidgetSchema=z.object({
  kind:z.enum(OVERLAY_WIDGET_KINDS),
  name:z.string().trim().min(1).max(64),
  enabled:z.boolean().optional().default(true),
- showOn:z.array(scene).max(SCENE_IDS.length).optional().default(['live']),
+ showOn:z.array(scene).max(SCENE_IDS.length).optional().default(()=>['live' as const]),
  x:optionalNumber(-300,2220),
  y:optionalNumber(-300,1380),
  width:optionalNumber(24,1920),
@@ -102,9 +102,9 @@ export const sponsorWidget=(config:OverlayConfig|undefined):OverlayWidget=>confi
 export const themePresetSchema=z.object({id:z.string().trim().regex(/^[a-zA-Z0-9_-]{1,48}$/),theme:overlayThemeSchema}).strip();
 export const overlaySchema=z.object({
  version:z.literal(1).optional().default(1),
- theme:overlayThemeSchema.optional().default(DEFAULT_THEME),
- presets:z.array(themePresetSchema).max(20).optional().default([]),
- widgets:z.array(overlayWidgetSchema).max(60).optional().default(DEFAULT_WIDGETS),
+ theme:overlayThemeSchema.optional().default(()=>structuredClone(DEFAULT_THEME)),
+ presets:z.array(themePresetSchema).max(20).optional().default(()=>[]),
+ widgets:z.array(overlayWidgetSchema).max(60).optional().default(()=>structuredClone(DEFAULT_WIDGETS)),
 }).strip().superRefine((value,ctx)=>{
  const ids=new Set<string>();
  for(const [index,item] of value.widgets.entries()){

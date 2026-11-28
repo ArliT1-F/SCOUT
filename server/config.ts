@@ -25,7 +25,7 @@ export const teamSchema=z.object({
  tag:z.string().trim().max(12).optional().default(''),
  color:z.string().trim().max(32).optional().default(''),
  logo:z.string().trim().max(260).optional().default(''),
- players:z.array(playerSchema).max(10).optional().default([]),
+ players:z.array(playerSchema).max(10).optional().default(()=>[]),
 }).strip();
 export const mapSchema=z.object({
  name:z.string().trim().min(1).max(64),
@@ -40,8 +40,8 @@ export const slotSchema=z.object({
 }).strip();
 export const bracketMatchSchema=z.object({
  id:z.string().trim().min(1).max(32),
- a:slotSchema.optional().default({label:'',team:''}),
- b:slotSchema.optional().default({label:'',team:''}),
+ a:slotSchema.optional().default(()=>({label:'',team:''})),
+ b:slotSchema.optional().default(()=>({label:'',team:''})),
  aScore:z.number().int().min(0).max(99).optional().default(0),
  bScore:z.number().int().min(0).max(99).optional().default(0),
  winner:z.enum(['a','b']).nullable().optional().default(null),
@@ -71,7 +71,7 @@ export const sponsorSchema=z.object({
  logo:z.string().trim().max(260).optional().default('').refine(value=>value===''||SPONSOR_LOGO.test(value),'logo must be a file under uploads/sponsors/'),
 }).strip();
 export const sponsorsSchema=z.object({
- items:z.array(sponsorSchema).max(MAX_SPONSORS).optional().default([]),
+ items:z.array(sponsorSchema).max(MAX_SPONSORS).optional().default(()=>[]),
  // How long each logo stays up before the next one, on the HUD.
  rotateSeconds:z.number().int().min(3).max(120).optional().default(10),
  showOnHud:z.boolean().optional().default(true),
@@ -81,24 +81,26 @@ export const sponsorsSchema=z.object({
 }).strip();
 export const SPONSOR_CAPTION='SUPPORTED BY';
 export const SPONSORS_DEFAULT={items:[],rotateSeconds:10,showOnHud:true,showOnBreak:true,caption:''};
-// zod returns object defaults unparsed, so every default below carries the complete output shape.
+// zod returns defaults unparsed and, since zod 4, as the very value given. Every list or object default
+// is therefore a function that builds a fresh one (and carries the complete output shape), so editing one
+// parsed configuration can never change the defaults of the next. tests/schema-defaults.test.ts pins it.
 const SLOT_DEFAULT={label:'',team:''};
 export const configSchema=z.object({
- event:z.object({name:z.string().trim().max(120).optional().default(''),stage:z.string().trim().max(120).optional().default('')}).strip().optional().default({name:'',stage:''}),
+ event:z.object({name:z.string().trim().max(120).optional().default(''),stage:z.string().trim().max(120).optional().default('')}).strip().optional().default(()=>({name:'',stage:''})),
  format:z.enum(['bo1','bo3','bo5']).optional().default('bo3'),
  mr:z.number().int().min(1).max(30).optional().default(12),
  otMr:z.number().int().min(1).max(15).optional().default(3),
- break:breakSchema.optional().default({title:'',message:''}),
+ break:breakSchema.optional().default(()=>({title:'',message:''})),
  teams:z.array(teamSchema).min(2).max(2),
  maps:z.array(mapSchema).min(1).max(9),
- bracket:bracketSchema.optional().default({title:'',rounds:[
+ bracket:bracketSchema.optional().default(()=>({title:'',rounds:[
   {name:'Semifinals',matches:[
-   {id:'m1',a:SLOT_DEFAULT,b:SLOT_DEFAULT,aScore:0,bScore:0,winner:null,status:'upcoming'},
-   {id:'m2',a:SLOT_DEFAULT,b:SLOT_DEFAULT,aScore:0,bScore:0,winner:null,status:'upcoming'},
+   {id:'m1',a:{...SLOT_DEFAULT},b:{...SLOT_DEFAULT},aScore:0,bScore:0,winner:null,status:'upcoming' as const},
+   {id:'m2',a:{...SLOT_DEFAULT},b:{...SLOT_DEFAULT},aScore:0,bScore:0,winner:null,status:'upcoming' as const},
   ]},
-  {name:'Final',matches:[{id:'m3',a:SLOT_DEFAULT,b:SLOT_DEFAULT,aScore:0,bScore:0,winner:null,status:'upcoming'}]},
- ]}),
- sponsors:sponsorsSchema.optional().default(SPONSORS_DEFAULT),
+  {name:'Final',matches:[{id:'m3',a:{...SLOT_DEFAULT},b:{...SLOT_DEFAULT},aScore:0,bScore:0,winner:null,status:'upcoming' as const}]},
+ ]})),
+ sponsors:sponsorsSchema.optional().default(()=>structuredClone(SPONSORS_DEFAULT)),
 }).strip();
 export type PlayerConfig=z.infer<typeof playerSchema>;
 export type TeamConfig=z.infer<typeof teamSchema>;

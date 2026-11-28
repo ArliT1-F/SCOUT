@@ -15,8 +15,9 @@ const layoutElementSchema=z.object({
  w:z.number().finite().min(40).max(1920).optional(),
 }).strip();
 export const layoutSchema=z.object({
- elements:z.record(z.enum(LAYOUT_KEYS),layoutElementSchema).optional().default({}),
-}).strip().default({elements:{}});
+ // Only the elements an operator moved are stored, so the record is partial over the layout keys.
+ elements:z.partialRecord(z.enum(LAYOUT_KEYS),layoutElementSchema).optional().default(()=>({})),
+}).strip().default(()=>({elements:{}}));
 export type LayoutConfig=z.infer<typeof layoutSchema>;
 export type LayoutElement=z.infer<typeof layoutElementSchema>;
 export const emptyLayout=():LayoutConfig=>({elements:{}});

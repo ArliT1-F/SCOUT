@@ -25,9 +25,9 @@ const sceneMapShape=Object.fromEntries(SCENE_IDS.map(id=>[id,sceneName])) as Rec
 const emptyMap=():Record<SceneId,string>=>Object.fromEntries(SCENE_IDS.map(id=>[id,''])) as Record<SceneId,string>;
 export const obsConfigSchema=z.object({
  enabled:z.boolean().optional().default(false),
- url:z.string().trim().max(200).refine(isObsUrl,'must be a ws:// or wss:// address without credentials').optional().default(OBS_DEFAULT_URL),
+ url:z.string().trim().max(200).refine(isObsUrl,'must be a ws:// or wss:// address without credentials').optional().default(()=>structuredClone(OBS_DEFAULT_URL)),
  sync:z.enum(OBS_SYNC_MODES).optional().default('scout'),
- sceneMap:z.object(sceneMapShape).strip().optional().default(emptyMap()),
+ sceneMap:z.object(sceneMapShape).strip().optional().default(()=>emptyMap()),
  // The name of the OBS browser source that shows /obs or /game, for "refresh overlay". Empty = find it.
  browserSource:z.string().trim().max(200).optional().default(''),
 }).strip();
