@@ -82,7 +82,7 @@ test('the terms and privacy drafts are linked, dated, reachable and say they are
  const terms=clean(renderToString(createElement(TermsPage)));
  const privacy=clean(renderToString(createElement(PrivacyPage)));
  for(const html of [terms,privacy]){
-  assert.match(html,new RegExp(`mailto:${LEGAL.contact.replace('.','\\.')}`),'a working contact address');
+  assert.ok(html.includes(`mailto:${LEGAL.contact}`),'a working contact address');
   assert.ok(html.includes(LEGAL.updated),'a last-updated date');
   if(LEGAL.draft) assert.match(html,/Draft\./,'the draft status is visible while the text awaits legal review');
  }

@@ -164,3 +164,17 @@ test('resendTransport keeps the provider error name and drops anything else', as
   const hostile = await capture(JSON.stringify({name: '../../etc/passwd'}), 422);
   assert.equal(hostile.providerCode, null, 'names outside the safe pattern are dropped');
 });
+
+test('replies can go to a support address while mail is sent from no-reply', async () => {
+  assert.equal(emailConfiguration(baseEnv)?.replyTo, undefined, 'no reply-to unless one is set');
+  assert.equal(emailConfiguration({...baseEnv, SCOUT_EMAIL_REPLY_TO: ' support@example.test '})?.replyTo, 'support@example.test');
+  for (const bad of ['not-an-address', 'a@b.test, c@d.test', 'Support <support@example.test>', 'support@example.test\nBcc: x@y.test'])
+    assert.throws(() => emailConfiguration({...baseEnv, SCOUT_EMAIL_REPLY_TO: bad}), /SCOUT_EMAIL_REPLY_TO/, bad);
+  const sent: any[] = [];
+  const capture = async (_url: any, init: any) => { sent.push(JSON.parse(init.body)); return {ok: true, status: 200, json: async () => ({id: 'x'}), text: async () => '{}', headers: new Headers()} as any; };
+  await resendTransport({...transportConfig, replyTo: 'support@example.test'}, capture)({to: 'ada@example.com', subject: 's', text: 't', html: '<p>t</p>'}, 'k1');
+  await resendTransport(transportConfig, capture)({to: 'ada@example.com', subject: 's', text: 't', html: '<p>t</p>'}, 'k2');
+  assert.deepEqual(sent[0].reply_to, ['support@example.test']);
+  assert.equal(sent[0].from, 'SCOUT <no-reply@example.test>', 'the sender stays the no-reply address');
+  assert.equal('reply_to' in sent[1], false);
+});

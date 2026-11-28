@@ -57,6 +57,7 @@ refuses those routes outright when no key is configured.
 | `SCOUT_ACCOUNT_BASE_URL` | — | Public HTTPS origin used to construct invitation and password-recovery links. Required for delivery. |
 | `SCOUT_EMAIL_API_KEY` | — | Resend API key (or key accepted by a compatible configured endpoint). |
 | `SCOUT_EMAIL_FROM` | — | Verified sender address, optionally `SCOUT <mail@example.com>`. |
+| `SCOUT_EMAIL_REPLY_TO` | — | Optional. Where users' replies go, e.g. `support@example.com`, so mail can be sent from a no-reply address. |
 | `SCOUT_EMAIL_ENCRYPTION_KEY` | — | 32 random bytes, base64 or 64 hex chars. Protect separately from the SQLite backup; required to decrypt queued messages. |
 | `SCOUT_EMAIL_API_URL` | `https://api.resend.com/emails` | Provider endpoint; HTTPS in production, loopback HTTP allowed for development/tests. |
 

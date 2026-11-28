@@ -3,7 +3,8 @@ import {createCipheriv,createDecipheriv,randomBytes} from 'node:crypto';
 export interface OutboundEmail {to:string;subject:string;text:string;html:string}
 export interface EncryptedEmail {ciphertext:string;iv:string;tag:string}
 export type EmailTransport=(message:OutboundEmail,idempotencyKey:string)=>Promise<void>;
-export interface EmailConfiguration {apiKey:string;from:string;publicBaseUrl:string;encryptionKey:Buffer;apiUrl:string}
+// replyTo: where a user's reply lands (e.g. support@), so mail can be sent from a no-reply address.
+export interface EmailConfiguration {apiKey:string;from:string;publicBaseUrl:string;encryptionKey:Buffer;apiUrl:string;replyTo?:string}
 
 /** Read and validate secret configuration without ever including secret values in errors/logs. */
 export function emailConfiguration(env:NodeJS.ProcessEnv=process.env):EmailConfiguration|null{
@@ -26,7 +27,9 @@ export function emailConfiguration(env:NodeJS.ProcessEnv=process.env):EmailConfi
   throw new Error('SCOUT_EMAIL_API_URL must use HTTPS except on loopback, and must not contain credentials or a query.');
  const senderAddress=/^\s*[^<>]*<([^<>]+)>\s*$/.exec(from)?.[1]||from;
  if(/[\r\n]/.test(from)||!/^\S+@\S+$/.test(senderAddress))throw new Error('SCOUT_EMAIL_FROM must be a valid sender address, optionally with a display name.');
- return {apiKey,from,publicBaseUrl,encryptionKey,apiUrl:provider.toString()};
+ const replyTo=(env.SCOUT_EMAIL_REPLY_TO||'').trim();
+ if(replyTo&&(/[\r\n<>,]/.test(replyTo)||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo)))throw new Error('SCOUT_EMAIL_REPLY_TO must be a single email address, like support@example.com.');
+ return {apiKey,from,publicBaseUrl,encryptionKey,apiUrl:provider.toString(),...(replyTo?{replyTo}:{})};
 }
 
 export function sealEmail(message:OutboundEmail,key:Buffer):EncryptedEmail{
@@ -50,7 +53,7 @@ export function resendTransport(config:EmailConfiguration,fetchImpl:typeof fetch
   const response=await fetchImpl(config.apiUrl,{
    method:'POST',signal:AbortSignal.timeout(15_000),
    headers:{Authorization:`Bearer ${config.apiKey}`,'Content-Type':'application/json','Idempotency-Key':idempotencyKey},
-   body:JSON.stringify({from:config.from,to:[message.to],subject:message.subject,text:message.text,html:message.html}),
+   body:JSON.stringify({from:config.from,to:[message.to],subject:message.subject,text:message.text,html:message.html,...(config.replyTo?{reply_to:[config.replyTo]}:{})}),
   });
   if(!response.ok){
    // Never retain or log the provider response body: some providers echo recipient/template data.
