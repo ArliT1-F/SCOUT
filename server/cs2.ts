@@ -112,7 +112,7 @@ export interface Cs2Connection {status():Promise<Cs2Status>;connect(options?:{ne
 
 // The host's half: knows the token and the port, writes the file. `dataDir` is the working directory,
 // where gsi_token.txt lives; `setToken` updates the running host so CS2's next packet is accepted.
-export function cs2Connection(options:{port:number;dataDir?:string;token:()=>string;setToken:(token:string)=>void;search?:()=>Promise<string[]>;installed?:boolean}):Cs2Connection{
+export function cs2Connection(options:{port:number;dataDir?:string;token:()=>string;setToken:(token:string)=>void;search?:()=>Promise<string[]>}):Cs2Connection{
  const dataDir=options.dataDir||process.cwd();
  const search=options.search||(()=>findCs2CfgDirs());
  const describe=async(written:string[]=[]):Promise<Cs2Status>=>{
@@ -136,12 +136,9 @@ export function cs2Connection(options:{port:number;dataDir?:string;token:()=>str
     options.setToken(token);
    }
    const text=gsiCfg(token,options.port);
-   // An installed data directory keeps its own copy current too (the setup guide points at it). In a
-   // checkout the data directory is the repository, whose copy is the committed CHANGE_ME template.
-   if(options.installed){
-    await mkdir(path.join(dataDir,'config'),{recursive:true});
-    await writeFile(path.join(dataDir,'config',CFG_FILE),text);
-   }
+   // The data directory's own copy stays current too: it is what the setup guide points at.
+   await mkdir(path.join(dataDir,'config'),{recursive:true});
+   await writeFile(path.join(dataDir,'config',CFG_FILE),text);
    const written:string[]=[];
    for(const dir of await search()){
     try{await writeFile(path.join(dir,CFG_FILE),text);written.push(dir)}catch{}
